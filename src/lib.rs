@@ -116,6 +116,8 @@ pub use event::Event;
 
 pub use io::utils::generate_entropy_mnemonic;
 
+pub use wallet::CoinSelectionAlgorithm;
+
 #[cfg(feature = "uniffi")]
 use uniffi_types::*;
 
@@ -145,7 +147,7 @@ use types::{
 	Broadcaster, BumpTransactionEventHandler, ChainMonitor, ChannelManager, DynStore, Graph,
 	KeysManager, OnionMessenger, PaymentStore, PeerManager, Router, Scorer, Sweeper, Wallet,
 };
-pub use types::{ChannelDetails, CustomTlvRecord, PeerDetails, UserChannelId};
+pub use types::{ChannelDetails, CustomTlvRecord, PeerDetails, SpendableUtxo, UserChannelId};
 
 use logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 

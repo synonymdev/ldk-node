@@ -44,6 +44,10 @@ pub use bip39::Mnemonic;
 
 pub use vss_client::headers::{VssHeaderProvider, VssHeaderProviderError};
 
+pub use crate::types::SpendableUtxo;
+pub use crate::wallet::CoinSelectionAlgorithm;
+pub use bitcoin::TxOut;
+
 pub type DateTime = chrono::DateTime<chrono::Utc>;
 
 use crate::UniffiCustomTypeConverter;
