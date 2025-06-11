@@ -964,7 +964,7 @@ where
 				self.logger,
 				"No spendable UTXOs available after filtering funding transactions"
 			);
-			return Err(Error::InsufficientFunds);
+			return Err(Error::NoSpendableOutputs);
 		}
 
 		// Use the improved weight calculation from the second implementation
