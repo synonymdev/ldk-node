@@ -2475,11 +2475,15 @@ public protocol OnchainPaymentProtocol : AnyObject {
     
     func bumpFeeByRbf(txid: Txid, feeRate: FeeRate) throws  -> Txid
     
+    func listSpendableOutputs() throws  -> [SpendableUtxo]
+    
     func newAddress() throws  -> Address
+    
+    func selectUtxosWithAlgorithm(targetAmountSats: UInt64, feeRate: FeeRate?, algorithm: CoinSelectionAlgorithm, utxos: [SpendableUtxo]?) throws  -> [SpendableUtxo]
     
     func sendAllToAddress(address: Address, retainReserve: Bool, feeRate: FeeRate?) throws  -> Txid
     
-    func sendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?) throws  -> Txid
+    func sendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws  -> Txid
     
 }
 
@@ -2543,9 +2547,27 @@ open func bumpFeeByRbf(txid: Txid, feeRate: FeeRate)throws  -> Txid {
 })
 }
     
+open func listSpendableOutputs()throws  -> [SpendableUtxo] {
+    return try  FfiConverterSequenceTypeSpendableUtxo.lift(try rustCallWithError(FfiConverterTypeNodeError.lift) {
+    uniffi_ldk_node_fn_method_onchainpayment_list_spendable_outputs(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func newAddress()throws  -> Address {
     return try  FfiConverterTypeAddress.lift(try rustCallWithError(FfiConverterTypeNodeError.lift) {
     uniffi_ldk_node_fn_method_onchainpayment_new_address(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func selectUtxosWithAlgorithm(targetAmountSats: UInt64, feeRate: FeeRate?, algorithm: CoinSelectionAlgorithm, utxos: [SpendableUtxo]?)throws  -> [SpendableUtxo] {
+    return try  FfiConverterSequenceTypeSpendableUtxo.lift(try rustCallWithError(FfiConverterTypeNodeError.lift) {
+    uniffi_ldk_node_fn_method_onchainpayment_select_utxos_with_algorithm(self.uniffiClonePointer(),
+        FfiConverterUInt64.lower(targetAmountSats),
+        FfiConverterOptionTypeFeeRate.lower(feeRate),
+        FfiConverterTypeCoinSelectionAlgorithm.lower(algorithm),
+        FfiConverterOptionSequenceTypeSpendableUtxo.lower(utxos),$0
     )
 })
 }
@@ -2560,12 +2582,13 @@ open func sendAllToAddress(address: Address, retainReserve: Bool, feeRate: FeeRa
 })
 }
     
-open func sendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?)throws  -> Txid {
+open func sendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?)throws  -> Txid {
     return try  FfiConverterTypeTxid.lift(try rustCallWithError(FfiConverterTypeNodeError.lift) {
     uniffi_ldk_node_fn_method_onchainpayment_send_to_address(self.uniffiClonePointer(),
         FfiConverterTypeAddress.lower(address),
         FfiConverterUInt64.lower(amountSats),
-        FfiConverterOptionTypeFeeRate.lower(feeRate),$0
+        FfiConverterOptionTypeFeeRate.lower(feeRate),
+        FfiConverterOptionSequenceTypeSpendableUtxo.lower(utxosToSpend),$0
     )
 })
 }
@@ -5340,6 +5363,63 @@ public func FfiConverterTypeSendingParameters_lower(_ value: SendingParameters) 
     return FfiConverterTypeSendingParameters.lower(value)
 }
 
+
+public struct SpendableUtxo {
+    public var outpoint: OutPoint
+    public var valueSats: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(outpoint: OutPoint, valueSats: UInt64) {
+        self.outpoint = outpoint
+        self.valueSats = valueSats
+    }
+}
+
+
+
+extension SpendableUtxo: Equatable, Hashable {
+    public static func ==(lhs: SpendableUtxo, rhs: SpendableUtxo) -> Bool {
+        if lhs.outpoint != rhs.outpoint {
+            return false
+        }
+        if lhs.valueSats != rhs.valueSats {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(outpoint)
+        hasher.combine(valueSats)
+    }
+}
+
+
+public struct FfiConverterTypeSpendableUtxo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SpendableUtxo {
+        return
+            try SpendableUtxo(
+                outpoint: FfiConverterTypeOutPoint.read(from: &buf), 
+                valueSats: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SpendableUtxo, into buf: inout [UInt8]) {
+        FfiConverterTypeOutPoint.write(value.outpoint, into: &buf)
+        FfiConverterUInt64.write(value.valueSats, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeSpendableUtxo_lift(_ buf: RustBuffer) throws -> SpendableUtxo {
+    return try FfiConverterTypeSpendableUtxo.lift(buf)
+}
+
+public func FfiConverterTypeSpendableUtxo_lower(_ value: SpendableUtxo) -> RustBuffer {
+    return FfiConverterTypeSpendableUtxo.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -5771,6 +5851,75 @@ public func FfiConverterTypeClosureReason_lower(_ value: ClosureReason) -> RustB
 
 
 extension ClosureReason: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum CoinSelectionAlgorithm {
+    
+    case branchAndBound
+    case largestFirst
+    case oldestFirst
+    case singleRandomDraw
+}
+
+
+public struct FfiConverterTypeCoinSelectionAlgorithm: FfiConverterRustBuffer {
+    typealias SwiftType = CoinSelectionAlgorithm
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoinSelectionAlgorithm {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .branchAndBound
+        
+        case 2: return .largestFirst
+        
+        case 3: return .oldestFirst
+        
+        case 4: return .singleRandomDraw
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CoinSelectionAlgorithm, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .branchAndBound:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .largestFirst:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .oldestFirst:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .singleRandomDraw:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+public func FfiConverterTypeCoinSelectionAlgorithm_lift(_ buf: RustBuffer) throws -> CoinSelectionAlgorithm {
+    return try FfiConverterTypeCoinSelectionAlgorithm.lift(buf)
+}
+
+public func FfiConverterTypeCoinSelectionAlgorithm_lower(_ value: CoinSelectionAlgorithm) -> RustBuffer {
+    return FfiConverterTypeCoinSelectionAlgorithm.lower(value)
+}
+
+
+
+extension CoinSelectionAlgorithm: Equatable, Hashable {}
 
 
 
@@ -6577,6 +6726,8 @@ public enum NodeError {
     
     case NoSpendableOutputs(message: String)
     
+    case CoinSelectionFailed(message: String)
+    
 }
 
 
@@ -6814,6 +6965,10 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
+        case 57: return .CoinSelectionFailed(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -6937,6 +7092,8 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(55))
         case .NoSpendableOutputs(_ /* message is ignored*/):
             writeInt(&buf, Int32(56))
+        case .CoinSelectionFailed(_ /* message is ignored*/):
+            writeInt(&buf, Int32(57))
 
         
         }
@@ -8145,6 +8302,27 @@ fileprivate struct FfiConverterOptionTypePaymentFailureReason: FfiConverterRustB
     }
 }
 
+fileprivate struct FfiConverterOptionSequenceTypeSpendableUtxo: FfiConverterRustBuffer {
+    typealias SwiftType = [SpendableUtxo]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceTypeSpendableUtxo.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceTypeSpendableUtxo.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 fileprivate struct FfiConverterOptionSequenceTypeSocketAddress: FfiConverterRustBuffer {
     typealias SwiftType = [SocketAddress]?
 
@@ -8525,6 +8703,28 @@ fileprivate struct FfiConverterSequenceTypeRouteHintHop: FfiConverterRustBuffer 
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeRouteHintHop.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+fileprivate struct FfiConverterSequenceTypeSpendableUtxo: FfiConverterRustBuffer {
+    typealias SwiftType = [SpendableUtxo]
+
+    public static func write(_ value: [SpendableUtxo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSpendableUtxo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SpendableUtxo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SpendableUtxo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSpendableUtxo.read(from: &buf))
         }
         return seq
     }
@@ -9815,13 +10015,19 @@ private var initializationResult: InitializationResult {
     if (uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_ldk_node_checksum_method_onchainpayment_new_address() != 37251) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm() != 14084) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address() != 37748) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ldk_node_checksum_method_onchainpayment_send_to_address() != 55646) {
+    if (uniffi_ldk_node_checksum_method_onchainpayment_send_to_address() != 28826) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ldk_node_checksum_method_spontaneouspayment_send() != 48210) {

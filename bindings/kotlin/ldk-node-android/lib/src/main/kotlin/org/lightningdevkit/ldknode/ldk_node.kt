@@ -1007,6 +1007,10 @@ internal open class UniffiVTableCallbackInterfaceVssHeaderProvider(
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1289,11 +1293,15 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf(`ptr`: Pointer,`txid`: RustBuffer.ByValue,`feeRate`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_list_spendable_outputs(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_new_address(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_select_utxos_with_algorithm(`ptr`: Pointer,`targetAmountSats`: Long,`feeRate`: RustBuffer.ByValue,`algorithm`: RustBuffer.ByValue,`utxos`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address(`ptr`: Pointer,`address`: RustBuffer.ByValue,`retainReserve`: Byte,`feeRate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_ldk_node_fn_method_onchainpayment_send_to_address(`ptr`: Pointer,`address`: RustBuffer.ByValue,`amountSats`: Long,`feeRate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_ldk_node_fn_method_onchainpayment_send_to_address(`ptr`: Pointer,`address`: RustBuffer.ByValue,`amountSats`: Long,`feeRate`: RustBuffer.ByValue,`utxosToSpend`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_clone_spontaneouspayment(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
@@ -1649,7 +1657,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_new_address(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address(
     ): Short
@@ -2015,13 +2027,19 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address() != 37251.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm() != 14084.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address() != 37748.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address() != 55646.toShort()) {
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address() != 28826.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send() != 48210.toShort()) {
@@ -6006,11 +6024,15 @@ public interface OnchainPaymentInterface {
     
     fun `bumpFeeByRbf`(`txid`: Txid, `feeRate`: FeeRate): Txid
     
+    fun `listSpendableOutputs`(): List<SpendableUtxo>
+    
     fun `newAddress`(): Address
+    
+    fun `selectUtxosWithAlgorithm`(`targetAmountSats`: kotlin.ULong, `feeRate`: FeeRate?, `algorithm`: CoinSelectionAlgorithm, `utxos`: List<SpendableUtxo>?): List<SpendableUtxo>
     
     fun `sendAllToAddress`(`address`: Address, `retainReserve`: kotlin.Boolean, `feeRate`: FeeRate?): Txid
     
-    fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?): Txid
+    fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid
     
     companion object
 }
@@ -6123,12 +6145,38 @@ open class OnchainPayment: Disposable, AutoCloseable, OnchainPaymentInterface {
     
 
     
+    @Throws(NodeException::class)override fun `listSpendableOutputs`(): List<SpendableUtxo> {
+            return FfiConverterSequenceTypeSpendableUtxo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_list_spendable_outputs(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
     @Throws(NodeException::class)override fun `newAddress`(): Address {
             return FfiConverterTypeAddress.lift(
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_new_address(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `selectUtxosWithAlgorithm`(`targetAmountSats`: kotlin.ULong, `feeRate`: FeeRate?, `algorithm`: CoinSelectionAlgorithm, `utxos`: List<SpendableUtxo>?): List<SpendableUtxo> {
+            return FfiConverterSequenceTypeSpendableUtxo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_select_utxos_with_algorithm(
+        it, FfiConverterULong.lower(`targetAmountSats`),FfiConverterOptionalTypeFeeRate.lower(`feeRate`),FfiConverterTypeCoinSelectionAlgorithm.lower(`algorithm`),FfiConverterOptionalSequenceTypeSpendableUtxo.lower(`utxos`),_status)
 }
     }
     )
@@ -6149,12 +6197,12 @@ open class OnchainPayment: Disposable, AutoCloseable, OnchainPaymentInterface {
     
 
     
-    @Throws(NodeException::class)override fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?): Txid {
+    @Throws(NodeException::class)override fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid {
             return FfiConverterTypeTxid.lift(
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_send_to_address(
-        it, FfiConverterTypeAddress.lower(`address`),FfiConverterULong.lower(`amountSats`),FfiConverterOptionalTypeFeeRate.lower(`feeRate`),_status)
+        it, FfiConverterTypeAddress.lower(`address`),FfiConverterULong.lower(`amountSats`),FfiConverterOptionalTypeFeeRate.lower(`feeRate`),FfiConverterOptionalSequenceTypeSpendableUtxo.lower(`utxosToSpend`),_status)
 }
     }
     )
@@ -8248,6 +8296,35 @@ public object FfiConverterTypeSendingParameters: FfiConverterRustBuffer<SendingP
 
 
 
+data class SpendableUtxo (
+    var `outpoint`: OutPoint, 
+    var `valueSats`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+public object FfiConverterTypeSpendableUtxo: FfiConverterRustBuffer<SpendableUtxo> {
+    override fun read(buf: ByteBuffer): SpendableUtxo {
+        return SpendableUtxo(
+            FfiConverterTypeOutPoint.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SpendableUtxo) = (
+            FfiConverterTypeOutPoint.allocationSize(value.`outpoint`) +
+            FfiConverterULong.allocationSize(value.`valueSats`)
+    )
+
+    override fun write(value: SpendableUtxo, buf: ByteBuffer) {
+            FfiConverterTypeOutPoint.write(value.`outpoint`, buf)
+            FfiConverterULong.write(value.`valueSats`, buf)
+    }
+}
+
+
+
 
 enum class BalanceSource {
     
@@ -8718,6 +8795,35 @@ public object FfiConverterTypeClosureReason : FfiConverterRustBuffer<ClosureReas
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+
+enum class CoinSelectionAlgorithm {
+    
+    BRANCH_AND_BOUND,
+    LARGEST_FIRST,
+    OLDEST_FIRST,
+    SINGLE_RANDOM_DRAW;
+    companion object
+}
+
+
+public object FfiConverterTypeCoinSelectionAlgorithm: FfiConverterRustBuffer<CoinSelectionAlgorithm> {
+    override fun read(buf: ByteBuffer) = try {
+        CoinSelectionAlgorithm.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: CoinSelectionAlgorithm) = 4UL
+
+    override fun write(value: CoinSelectionAlgorithm, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
     }
 }
 
@@ -9690,6 +9796,8 @@ sealed class NodeException(message: String): Exception(message) {
         
         class NoSpendableOutputs(message: String) : NodeException(message)
         
+        class CoinSelectionFailed(message: String) : NodeException(message)
+        
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<NodeException> {
         override fun lift(error_buf: RustBuffer.ByValue): NodeException = FfiConverterTypeNodeError.lift(error_buf)
@@ -9756,6 +9864,7 @@ public object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> 
             54 -> NodeException.TransactionNotFound(FfiConverterString.read(buf))
             55 -> NodeException.TransactionAlreadyConfirmed(FfiConverterString.read(buf))
             56 -> NodeException.NoSpendableOutputs(FfiConverterString.read(buf))
+            57 -> NodeException.CoinSelectionFailed(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -9989,6 +10098,10 @@ public object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> 
             }
             is NodeException.NoSpendableOutputs -> {
                 buf.putInt(56)
+                Unit
+            }
+            is NodeException.CoinSelectionFailed -> {
+                buf.putInt(57)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -11381,6 +11494,35 @@ public object FfiConverterOptionalTypePaymentFailureReason: FfiConverterRustBuff
 
 
 
+public object FfiConverterOptionalSequenceTypeSpendableUtxo: FfiConverterRustBuffer<List<SpendableUtxo>?> {
+    override fun read(buf: ByteBuffer): List<SpendableUtxo>? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterSequenceTypeSpendableUtxo.read(buf)
+    }
+
+    override fun allocationSize(value: List<SpendableUtxo>?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterSequenceTypeSpendableUtxo.allocationSize(value)
+        }
+    }
+
+    override fun write(value: List<SpendableUtxo>?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterSequenceTypeSpendableUtxo.write(value, buf)
+        }
+    }
+}
+
+
+
+
 public object FfiConverterOptionalSequenceTypeSocketAddress: FfiConverterRustBuffer<List<SocketAddress>?> {
     override fun read(buf: ByteBuffer): List<SocketAddress>? {
         if (buf.get().toInt() == 0) {
@@ -11868,6 +12010,31 @@ public object FfiConverterSequenceTypeRouteHintHop: FfiConverterRustBuffer<List<
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeRouteHintHop.write(it, buf)
+        }
+    }
+}
+
+
+
+
+public object FfiConverterSequenceTypeSpendableUtxo: FfiConverterRustBuffer<List<SpendableUtxo>> {
+    override fun read(buf: ByteBuffer): List<SpendableUtxo> {
+        val len = buf.getInt()
+        return List<SpendableUtxo>(len) {
+            FfiConverterTypeSpendableUtxo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SpendableUtxo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSpendableUtxo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SpendableUtxo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSpendableUtxo.write(it, buf)
         }
     }
 }
