@@ -62,7 +62,8 @@ use std::sync::Arc;
 /// [`Builder::set_entropy_bip39_mnemonic`]: crate::Builder::set_entropy_bip39_mnemonic
 pub fn generate_entropy_mnemonic() -> Mnemonic {
 	// bip39::Mnemonic supports 256 bit entropy max
-	let mut entropy = [0; 32];
+	// We use 12 words, which is 128 bit entropy
+	let mut entropy = [0; 16];
 	thread_rng().fill_bytes(&mut entropy);
 	Mnemonic::from_entropy(&entropy).unwrap()
 }
