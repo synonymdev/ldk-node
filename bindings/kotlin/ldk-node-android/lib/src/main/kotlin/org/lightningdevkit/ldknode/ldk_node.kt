@@ -1011,6 +1011,8 @@ internal open class UniffiVTableCallbackInterfaceVssHeaderProvider(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1293,6 +1295,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf(`ptr`: Pointer,`txid`: RustBuffer.ByValue,`feeRate`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_calculate_cpfp_fee_rate(`ptr`: Pointer,`parentTxid`: RustBuffer.ByValue,`urgent`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
     fun uniffi_ldk_node_fn_method_onchainpayment_list_spendable_outputs(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_new_address(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1656,6 +1660,8 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs(
     ): Short
@@ -2025,6 +2031,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate() != 32879.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144.toShort()) {
@@ -6024,6 +6033,8 @@ public interface OnchainPaymentInterface {
     
     fun `bumpFeeByRbf`(`txid`: Txid, `feeRate`: FeeRate): Txid
     
+    fun `calculateCpfpFeeRate`(`parentTxid`: Txid, `urgent`: kotlin.Boolean): FeeRate
+    
     fun `listSpendableOutputs`(): List<SpendableUtxo>
     
     fun `newAddress`(): Address
@@ -6138,6 +6149,19 @@ open class OnchainPayment: Disposable, AutoCloseable, OnchainPaymentInterface {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf(
         it, FfiConverterTypeTxid.lower(`txid`),FfiConverterTypeFeeRate.lower(`feeRate`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `calculateCpfpFeeRate`(`parentTxid`: Txid, `urgent`: kotlin.Boolean): FeeRate {
+            return FfiConverterTypeFeeRate.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_calculate_cpfp_fee_rate(
+        it, FfiConverterTypeTxid.lower(`parentTxid`),FfiConverterBoolean.lower(`urgent`),_status)
 }
     }
     )

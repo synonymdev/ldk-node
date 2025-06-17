@@ -2475,6 +2475,8 @@ public protocol OnchainPaymentProtocol : AnyObject {
     
     func bumpFeeByRbf(txid: Txid, feeRate: FeeRate) throws  -> Txid
     
+    func calculateCpfpFeeRate(parentTxid: Txid, urgent: Bool) throws  -> FeeRate
+    
     func listSpendableOutputs() throws  -> [SpendableUtxo]
     
     func newAddress() throws  -> Address
@@ -2543,6 +2545,15 @@ open func bumpFeeByRbf(txid: Txid, feeRate: FeeRate)throws  -> Txid {
     uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf(self.uniffiClonePointer(),
         FfiConverterTypeTxid.lower(txid),
         FfiConverterTypeFeeRate.lower(feeRate),$0
+    )
+})
+}
+    
+open func calculateCpfpFeeRate(parentTxid: Txid, urgent: Bool)throws  -> FeeRate {
+    return try  FfiConverterTypeFeeRate.lift(try rustCallWithError(FfiConverterTypeNodeError.lift) {
+    uniffi_ldk_node_fn_method_onchainpayment_calculate_cpfp_fee_rate(self.uniffiClonePointer(),
+        FfiConverterTypeTxid.lower(parentTxid),
+        FfiConverterBool.lower(urgent),$0
     )
 })
 }
@@ -10013,6 +10024,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate() != 32879) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144) {
