@@ -302,4 +302,44 @@ impl OnchainPayment {
 		// Pass through to the wallet implementation
 		self.wallet.accelerate_by_cpfp(txid, fee_rate_param, destination_address)
 	}
+
+	/// Calculates an appropriate fee rate for a CPFP transaction to ensure
+	/// the parent transaction gets confirmed within the target number of blocks.
+	///
+	/// This method analyzes the parent transaction's current fee rate and calculates
+	/// how much the child transaction needs to pay to bring the combined package
+	/// fee rate up to the target level.
+	///
+	/// # Arguments
+	///
+	/// * `parent_txid` - The transaction ID of the parent transaction to accelerate
+	/// * `urgent` - If true, uses a more aggressive fee rate for faster confirmation
+	///
+	/// # Returns
+	///
+	/// The fee rate that should be used for the child transaction.
+	///
+	/// # Errors
+	///
+	/// * [`Error::NotRunning`] - If the node is not running
+	/// * [`Error::TransactionNotFound`] - If the parent transaction can't be found
+	/// * [`Error::TransactionAlreadyConfirmed`] - If the parent transaction is already confirmed
+	/// * [`Error::WalletOperationFailed`] - If fee calculation fails
+	pub fn calculate_cpfp_fee_rate(&self, parent_txid: &Txid, urgent: bool) -> Result<FeeRate, Error> {
+		let rt_lock = self.runtime.read().unwrap();
+		if rt_lock.is_none() {
+			return Err(Error::NotRunning);
+		}
+
+		let fee_rate = self.wallet.calculate_cpfp_fee_rate(parent_txid, urgent)?;
+
+		#[cfg(not(feature = "uniffi"))]
+		{
+			Ok(fee_rate)
+		}
+		#[cfg(feature = "uniffi")]
+		{
+			Ok(Arc::new(fee_rate))
+		}
+	}
 }

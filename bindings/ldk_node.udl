@@ -230,6 +230,8 @@ interface OnchainPayment {
     Txid bump_fee_by_rbf([ByRef]Txid txid, FeeRate fee_rate);
     [Throws=NodeError]
     Txid accelerate_by_cpfp([ByRef]Txid txid, FeeRate? fee_rate, Address? destination_address);
+    [Throws=NodeError]
+    FeeRate calculate_cpfp_fee_rate([ByRef]Txid parent_txid, boolean urgent);
 };
 
 enum CoinSelectionAlgorithm {
