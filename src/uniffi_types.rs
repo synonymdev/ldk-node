@@ -471,7 +471,7 @@ impl From<lightning::routing::router::RouteHintHop> for RouteHintHop {
 /// Represents a syntactically and semantically correct lightning BOLT11 invoice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bolt11Invoice {
-	pub inner: LdkBolt11Invoice,
+	pub(crate) inner: LdkBolt11Invoice,
 }
 
 impl Bolt11Invoice {
@@ -535,7 +535,7 @@ impl Bolt11Invoice {
 	}
 
 	/// Return the description or a hash of it for longer ones
-	pub fn description(&self) -> Bolt11InvoiceDescription {
+	pub fn invoice_description(&self) -> Bolt11InvoiceDescription {
 		self.inner.description().into()
 	}
 
@@ -731,7 +731,7 @@ mod tests {
 		let (ldk_invoice, wrapped_invoice) = create_test_invoice();
 
 		let ldk_description = ldk_invoice.description();
-		let wrapped_description = wrapped_invoice.description();
+		let wrapped_description = wrapped_invoice.invoice_description();
 
 		match (ldk_description, &wrapped_description) {
 			(
