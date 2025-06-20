@@ -1013,6 +1013,10 @@ internal open class UniffiVTableCallbackInterfaceVssHeaderProvider(
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1043,11 +1047,11 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_bolt11invoice_currency(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_ldk_node_fn_method_bolt11invoice_description(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_bolt11invoice_expiry_time_seconds(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     fun uniffi_ldk_node_fn_method_bolt11invoice_fallback_addresses(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_ldk_node_fn_method_bolt11invoice_invoice_description(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_bolt11invoice_is_expired(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -1070,6 +1074,14 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_fn_method_bolt11invoice_signable_hash(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ldk_node_fn_method_bolt11invoice_would_expire(`ptr`: Pointer,`atTimeSeconds`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_ldk_node_fn_method_bolt11invoice_uniffi_trait_debug(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_ldk_node_fn_method_bolt11invoice_uniffi_trait_display(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_ldk_node_fn_method_bolt11invoice_uniffi_trait_eq_eq(`ptr`: Pointer,`other`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_ldk_node_fn_method_bolt11invoice_uniffi_trait_eq_ne(`ptr`: Pointer,`other`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_ldk_node_fn_clone_bolt11payment(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
@@ -1455,11 +1467,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_bolt11invoice_currency(
     ): Short
-    fun uniffi_ldk_node_checksum_method_bolt11invoice_description(
-    ): Short
     fun uniffi_ldk_node_checksum_method_bolt11invoice_expiry_time_seconds(
     ): Short
     fun uniffi_ldk_node_checksum_method_bolt11invoice_fallback_addresses(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_bolt11invoice_invoice_description(
     ): Short
     fun uniffi_ldk_node_checksum_method_bolt11invoice_is_expired(
     ): Short
@@ -1724,13 +1736,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_bolt11invoice_currency() != 32179.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ldk_node_checksum_method_bolt11invoice_description() != 9887.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_ldk_node_checksum_method_bolt11invoice_expiry_time_seconds() != 23625.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_bolt11invoice_fallback_addresses() != 55276.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_bolt11invoice_invoice_description() != 395.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_bolt11invoice_is_expired() != 15932.toShort()) {
@@ -2498,11 +2510,11 @@ public interface Bolt11InvoiceInterface {
     
     fun `currency`(): Currency
     
-    fun `description`(): Bolt11InvoiceDescription
-    
     fun `expiryTimeSeconds`(): kotlin.ULong
     
     fun `fallbackAddresses`(): List<Address>
+    
+    fun `invoiceDescription`(): Bolt11InvoiceDescription
     
     fun `isExpired`(): kotlin.Boolean
     
@@ -2634,18 +2646,6 @@ open class Bolt11Invoice: Disposable, AutoCloseable, Bolt11InvoiceInterface {
     }
     
 
-    override fun `description`(): Bolt11InvoiceDescription {
-            return FfiConverterTypeBolt11InvoiceDescription.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_bolt11invoice_description(
-        it, _status)
-}
-    }
-    )
-    }
-    
-
     override fun `expiryTimeSeconds`(): kotlin.ULong {
             return FfiConverterULong.lift(
     callWithPointer {
@@ -2663,6 +2663,18 @@ open class Bolt11Invoice: Disposable, AutoCloseable, Bolt11InvoiceInterface {
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_bolt11invoice_fallback_addresses(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    override fun `invoiceDescription`(): Bolt11InvoiceDescription {
+            return FfiConverterTypeBolt11InvoiceDescription.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_bolt11invoice_invoice_description(
         it, _status)
 }
     }
@@ -2802,6 +2814,31 @@ open class Bolt11Invoice: Disposable, AutoCloseable, Bolt11InvoiceInterface {
     }
     
 
+    
+    override fun toString(): String {
+        return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_bolt11invoice_uniffi_trait_display(
+        it, _status)
+}
+    }
+    )
+    }
+    
+    
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is Bolt11Invoice) return false
+        return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_bolt11invoice_uniffi_trait_eq_eq(
+        it, FfiConverterTypeBolt11Invoice.lower(`other`),_status)
+}
+    }
+    )
+    }
     
 
     
