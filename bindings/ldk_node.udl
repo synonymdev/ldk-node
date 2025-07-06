@@ -232,6 +232,8 @@ interface OnchainPayment {
     Txid accelerate_by_cpfp([ByRef]Txid txid, FeeRate? fee_rate, Address? destination_address);
     [Throws=NodeError]
     FeeRate calculate_cpfp_fee_rate([ByRef]Txid parent_txid, boolean urgent);
+    [Throws=NodeError]
+    u64 calculate_total_fee([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate, sequence<SpendableUtxo>? utxos_to_spend);
 };
 
 enum CoinSelectionAlgorithm {
