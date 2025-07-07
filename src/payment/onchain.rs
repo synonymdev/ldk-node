@@ -148,6 +148,59 @@ impl OnchainPayment {
 		Ok(selected_utxos)
 	}
 
+	/// Calculates the total fee for an on-chain payment without sending it.
+	///
+	/// This method simulates creating a transaction to the given address for the specified amount
+	/// and returns the total fee that would be paid. This is useful for displaying fee estimates
+	/// to users before they confirm a transaction.
+	///
+	/// The calculation respects any on-chain reserve requirements and validates that sufficient
+	/// funds are available, just like [`send_to_address`].
+	///
+	/// # Arguments
+	///
+	/// * `address` - The Bitcoin address to send to
+	/// * `amount_sats` - The amount to send in satoshis
+	/// * `fee_rate` - Optional fee rate to use (if None, will estimate based on current network conditions)
+	/// * `utxos_to_spend` - Optional list of specific UTXOs to use for the transaction
+	///
+	/// # Returns
+	///
+	/// The total fee in satoshis that would be paid for this transaction.
+	///
+	/// # Errors
+	///
+	/// * [`Error::NotRunning`] - If the node is not running
+	/// * [`Error::InvalidAddress`] - If the address is invalid
+	/// * [`Error::InsufficientFunds`] - If there are insufficient funds for the payment
+	/// * [`Error::WalletOperationFailed`] - If fee calculation fails
+	///
+	/// [`send_to_address`]: Self::send_to_address
+	pub fn calculate_total_fee(
+		&self, address: &bitcoin::Address, amount_sats: u64, fee_rate: Option<FeeRate>,
+		utxos_to_spend: Option<Vec<SpendableUtxo>>,
+	) -> Result<u64, Error> {
+		let rt_lock = self.runtime.read().unwrap();
+		if rt_lock.is_none() {
+			return Err(Error::NotRunning);
+		}
+
+		let cur_anchor_reserve_sats =
+			crate::total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
+		let send_amount =
+			OnchainSendAmount::ExactRetainingReserve { amount_sats, cur_anchor_reserve_sats };
+		let outpoints = utxos_to_spend.map(|utxos| utxos.into_iter().map(|u| u.outpoint).collect());
+		let fee_rate_opt = maybe_map_fee_rate_opt!(fee_rate);
+
+		self.wallet.calculate_transaction_fee(
+			address,
+			send_amount,
+			fee_rate_opt,
+			outpoints,
+			&self.channel_manager,
+		)
+	}
+
 	/// Send an on-chain payment to the given address.
 	///
 	/// This will respect any on-chain reserve we need to keep, i.e., won't allow to cut into
@@ -325,7 +378,9 @@ impl OnchainPayment {
 	/// * [`Error::TransactionNotFound`] - If the parent transaction can't be found
 	/// * [`Error::TransactionAlreadyConfirmed`] - If the parent transaction is already confirmed
 	/// * [`Error::WalletOperationFailed`] - If fee calculation fails
-	pub fn calculate_cpfp_fee_rate(&self, parent_txid: &Txid, urgent: bool) -> Result<FeeRate, Error> {
+	pub fn calculate_cpfp_fee_rate(
+		&self, parent_txid: &Txid, urgent: bool,
+	) -> Result<FeeRate, Error> {
 		let rt_lock = self.runtime.read().unwrap();
 		if rt_lock.is_none() {
 			return Err(Error::NotRunning);
