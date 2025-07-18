@@ -10269,7 +10269,8 @@ sealed class PaymentKind {
     data class Bolt11(
         val `hash`: PaymentHash, 
         val `preimage`: PaymentPreimage?, 
-        val `secret`: PaymentSecret?) : PaymentKind() {
+        val `secret`: PaymentSecret?, 
+        val `description`: kotlin.String?) : PaymentKind() {
         companion object
     }
     
@@ -10278,7 +10279,8 @@ sealed class PaymentKind {
         val `preimage`: PaymentPreimage?, 
         val `secret`: PaymentSecret?, 
         val `counterpartySkimmedFeeMsat`: kotlin.ULong?, 
-        val `lspFeeLimits`: LspFeeLimits) : PaymentKind() {
+        val `lspFeeLimits`: LspFeeLimits, 
+        val `description`: kotlin.String?) : PaymentKind() {
         companion object
     }
     
@@ -10323,6 +10325,7 @@ public object FfiConverterTypePaymentKind : FfiConverterRustBuffer<PaymentKind>{
                 FfiConverterTypePaymentHash.read(buf),
                 FfiConverterOptionalTypePaymentPreimage.read(buf),
                 FfiConverterOptionalTypePaymentSecret.read(buf),
+                FfiConverterOptionalString.read(buf),
                 )
             3 -> PaymentKind.Bolt11Jit(
                 FfiConverterTypePaymentHash.read(buf),
@@ -10330,6 +10333,7 @@ public object FfiConverterTypePaymentKind : FfiConverterRustBuffer<PaymentKind>{
                 FfiConverterOptionalTypePaymentSecret.read(buf),
                 FfiConverterOptionalULong.read(buf),
                 FfiConverterTypeLSPFeeLimits.read(buf),
+                FfiConverterOptionalString.read(buf),
                 )
             4 -> PaymentKind.Bolt12Offer(
                 FfiConverterOptionalTypePaymentHash.read(buf),
@@ -10370,6 +10374,7 @@ public object FfiConverterTypePaymentKind : FfiConverterRustBuffer<PaymentKind>{
                 + FfiConverterTypePaymentHash.allocationSize(value.`hash`)
                 + FfiConverterOptionalTypePaymentPreimage.allocationSize(value.`preimage`)
                 + FfiConverterOptionalTypePaymentSecret.allocationSize(value.`secret`)
+                + FfiConverterOptionalString.allocationSize(value.`description`)
             )
         }
         is PaymentKind.Bolt11Jit -> {
@@ -10381,6 +10386,7 @@ public object FfiConverterTypePaymentKind : FfiConverterRustBuffer<PaymentKind>{
                 + FfiConverterOptionalTypePaymentSecret.allocationSize(value.`secret`)
                 + FfiConverterOptionalULong.allocationSize(value.`counterpartySkimmedFeeMsat`)
                 + FfiConverterTypeLSPFeeLimits.allocationSize(value.`lspFeeLimits`)
+                + FfiConverterOptionalString.allocationSize(value.`description`)
             )
         }
         is PaymentKind.Bolt12Offer -> {
@@ -10429,6 +10435,7 @@ public object FfiConverterTypePaymentKind : FfiConverterRustBuffer<PaymentKind>{
                 FfiConverterTypePaymentHash.write(value.`hash`, buf)
                 FfiConverterOptionalTypePaymentPreimage.write(value.`preimage`, buf)
                 FfiConverterOptionalTypePaymentSecret.write(value.`secret`, buf)
+                FfiConverterOptionalString.write(value.`description`, buf)
                 Unit
             }
             is PaymentKind.Bolt11Jit -> {
@@ -10438,6 +10445,7 @@ public object FfiConverterTypePaymentKind : FfiConverterRustBuffer<PaymentKind>{
                 FfiConverterOptionalTypePaymentSecret.write(value.`secret`, buf)
                 FfiConverterOptionalULong.write(value.`counterpartySkimmedFeeMsat`, buf)
                 FfiConverterTypeLSPFeeLimits.write(value.`lspFeeLimits`, buf)
+                FfiConverterOptionalString.write(value.`description`, buf)
                 Unit
             }
             is PaymentKind.Bolt12Offer -> {
