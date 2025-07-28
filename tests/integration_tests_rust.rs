@@ -369,12 +369,12 @@ fn onchain_send_receive() {
 
 	assert_eq!(
 		Err(NodeError::InsufficientFunds),
-		node_a.onchain_payment().send_to_address(&addr_b, expected_node_a_balance + 1, None)
+		node_a.onchain_payment().send_to_address(&addr_b, expected_node_a_balance + 1, None, None)
 	);
 
 	assert_eq!(
 		Err(NodeError::InvalidAddress),
-		node_a.onchain_payment().send_to_address(&addr_c, expected_node_a_balance + 1, None)
+		node_a.onchain_payment().send_to_address(&addr_c, expected_node_a_balance + 1, None, None)
 	);
 
 	assert_eq!(
@@ -384,7 +384,7 @@ fn onchain_send_receive() {
 
 	let amount_to_send_sats = 54321;
 	let txid =
-		node_b.onchain_payment().send_to_address(&addr_a, amount_to_send_sats, None).unwrap();
+		node_b.onchain_payment().send_to_address(&addr_a, amount_to_send_sats, None, None).unwrap();
 	wait_for_tx(&electrsd.client, txid);
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();

@@ -7330,9 +7330,9 @@ public enum PaymentKind {
     
     case onchain(txid: Txid, status: ConfirmationStatus
     )
-    case bolt11(hash: PaymentHash, preimage: PaymentPreimage?, secret: PaymentSecret?, description: String?
+    case bolt11(hash: PaymentHash, preimage: PaymentPreimage?, secret: PaymentSecret?, description: String?, bolt11: String?
     )
-    case bolt11Jit(hash: PaymentHash, preimage: PaymentPreimage?, secret: PaymentSecret?, counterpartySkimmedFeeMsat: UInt64?, lspFeeLimits: LspFeeLimits, description: String?
+    case bolt11Jit(hash: PaymentHash, preimage: PaymentPreimage?, secret: PaymentSecret?, counterpartySkimmedFeeMsat: UInt64?, lspFeeLimits: LspFeeLimits, description: String?, bolt11: String?
     )
     case bolt12Offer(hash: PaymentHash?, preimage: PaymentPreimage?, secret: PaymentSecret?, offerId: OfferId, payerNote: UntrustedString?, quantity: UInt64?
     )
@@ -7353,10 +7353,10 @@ public struct FfiConverterTypePaymentKind: FfiConverterRustBuffer {
         case 1: return .onchain(txid: try FfiConverterTypeTxid.read(from: &buf), status: try FfiConverterTypeConfirmationStatus.read(from: &buf)
         )
         
-        case 2: return .bolt11(hash: try FfiConverterTypePaymentHash.read(from: &buf), preimage: try FfiConverterOptionTypePaymentPreimage.read(from: &buf), secret: try FfiConverterOptionTypePaymentSecret.read(from: &buf), description: try FfiConverterOptionString.read(from: &buf)
+        case 2: return .bolt11(hash: try FfiConverterTypePaymentHash.read(from: &buf), preimage: try FfiConverterOptionTypePaymentPreimage.read(from: &buf), secret: try FfiConverterOptionTypePaymentSecret.read(from: &buf), description: try FfiConverterOptionString.read(from: &buf), bolt11: try FfiConverterOptionString.read(from: &buf)
         )
         
-        case 3: return .bolt11Jit(hash: try FfiConverterTypePaymentHash.read(from: &buf), preimage: try FfiConverterOptionTypePaymentPreimage.read(from: &buf), secret: try FfiConverterOptionTypePaymentSecret.read(from: &buf), counterpartySkimmedFeeMsat: try FfiConverterOptionUInt64.read(from: &buf), lspFeeLimits: try FfiConverterTypeLSPFeeLimits.read(from: &buf), description: try FfiConverterOptionString.read(from: &buf)
+        case 3: return .bolt11Jit(hash: try FfiConverterTypePaymentHash.read(from: &buf), preimage: try FfiConverterOptionTypePaymentPreimage.read(from: &buf), secret: try FfiConverterOptionTypePaymentSecret.read(from: &buf), counterpartySkimmedFeeMsat: try FfiConverterOptionUInt64.read(from: &buf), lspFeeLimits: try FfiConverterTypeLSPFeeLimits.read(from: &buf), description: try FfiConverterOptionString.read(from: &buf), bolt11: try FfiConverterOptionString.read(from: &buf)
         )
         
         case 4: return .bolt12Offer(hash: try FfiConverterOptionTypePaymentHash.read(from: &buf), preimage: try FfiConverterOptionTypePaymentPreimage.read(from: &buf), secret: try FfiConverterOptionTypePaymentSecret.read(from: &buf), offerId: try FfiConverterTypeOfferId.read(from: &buf), payerNote: try FfiConverterOptionTypeUntrustedString.read(from: &buf), quantity: try FfiConverterOptionUInt64.read(from: &buf)
@@ -7382,15 +7382,16 @@ public struct FfiConverterTypePaymentKind: FfiConverterRustBuffer {
             FfiConverterTypeConfirmationStatus.write(status, into: &buf)
             
         
-        case let .bolt11(hash,preimage,secret,description):
+        case let .bolt11(hash,preimage,secret,description,bolt11):
             writeInt(&buf, Int32(2))
             FfiConverterTypePaymentHash.write(hash, into: &buf)
             FfiConverterOptionTypePaymentPreimage.write(preimage, into: &buf)
             FfiConverterOptionTypePaymentSecret.write(secret, into: &buf)
             FfiConverterOptionString.write(description, into: &buf)
+            FfiConverterOptionString.write(bolt11, into: &buf)
             
         
-        case let .bolt11Jit(hash,preimage,secret,counterpartySkimmedFeeMsat,lspFeeLimits,description):
+        case let .bolt11Jit(hash,preimage,secret,counterpartySkimmedFeeMsat,lspFeeLimits,description,bolt11):
             writeInt(&buf, Int32(3))
             FfiConverterTypePaymentHash.write(hash, into: &buf)
             FfiConverterOptionTypePaymentPreimage.write(preimage, into: &buf)
@@ -7398,6 +7399,7 @@ public struct FfiConverterTypePaymentKind: FfiConverterRustBuffer {
             FfiConverterOptionUInt64.write(counterpartySkimmedFeeMsat, into: &buf)
             FfiConverterTypeLSPFeeLimits.write(lspFeeLimits, into: &buf)
             FfiConverterOptionString.write(description, into: &buf)
+            FfiConverterOptionString.write(bolt11, into: &buf)
             
         
         case let .bolt12Offer(hash,preimage,secret,offerId,payerNote,quantity):
