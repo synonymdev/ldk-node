@@ -211,7 +211,9 @@ impl OnchainPayment {
 	///
 	/// [`BalanceDetails::total_anchor_channels_reserve_sats`]: crate::BalanceDetails::total_anchor_channels_reserve_sats
 	pub fn send_to_address(
-		&self, address: &bitcoin::Address, amount_sats: u64, fee_rate: Option<FeeRate>,
+		&self, address: &bitcoin::Address,
+		amount_sats: u64,
+		fee_rate: Option<FeeRate>,
 		utxos_to_spend: Option<Vec<SpendableUtxo>>,
 	) -> Result<Txid, Error> {
 		let rt_lock = self.runtime.read().unwrap();
