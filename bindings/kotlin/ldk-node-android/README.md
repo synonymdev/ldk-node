@@ -31,7 +31,7 @@ Publishing new version guide.
     - add dependency in `libs.versions.toml`:
         ```toml
         # by tag
-        ldk-node-android = { module = "com.github.synonymdev:ldk-node", version = "v0.6.1-rc.4"
+        ldk-node-android = { module = "com.github.synonymdev:ldk-node", version = "v0.6.1-rc.5"
 
         # or by branch
         ldk-node-android = { module = "com.github.synonymdev:ldk-node", version = "main-SNAPSHOT"
