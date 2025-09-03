@@ -911,6 +911,7 @@ impl Node {
 			Arc::clone(&self.peer_store),
 			Arc::clone(&self.config),
 			Arc::clone(&self.logger),
+			Arc::clone(&self._router),
 		)
 	}
 
@@ -928,6 +929,7 @@ impl Node {
 			Arc::clone(&self.peer_store),
 			Arc::clone(&self.config),
 			Arc::clone(&self.logger),
+			Arc::clone(&self._router),
 		))
 	}
 

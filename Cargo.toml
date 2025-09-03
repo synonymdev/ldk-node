@@ -1,6 +1,6 @@
 [package]
 name = "ldk-node"
-version = "0.6.2-rc.1"
+version = "0.6.2-rc.2"
 authors = ["Elias Rohrer <dev@tnull.de>"]
 homepage = "https://lightningdevkit.org/"
 license = "MIT OR Apache-2.0"
@@ -83,7 +83,7 @@ esplora-client = { version = "0.12", default-features = false, features = ["toki
 # `lightning-transaction-sync` APIs. We should drop it as part of the upgrade
 # to LDK 0.2.
 esplora-client_0_11 = { package = "esplora-client", version = "0.11", default-features = false, features = ["tokio", "async-https-rustls"] }
-electrum-client = { version = "0.24.0", default-features = true }
+electrum-client = { version = "0.23.1", default-features = true }
 libc = "0.2"
 uniffi = { version = "0.27.3", features = ["build"], optional = true }
 serde = { version = "1.0.210", default-features = false, features = ["std", "derive"] }
