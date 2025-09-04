@@ -189,6 +189,10 @@ interface Bolt11Payment {
 	Bolt11Invoice receive_via_jit_channel(u64 amount_msat, [ByRef]Bolt11InvoiceDescription description, u32 expiry_secs, u64? max_lsp_fee_limit_msat);
 	[Throws=NodeError]
 	Bolt11Invoice receive_variable_amount_via_jit_channel([ByRef]Bolt11InvoiceDescription description, u32 expiry_secs, u64? max_proportional_lsp_fee_limit_ppm_msat);
+	[Throws=NodeError]
+	u64 estimate_routing_fees([ByRef]Bolt11Invoice invoice);
+	[Throws=NodeError]
+	u64 estimate_routing_fees_using_amount([ByRef]Bolt11Invoice invoice, u64 amount_msat);
 };
 
 interface Bolt12Payment {
@@ -285,6 +289,7 @@ enum NodeError {
 	"PaymentSendingFailed",
 	"InvalidCustomTlvs",
 	"ProbeSendingFailed",
+	"RouteNotFound",
 	"ChannelCreationFailed",
 	"ChannelClosingFailed",
 	"ChannelConfigUpdateFailed",
