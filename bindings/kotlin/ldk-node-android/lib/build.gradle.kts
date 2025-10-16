@@ -3,7 +3,8 @@ val libraryVersion: String by project
 
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android") version "1.6.10"
+    kotlin("android")
+    kotlin("plugin.serialization")
 
     id("maven-publish")
     id("signing")
@@ -16,11 +17,11 @@ repositories {
 }
 
 android {
+    namespace = "org.lightningdevkit.ldknode"
     compileSdk = 34
 
     defaultConfig {
         minSdk = 21
-        targetSdk = 31
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
@@ -30,6 +31,15 @@ android {
             isMinifyEnabled = false
             proguardFiles(file("proguard-android-optimize.txt"), file("proguard-rules.pro"))
         }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
     }
 
     publishing {
@@ -46,13 +56,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
     implementation("androidx.appcompat:appcompat:1.4.0")
     implementation("androidx.core:core-ktx:1.7.0")
+    implementation("org.jetbrains.kotlinx:atomicfu:0.23.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
     api("org.slf4j:slf4j-api:1.7.30")
-
-    androidTestImplementation("com.github.tony19:logback-android:2.0.0")
-    androidTestImplementation("androidx.test.ext:junit:1.1.3")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.4.0")
-    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
-    androidTestImplementation("org.jetbrains.kotlin:kotlin-test-junit")
 }
 
 afterEvaluate {
