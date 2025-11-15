@@ -1,3 +1,27 @@
+# Unreleased
+
+## Feature and API updates
+- Added reactive event system for wallet monitoring without polling:
+  - **Onchain Transaction Events** (fully implemented):
+    - `OnchainTransactionReceived`: Emitted when a new unconfirmed transaction is
+      first detected in the mempool (instant notification for incoming payments!)
+    - `OnchainTransactionConfirmed`: Emitted when a transaction receives confirmations
+    - `OnchainTransactionUnconfirmed`: Emitted when a previously confirmed transaction
+      becomes unconfirmed (blockchain reorg)
+  - **Sync Completion Event** (fully implemented):
+    - `SyncCompleted`: Emitted when onchain wallet sync finishes successfully
+  - **Balance Change Event** (fully implemented):
+    - `BalanceChanged`: Emitted when onchain or Lightning balances change, allowing
+      applications to update balance displays immediately without polling
+- Added `TransactionContext` enum to onchain transaction events, which provides
+  information about whether a transaction is related to channel funding, channel
+  closure, or regular wallet activity. Applications can cross-reference with
+  `ChannelPending` and `ChannelClosed` events to identify channel-related
+  transactions.
+- Added `SyncType` enum to distinguish between onchain wallet sync, Lightning
+  wallet sync, and fee rate cache updates.
+- Balance tracking is now persisted in `NodeMetrics` to detect changes across restarts.
+
 # 0.6.2 - Aug. 14, 2025
 This patch release fixes a panic that could have been hit when syncing to a
 TLS-enabled Electrum server, as well as some minor issues when shutting down

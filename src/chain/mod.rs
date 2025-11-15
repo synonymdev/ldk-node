@@ -27,9 +27,11 @@ use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger
 use crate::types::{Broadcaster, ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::{Error, NodeMetrics};
 
-use lightning::chain::chaininterface::ConfirmationTarget as LdkConfirmationTarget;
+use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget as LdkConfirmationTarget};
 use lightning::chain::{Confirm, Filter, Listen, WatchedOutput};
 use lightning::util::ser::Writeable;
+
+use crate::fee_estimator::FeeEstimator;
 
 use lightning_transaction_sync::EsploraSyncClient;
 
@@ -39,13 +41,18 @@ use lightning_block_sync::poll::{ChainPoller, ChainTip, ValidatedBlockHeader};
 use lightning_block_sync::SpvClient;
 
 use bdk_esplora::EsploraAsyncExt;
+use bdk_wallet::event::WalletEvent as BdkWalletEvent;
 use bdk_wallet::Update as BdkUpdate;
 
 use esplora_client::AsyncClient as EsploraAsyncClient;
 
 use bitcoin::{FeeRate, Network, Script, ScriptBuf, Txid};
 
+use crate::event::{Event, EventQueue, SyncType};
+use crate::check_and_emit_balance_update;
+
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -230,6 +237,157 @@ pub(crate) enum ChainSource {
 	},
 }
 
+use crate::event::TransactionContext;
+use crate::types::UserChannelId;
+use lightning::ln::types::ChannelId;
+
+/// Determine transaction context by checking against known channel funding outpoints.
+///
+/// This function attempts to identify whether a transaction is related to channel operations
+/// by checking against the channel manager and channel monitor data.
+fn determine_transaction_context(
+	txid: &bitcoin::Txid,
+	channel_manager: Option<&Arc<ChannelManager>>,
+	chain_monitor: Option<&Arc<ChainMonitor>>,
+) -> TransactionContext {
+	// Check if this transaction is a known channel funding transaction
+	if let Some(cm) = channel_manager {
+		// Check all channels for matching funding txids
+		for channel_details in cm.list_channels() {
+			if let Some(funding_txo) = channel_details.funding_txo {
+				if funding_txo.txid == *txid {
+					// This is a channel funding transaction
+					return TransactionContext::ChannelFunding {
+						channel_id: channel_details.channel_id,
+						user_channel_id: UserChannelId(channel_details.user_channel_id),
+						counterparty_node_id: channel_details.counterparty.node_id,
+					};
+				}
+			}
+		}
+
+		// Check recently closed channels - they might not be in the active list anymore
+		// but could still have pending transactions
+		for _channel_details in cm.list_recent_payments() {
+			// TODO: Once we have access to closed channel data, we can check those as well
+			// For now, we'll need to rely on the channel monitor
+		}
+	}
+
+	// Check channel monitors for channel closure transactions
+	if let Some(_monitor) = chain_monitor {
+		// The chain monitor can help identify channel closures
+		// TODO: Implement channel closure detection through monitor data
+		// This would require iterating through monitored channels and checking
+		// their closing transactions
+	}
+
+	// Default to regular wallet transaction if we can't identify it as channel-related
+	// Applications can still cross-reference with ChannelPending/ChannelClosed events
+	TransactionContext::RegularWallet
+}
+
+/// Process BDK wallet events and emit corresponding ldk-node events via the event queue.
+fn process_wallet_events<B: Deref, E: Deref, L: Deref, L2: Deref>(
+	wallet_events: Vec<BdkWalletEvent>, wallet: &crate::wallet::Wallet<B, E, L>,
+	event_queue: &EventQueue<L2>, logger: &Arc<Logger>,
+	channel_manager: Option<&Arc<ChannelManager>>, chain_monitor: Option<&Arc<ChainMonitor>>,
+) -> Result<(), Error>
+where
+	B::Target: BroadcasterInterface,
+	E::Target: FeeEstimator,
+	L::Target: LdkLogger,
+	L2::Target: LdkLogger,
+{
+	for wallet_event in wallet_events {
+		match wallet_event {
+			BdkWalletEvent::TxConfirmed { txid, block_time, .. } => {
+				log_info!(
+					logger,
+					"Onchain transaction {} confirmed at height {}",
+					txid,
+					block_time.block_id.height
+				);
+
+				// Determine the transaction context by checking channel data
+				let context = determine_transaction_context(&txid, channel_manager, chain_monitor);
+
+				let event = Event::OnchainTransactionConfirmed {
+					txid,
+					block_hash: block_time.block_id.hash,
+					block_height: block_time.block_id.height,
+					confirmation_time: block_time.confirmation_time,
+					context,
+				};
+				event_queue.add_event(event).map_err(|e| {
+					log_error!(logger, "Failed to push onchain event to queue: {}", e);
+					e
+				})?;
+			},
+			BdkWalletEvent::TxUnconfirmed { txid, old_block_time, .. } => {
+				match old_block_time {
+					Some(_) => {
+						// Transaction was previously confirmed but is now unconfirmed (reorg)
+						log_info!(logger, "Onchain transaction {} became unconfirmed (reorg)", txid);
+						let event = Event::OnchainTransactionUnconfirmed { txid };
+						event_queue.add_event(event).map_err(|e| {
+							log_error!(logger, "Failed to push onchain event to queue: {}", e);
+							e
+						})?;
+					},
+					None => {
+						// New unconfirmed transaction detected in mempool
+						// Get transaction details from wallet to calculate the amount
+						let amount_sats = wallet.get_tx_net_amount(&txid).unwrap_or_else(|| {
+							// Shouldn't happen, but handle gracefully
+							log_error!(logger, "Transaction {} not found in wallet", txid);
+							0
+						});
+
+						log_info!(
+							logger,
+							"New unconfirmed transaction {} detected in mempool (amount: {} sats)",
+							txid,
+							amount_sats
+						);
+
+						let context = determine_transaction_context(&txid, channel_manager, chain_monitor);
+						let event = Event::OnchainTransactionReceived { txid, amount_sats, context };
+						event_queue.add_event(event).map_err(|e| {
+							log_error!(logger, "Failed to push onchain event to queue: {}", e);
+							e
+						})?;
+					},
+				}
+			},
+			BdkWalletEvent::ChainTipChanged { old_tip, new_tip } => {
+				log_trace!(
+					logger,
+					"Chain tip changed from block {} at height {} to block {} at height {}",
+					old_tip.hash,
+					old_tip.height,
+					new_tip.hash,
+					new_tip.height
+				);
+				// We don't emit an event for chain tip changes as this is too noisy
+			},
+			BdkWalletEvent::TxReplaced { txid, .. } => {
+				log_info!(logger, "Onchain transaction {} was replaced", txid);
+				// Treat a replacement as an unconfirm event
+				let event = Event::OnchainTransactionUnconfirmed { txid };
+				event_queue.add_event(event).map_err(|e| {
+					log_error!(logger, "Failed to push onchain event to queue: {}", e);
+					e
+				})?;
+			},
+			_ => {
+				// Ignore other event types
+			},
+		}
+	}
+	Ok(())
+}
+
 impl ChainSource {
 	pub(crate) fn new_esplora(
 		server_url: String, sync_config: EsploraSyncConfig, onchain_wallet: Arc<Wallet>,
@@ -353,11 +511,21 @@ impl ChainSource {
 		}
 	}
 
-	pub(crate) async fn continuously_sync_wallets(
+	fn config(&self) -> Option<&Arc<Config>> {
+		match self {
+			Self::Esplora { config, .. } => Some(config),
+			Self::Electrum { config, .. } => Some(config),
+			Self::BitcoindRpc { config, .. } => Some(config),
+		}
+	}
+
+	pub(crate) async fn continuously_sync_wallets<L: Deref>(
 		&self, mut stop_sync_receiver: tokio::sync::watch::Receiver<()>,
 		channel_manager: Arc<ChannelManager>, chain_monitor: Arc<ChainMonitor>,
-		output_sweeper: Arc<Sweeper>,
-	) {
+		output_sweeper: Arc<Sweeper>, event_queue: Arc<EventQueue<L>>,
+	) where
+		L::Target: LdkLogger,
+	{
 		match self {
 			Self::Esplora { sync_config, logger, .. } => {
 				if let Some(background_sync_config) = sync_config.background_sync_config.as_ref() {
@@ -368,6 +536,7 @@ impl ChainSource {
 						output_sweeper,
 						background_sync_config,
 						Arc::clone(&logger),
+						event_queue,
 					)
 					.await
 				} else {
@@ -388,6 +557,7 @@ impl ChainSource {
 						output_sweeper,
 						background_sync_config,
 						Arc::clone(&logger),
+						event_queue,
 					)
 					.await
 				} else {
@@ -549,12 +719,14 @@ impl ChainSource {
 		}
 	}
 
-	async fn start_tx_based_sync_loop(
+	async fn start_tx_based_sync_loop<L: Deref>(
 		&self, mut stop_sync_receiver: tokio::sync::watch::Receiver<()>,
 		channel_manager: Arc<ChannelManager>, chain_monitor: Arc<ChainMonitor>,
 		output_sweeper: Arc<Sweeper>, background_sync_config: &BackgroundSyncConfig,
-		logger: Arc<Logger>,
-	) {
+		logger: Arc<Logger>, event_queue: Arc<EventQueue<L>>,
+	) where
+		L::Target: LdkLogger,
+	{
 		// Setup syncing intervals
 		let onchain_wallet_sync_interval_secs = background_sync_config
 			.onchain_wallet_sync_interval_secs
@@ -592,7 +764,12 @@ impl ChainSource {
 					return;
 				}
 				_ = onchain_wallet_sync_interval.tick() => {
-					let _ = self.sync_onchain_wallet().await;
+					let _ = self.sync_onchain_wallet(
+						Some(&*event_queue),
+						Some(&channel_manager),
+						Some(&chain_monitor),
+						self.config(),
+					).await;
 				}
 				_ = fee_rate_update_interval.tick() => {
 					let _ = self.update_fee_rate_estimates().await;
@@ -610,7 +787,13 @@ impl ChainSource {
 
 	// Synchronize the onchain wallet via transaction-based protocols (i.e., Esplora, Electrum,
 	// etc.)
-	pub(crate) async fn sync_onchain_wallet(&self) -> Result<(), Error> {
+	pub(crate) async fn sync_onchain_wallet<L: Deref>(
+		&self, event_queue: Option<&EventQueue<L>>, channel_manager: Option<&Arc<ChannelManager>>,
+		chain_monitor: Option<&Arc<ChainMonitor>>, config: Option<&Arc<Config>>,
+	) -> Result<(), Error>
+	where
+		L::Target: LdkLogger,
+	{
 		match self {
 			Self::Esplora {
 				esplora_client,
@@ -646,7 +829,7 @@ impl ChainSource {
 							match $sync_future.await {
 								Ok(res) => match res {
 									Ok(update) => match onchain_wallet.apply_update(update) {
-										Ok(()) => {
+										Ok(wallet_events) => {
 											log_info!(
 												logger,
 												"{} of on-chain wallet finished in {}ms.",
@@ -662,6 +845,65 @@ impl ChainSource {
 												locked_node_metrics.latest_onchain_wallet_sync_timestamp = unix_time_secs_opt;
 												write_node_metrics(&*locked_node_metrics, Arc::clone(&kv_store), Arc::clone(&logger))?;
 											}
+
+											// Process wallet events if event_queue is provided
+											if let Some(eq) = event_queue {
+												process_wallet_events(
+													wallet_events,
+													&onchain_wallet,
+													eq,
+													logger,
+													channel_manager,
+													chain_monitor,
+												)?;
+
+												// Emit SyncCompleted event
+												let synced_height = onchain_wallet.current_best_block().height;
+												eq.add_event(Event::SyncCompleted {
+													sync_type: SyncType::OnchainWallet,
+													synced_block_height: synced_height,
+												})?;
+
+												// Check for balance changes and emit BalanceChanged event if needed
+												if let (Some(cm), Some(chain_mon), Some(cfg)) =
+													(channel_manager, chain_monitor, config)
+												{
+													// Compute current balances
+													let cur_anchor_reserve_sats = crate::total_anchor_channels_reserve_sats(cm, cfg);
+													let (total_onchain_balance_sats, spendable_onchain_balance_sats) =
+														onchain_wallet.get_balances(cur_anchor_reserve_sats).unwrap_or((0, 0));
+
+													let mut total_lightning_balance_sats = 0;
+													for (funding_txo, _channel_id) in chain_mon.list_monitors() {
+														if let Ok(monitor) = chain_mon.get_monitor(funding_txo) {
+															for ldk_balance in monitor.get_claimable_balances() {
+																total_lightning_balance_sats += ldk_balance.claimable_amount_satoshis();
+															}
+														}
+													}
+
+													let balance_details = crate::BalanceDetails {
+														total_onchain_balance_sats,
+														spendable_onchain_balance_sats,
+														total_anchor_channels_reserve_sats: std::cmp::min(
+															cur_anchor_reserve_sats,
+															total_onchain_balance_sats
+														),
+														total_lightning_balance_sats,
+														lightning_balances: Vec::new(), // We don't need full details for change detection
+														pending_balances_from_channel_closures: Vec::new(),
+													};
+
+													check_and_emit_balance_update(
+														&node_metrics,
+														&balance_details,
+														eq,
+														&kv_store,
+														logger,
+													)?;
+												}
+											}
+
 											Ok(())
 										},
 										Err(e) => Err(e),
@@ -766,7 +1008,7 @@ impl ChainSource {
 				let apply_wallet_update =
 					|update_res: Result<BdkUpdate, Error>, now: Instant| match update_res {
 						Ok(update) => match onchain_wallet.apply_update(update) {
-							Ok(()) => {
+							Ok(wallet_events) => {
 								log_info!(
 									logger,
 									"{} of on-chain wallet finished in {}ms.",
@@ -787,6 +1029,65 @@ impl ChainSource {
 										Arc::clone(&logger),
 									)?;
 								}
+
+								// Process wallet events if event_queue is provided
+								if let Some(eq) = event_queue {
+									process_wallet_events(
+										wallet_events,
+										&onchain_wallet,
+										eq,
+										logger,
+										channel_manager,
+										chain_monitor,
+									)?;
+
+									// Emit SyncCompleted event
+									let synced_height = onchain_wallet.current_best_block().height;
+									eq.add_event(Event::SyncCompleted {
+										sync_type: SyncType::OnchainWallet,
+										synced_block_height: synced_height,
+									})?;
+
+									// Check for balance changes and emit BalanceChanged event if needed
+									if let (Some(cm), Some(chain_mon), Some(cfg)) =
+										(channel_manager, chain_monitor, config)
+									{
+										// Compute current balances
+										let cur_anchor_reserve_sats = crate::total_anchor_channels_reserve_sats(cm, cfg);
+										let (total_onchain_balance_sats, spendable_onchain_balance_sats) =
+											onchain_wallet.get_balances(cur_anchor_reserve_sats).unwrap_or((0, 0));
+
+										let mut total_lightning_balance_sats = 0;
+										for (funding_txo, _channel_id) in chain_mon.list_monitors() {
+											if let Ok(monitor) = chain_mon.get_monitor(funding_txo) {
+												for ldk_balance in monitor.get_claimable_balances() {
+													total_lightning_balance_sats += ldk_balance.claimable_amount_satoshis();
+												}
+											}
+										}
+
+										let balance_details = crate::BalanceDetails {
+											total_onchain_balance_sats,
+											spendable_onchain_balance_sats,
+											total_anchor_channels_reserve_sats: std::cmp::min(
+												cur_anchor_reserve_sats,
+												total_onchain_balance_sats
+											),
+											total_lightning_balance_sats,
+											lightning_balances: Vec::new(), // We don't need full details for change detection
+											pending_balances_from_channel_closures: Vec::new(),
+										};
+
+										check_and_emit_balance_update(
+											&node_metrics,
+											&balance_details,
+											eq,
+											&kv_store,
+											logger,
+										)?;
+									}
+								}
+
 								Ok(())
 							},
 							Err(e) => Err(e),
@@ -1608,3 +1909,4 @@ fn periodically_archive_fully_resolved_monitors(
 	}
 	Ok(())
 }
+

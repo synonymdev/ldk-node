@@ -101,6 +101,8 @@ object NoPointer
 
 
 
+
+
 interface Bolt11InvoiceInterface {
     
     fun `amountMilliSatoshis`(): kotlin.ULong?
@@ -1216,6 +1218,51 @@ sealed class Event {
         val `reason`: ClosureReason?,
     ) : Event() {
     }
+    @kotlinx.serialization.Serializable
+    data class OnchainTransactionConfirmed(
+        val `txid`: Txid,
+        val `blockHash`: BlockHash,
+        val `blockHeight`: kotlin.UInt,
+        val `confirmationTime`: kotlin.ULong,
+        val `context`: TransactionContext,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class OnchainTransactionUnconfirmed(
+        val `txid`: Txid,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class OnchainTransactionReceived(
+        val `txid`: Txid,
+        val `amountSats`: kotlin.Long,
+        val `context`: TransactionContext,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class SyncProgress(
+        val `syncType`: SyncType,
+        val `progressPercent`: kotlin.UByte,
+        val `currentBlockHeight`: kotlin.UInt,
+        val `targetBlockHeight`: kotlin.UInt,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class SyncCompleted(
+        val `syncType`: SyncType,
+        val `syncedBlockHeight`: kotlin.UInt,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class BalanceChanged(
+        val `oldSpendableOnchainBalanceSats`: kotlin.ULong,
+        val `newSpendableOnchainBalanceSats`: kotlin.ULong,
+        val `oldTotalOnchainBalanceSats`: kotlin.ULong,
+        val `newTotalOnchainBalanceSats`: kotlin.ULong,
+        val `oldTotalLightningBalanceSats`: kotlin.ULong,
+        val `newTotalLightningBalanceSats`: kotlin.ULong,
+    ) : Event() {
+    }
     
 }
 
@@ -1665,6 +1712,49 @@ sealed class QrPaymentResult {
         val `paymentId`: PaymentId,
     ) : QrPaymentResult() {
     }
+    
+}
+
+
+
+
+
+
+
+@kotlinx.serialization.Serializable
+enum class SyncType {
+    
+    ONCHAIN_WALLET,
+    LIGHTNING_WALLET,
+    FEE_RATE_CACHE;
+    companion object
+}
+
+
+
+
+
+
+@kotlinx.serialization.Serializable
+sealed class TransactionContext {
+    @kotlinx.serialization.Serializable
+    data class ChannelFunding(
+        val `channelId`: ChannelId,
+        val `userChannelId`: UserChannelId,
+        val `counterpartyNodeId`: PublicKey,
+    ) : TransactionContext() {
+    }
+    @kotlinx.serialization.Serializable
+    data class ChannelClosure(
+        val `channelId`: ChannelId,
+        val `userChannelId`: UserChannelId,
+        val `counterpartyNodeId`: PublicKey?,
+    ) : TransactionContext() {
+    }
+    
+    @kotlinx.serialization.Serializable
+    data object RegularWallet : TransactionContext() 
+    
     
 }
 
