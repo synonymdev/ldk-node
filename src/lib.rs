@@ -112,7 +112,7 @@ pub use balance::{BalanceDetails, LightningBalance, PendingSweepBalance};
 pub use error::Error as NodeError;
 use error::Error;
 
-pub use event::Event;
+pub use event::{Event, SyncType, TransactionContext};
 
 pub use io::utils::generate_entropy_mnemonic;
 
@@ -168,6 +168,7 @@ use rand::Rng;
 
 use std::default::Default;
 use std::net::ToSocketAddrs;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -267,6 +268,7 @@ impl Node {
 		let sync_cman = Arc::clone(&self.channel_manager);
 		let sync_cmon = Arc::clone(&self.chain_monitor);
 		let sync_sweeper = Arc::clone(&self.output_sweeper);
+		let sync_event_queue = Arc::clone(&self.event_queue);
 		background_tasks.spawn_on(
 			async move {
 				chain_source
@@ -275,6 +277,7 @@ impl Node {
 						sync_cman,
 						sync_cmon,
 						sync_sweeper,
+						sync_event_queue,
 					)
 					.await;
 			},
@@ -1328,6 +1331,8 @@ impl Node {
 		let sync_cman = Arc::clone(&self.channel_manager);
 		let sync_cmon = Arc::clone(&self.chain_monitor);
 		let sync_sweeper = Arc::clone(&self.output_sweeper);
+		let event_queue = Arc::clone(&self.event_queue);
+		let config = Arc::clone(&self.config);
 		tokio::task::block_in_place(move || {
 			tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(
 				async move {
@@ -1335,16 +1340,26 @@ impl Node {
 						ChainSource::Esplora { .. } => {
 							chain_source.update_fee_rate_estimates().await?;
 							chain_source
-								.sync_lightning_wallet(sync_cman, sync_cmon, sync_sweeper)
+								.sync_lightning_wallet(sync_cman.clone(), sync_cmon.clone(), sync_sweeper)
 								.await?;
-							chain_source.sync_onchain_wallet().await?;
+							chain_source.sync_onchain_wallet(
+								Some(&*event_queue),
+								Some(&sync_cman),
+								Some(&sync_cmon),
+								Some(&config),
+							).await?;
 						},
 						ChainSource::Electrum { .. } => {
 							chain_source.update_fee_rate_estimates().await?;
 							chain_source
-								.sync_lightning_wallet(sync_cman, sync_cmon, sync_sweeper)
+								.sync_lightning_wallet(sync_cman.clone(), sync_cmon.clone(), sync_sweeper)
 								.await?;
-							chain_source.sync_onchain_wallet().await?;
+							chain_source.sync_onchain_wallet(
+								Some(&*event_queue),
+								Some(&sync_cman),
+								Some(&sync_cmon),
+								Some(&config),
+							).await?;
 						},
 						ChainSource::BitcoindRpc { .. } => {
 							chain_source.update_fee_rate_estimates().await?;
@@ -1706,6 +1721,9 @@ pub(crate) struct NodeMetrics {
 	latest_rgs_snapshot_timestamp: Option<u32>,
 	latest_node_announcement_broadcast_timestamp: Option<u64>,
 	latest_channel_monitor_archival_height: Option<u32>,
+	last_known_spendable_onchain_balance_sats: Option<u64>,
+	last_known_total_onchain_balance_sats: Option<u64>,
+	last_known_total_lightning_balance_sats: Option<u64>,
 }
 
 impl Default for NodeMetrics {
@@ -1717,6 +1735,9 @@ impl Default for NodeMetrics {
 			latest_rgs_snapshot_timestamp: None,
 			latest_node_announcement_broadcast_timestamp: None,
 			latest_channel_monitor_archival_height: None,
+			last_known_spendable_onchain_balance_sats: None,
+			last_known_total_onchain_balance_sats: None,
+			last_known_total_lightning_balance_sats: None,
 		}
 	}
 }
@@ -1728,7 +1749,66 @@ impl_writeable_tlv_based!(NodeMetrics, {
 	(6, latest_rgs_snapshot_timestamp, option),
 	(8, latest_node_announcement_broadcast_timestamp, option),
 	(10, latest_channel_monitor_archival_height, option),
+	(12, last_known_spendable_onchain_balance_sats, option),
+	(14, last_known_total_onchain_balance_sats, option),
+	(16, last_known_total_lightning_balance_sats, option),
 });
+
+/// Check if balances have changed and emit BalanceChanged event if so.
+pub(crate) fn check_and_emit_balance_update<L: Deref>(
+	node_metrics: &Arc<RwLock<NodeMetrics>>, balance_details: &BalanceDetails,
+	event_queue: &EventQueue<L>, kv_store: &Arc<DynStore>, logger: &Arc<Logger>,
+) -> Result<(), Error>
+where
+	L::Target: LdkLogger,
+{
+	let mut locked_metrics = node_metrics.write().unwrap();
+
+	let new_spendable_onchain = balance_details.spendable_onchain_balance_sats;
+	let new_total_onchain = balance_details.total_onchain_balance_sats;
+	let new_total_lightning = balance_details.total_lightning_balance_sats;
+
+	let old_spendable_onchain = locked_metrics.last_known_spendable_onchain_balance_sats.unwrap_or(0);
+	let old_total_onchain = locked_metrics.last_known_total_onchain_balance_sats.unwrap_or(0);
+	let old_total_lightning = locked_metrics.last_known_total_lightning_balance_sats.unwrap_or(0);
+
+	// Check if any balance has changed
+	if old_spendable_onchain != new_spendable_onchain
+		|| old_total_onchain != new_total_onchain
+		|| old_total_lightning != new_total_lightning
+	{
+		log_info!(
+			logger,
+			"Balance changed: onchain {} -> {} (spendable), {} -> {} (total), lightning {} -> {}",
+			old_spendable_onchain,
+			new_spendable_onchain,
+			old_total_onchain,
+			new_total_onchain,
+			old_total_lightning,
+			new_total_lightning
+		);
+
+		// Emit balance changed event
+		event_queue.add_event(Event::BalanceChanged {
+			old_spendable_onchain_balance_sats: old_spendable_onchain,
+			new_spendable_onchain_balance_sats: new_spendable_onchain,
+			old_total_onchain_balance_sats: old_total_onchain,
+			new_total_onchain_balance_sats: new_total_onchain,
+			old_total_lightning_balance_sats: old_total_lightning,
+			new_total_lightning_balance_sats: new_total_lightning,
+		})?;
+
+		// Update tracked balances
+		locked_metrics.last_known_spendable_onchain_balance_sats = Some(new_spendable_onchain);
+		locked_metrics.last_known_total_onchain_balance_sats = Some(new_total_onchain);
+		locked_metrics.last_known_total_lightning_balance_sats = Some(new_total_lightning);
+
+		// Persist updated metrics
+		write_node_metrics(&*locked_metrics, Arc::clone(kv_store), Arc::clone(logger))?;
+	}
+
+	Ok(())
+}
 
 pub(crate) fn total_anchor_channels_reserve_sats(
 	channel_manager: &ChannelManager, config: &Config,

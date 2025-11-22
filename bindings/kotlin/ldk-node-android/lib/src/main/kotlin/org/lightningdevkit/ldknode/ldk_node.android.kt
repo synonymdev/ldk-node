@@ -3127,6 +3127,27 @@ object FfiConverterULong: FfiConverter<ULong, Long> {
 }
 
 
+object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
+    }
+}
+
+
 object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
     override fun lift(value: Byte): Boolean {
         return value.toInt() != 0
@@ -8166,6 +8187,39 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 FfiConverterOptionalTypePublicKey.read(buf),
                 FfiConverterOptionalTypeClosureReason.read(buf),
                 )
+            9 -> Event.OnchainTransactionConfirmed(
+                FfiConverterTypeTxid.read(buf),
+                FfiConverterTypeBlockHash.read(buf),
+                FfiConverterUInt.read(buf),
+                FfiConverterULong.read(buf),
+                FfiConverterTypeTransactionContext.read(buf),
+                )
+            10 -> Event.OnchainTransactionUnconfirmed(
+                FfiConverterTypeTxid.read(buf),
+                )
+            11 -> Event.OnchainTransactionReceived(
+                FfiConverterTypeTxid.read(buf),
+                FfiConverterLong.read(buf),
+                FfiConverterTypeTransactionContext.read(buf),
+                )
+            12 -> Event.SyncProgress(
+                FfiConverterTypeSyncType.read(buf),
+                FfiConverterUByte.read(buf),
+                FfiConverterUInt.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            13 -> Event.SyncCompleted(
+                FfiConverterTypeSyncType.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            14 -> Event.BalanceChanged(
+                FfiConverterULong.read(buf),
+                FfiConverterULong.read(buf),
+                FfiConverterULong.read(buf),
+                FfiConverterULong.read(buf),
+                FfiConverterULong.read(buf),
+                FfiConverterULong.read(buf),
+                )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -8257,6 +8311,63 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 + FfiConverterOptionalTypeClosureReason.allocationSize(value.`reason`)
             )
         }
+        is Event.OnchainTransactionConfirmed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+                + FfiConverterTypeBlockHash.allocationSize(value.`blockHash`)
+                + FfiConverterUInt.allocationSize(value.`blockHeight`)
+                + FfiConverterULong.allocationSize(value.`confirmationTime`)
+                + FfiConverterTypeTransactionContext.allocationSize(value.`context`)
+            )
+        }
+        is Event.OnchainTransactionUnconfirmed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+        }
+        is Event.OnchainTransactionReceived -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+                + FfiConverterLong.allocationSize(value.`amountSats`)
+                + FfiConverterTypeTransactionContext.allocationSize(value.`context`)
+            )
+        }
+        is Event.SyncProgress -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeSyncType.allocationSize(value.`syncType`)
+                + FfiConverterUByte.allocationSize(value.`progressPercent`)
+                + FfiConverterUInt.allocationSize(value.`currentBlockHeight`)
+                + FfiConverterUInt.allocationSize(value.`targetBlockHeight`)
+            )
+        }
+        is Event.SyncCompleted -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeSyncType.allocationSize(value.`syncType`)
+                + FfiConverterUInt.allocationSize(value.`syncedBlockHeight`)
+            )
+        }
+        is Event.BalanceChanged -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterULong.allocationSize(value.`oldSpendableOnchainBalanceSats`)
+                + FfiConverterULong.allocationSize(value.`newSpendableOnchainBalanceSats`)
+                + FfiConverterULong.allocationSize(value.`oldTotalOnchainBalanceSats`)
+                + FfiConverterULong.allocationSize(value.`newTotalOnchainBalanceSats`)
+                + FfiConverterULong.allocationSize(value.`oldTotalLightningBalanceSats`)
+                + FfiConverterULong.allocationSize(value.`newTotalLightningBalanceSats`)
+            )
+        }
     }
 
     override fun write(value: Event, buf: ByteBuffer) {
@@ -8329,6 +8440,51 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
                 FfiConverterOptionalTypePublicKey.write(value.`counterpartyNodeId`, buf)
                 FfiConverterOptionalTypeClosureReason.write(value.`reason`, buf)
+                Unit
+            }
+            is Event.OnchainTransactionConfirmed -> {
+                buf.putInt(9)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                FfiConverterTypeBlockHash.write(value.`blockHash`, buf)
+                FfiConverterUInt.write(value.`blockHeight`, buf)
+                FfiConverterULong.write(value.`confirmationTime`, buf)
+                FfiConverterTypeTransactionContext.write(value.`context`, buf)
+                Unit
+            }
+            is Event.OnchainTransactionUnconfirmed -> {
+                buf.putInt(10)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                Unit
+            }
+            is Event.OnchainTransactionReceived -> {
+                buf.putInt(11)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                FfiConverterLong.write(value.`amountSats`, buf)
+                FfiConverterTypeTransactionContext.write(value.`context`, buf)
+                Unit
+            }
+            is Event.SyncProgress -> {
+                buf.putInt(12)
+                FfiConverterTypeSyncType.write(value.`syncType`, buf)
+                FfiConverterUByte.write(value.`progressPercent`, buf)
+                FfiConverterUInt.write(value.`currentBlockHeight`, buf)
+                FfiConverterUInt.write(value.`targetBlockHeight`, buf)
+                Unit
+            }
+            is Event.SyncCompleted -> {
+                buf.putInt(13)
+                FfiConverterTypeSyncType.write(value.`syncType`, buf)
+                FfiConverterUInt.write(value.`syncedBlockHeight`, buf)
+                Unit
+            }
+            is Event.BalanceChanged -> {
+                buf.putInt(14)
+                FfiConverterULong.write(value.`oldSpendableOnchainBalanceSats`, buf)
+                FfiConverterULong.write(value.`newSpendableOnchainBalanceSats`, buf)
+                FfiConverterULong.write(value.`oldTotalOnchainBalanceSats`, buf)
+                FfiConverterULong.write(value.`newTotalOnchainBalanceSats`, buf)
+                FfiConverterULong.write(value.`oldTotalLightningBalanceSats`, buf)
+                FfiConverterULong.write(value.`newTotalLightningBalanceSats`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -9365,6 +9521,97 @@ object FfiConverterTypeQrPaymentResult : FfiConverterRustBuffer<QrPaymentResult>
             is QrPaymentResult.Bolt12 -> {
                 buf.putInt(3)
                 FfiConverterTypePaymentId.write(value.`paymentId`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+object FfiConverterTypeSyncType: FfiConverterRustBuffer<SyncType> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncType.entries[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncType) = 4UL
+
+    override fun write(value: SyncType, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+object FfiConverterTypeTransactionContext : FfiConverterRustBuffer<TransactionContext>{
+    override fun read(buf: ByteBuffer): TransactionContext {
+        return when(buf.getInt()) {
+            1 -> TransactionContext.ChannelFunding(
+                FfiConverterTypeChannelId.read(buf),
+                FfiConverterTypeUserChannelId.read(buf),
+                FfiConverterTypePublicKey.read(buf),
+                )
+            2 -> TransactionContext.ChannelClosure(
+                FfiConverterTypeChannelId.read(buf),
+                FfiConverterTypeUserChannelId.read(buf),
+                FfiConverterOptionalTypePublicKey.read(buf),
+                )
+            3 -> TransactionContext.RegularWallet
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: TransactionContext) = when(value) {
+        is TransactionContext.ChannelFunding -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeChannelId.allocationSize(value.`channelId`)
+                + FfiConverterTypeUserChannelId.allocationSize(value.`userChannelId`)
+                + FfiConverterTypePublicKey.allocationSize(value.`counterpartyNodeId`)
+            )
+        }
+        is TransactionContext.ChannelClosure -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeChannelId.allocationSize(value.`channelId`)
+                + FfiConverterTypeUserChannelId.allocationSize(value.`userChannelId`)
+                + FfiConverterOptionalTypePublicKey.allocationSize(value.`counterpartyNodeId`)
+            )
+        }
+        is TransactionContext.RegularWallet -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: TransactionContext, buf: ByteBuffer) {
+        when(value) {
+            is TransactionContext.ChannelFunding -> {
+                buf.putInt(1)
+                FfiConverterTypeChannelId.write(value.`channelId`, buf)
+                FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
+                FfiConverterTypePublicKey.write(value.`counterpartyNodeId`, buf)
+                Unit
+            }
+            is TransactionContext.ChannelClosure -> {
+                buf.putInt(2)
+                FfiConverterTypeChannelId.write(value.`channelId`, buf)
+                FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
+                FfiConverterOptionalTypePublicKey.write(value.`counterpartyNodeId`, buf)
+                Unit
+            }
+            is TransactionContext.RegularWallet -> {
+                buf.putInt(3)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -11060,6 +11307,7 @@ typealias FfiConverterTypeUntrustedString = FfiConverterString
 
 
 typealias FfiConverterTypeUserChannelId = FfiConverterString
+
 
 
 

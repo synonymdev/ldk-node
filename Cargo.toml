@@ -64,7 +64,7 @@ lightning-liquidity = { version = "0.1.0", features = ["std"] }
 bdk_chain = { version = "0.23.0", default-features = false, features = ["std"] }
 bdk_esplora = { version = "0.22.0", default-features = false, features = ["async-https-rustls", "tokio"]}
 bdk_electrum = { version = "0.23.0", default-features = false, features = ["use-rustls"]}
-bdk_wallet = { version = "2.0.0", default-features = false, features = ["std", "keys-bip39"]}
+bdk_wallet = { version = "2.2.0", default-features = false, features = ["std", "keys-bip39"]}
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rustls = { version = "0.23", default-features = false }
