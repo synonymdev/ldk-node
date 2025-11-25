@@ -411,9 +411,15 @@ where
 				);
 				// We don't emit an event for chain tip changes as this is too noisy
 			},
-			BdkWalletEvent::TxReplaced { txid, .. } => {
-				log_info!(logger, "Onchain transaction {} was replaced", txid);
-				let event = Event::OnchainTransactionReplaced { txid };
+			BdkWalletEvent::TxReplaced { txid, conflicts, .. } => {
+				let conflict_txids: Vec<Txid> = conflicts.iter().map(|(_, conflict_txid)| *conflict_txid).collect();
+				log_info!(
+					logger,
+					"Onchain transaction {} was replaced by {} transaction(s)",
+					txid,
+					conflict_txids.len()
+				);
+				let event = Event::OnchainTransactionReplaced { txid, conflicts: conflict_txids };
 				event_queue.add_event(event).map_err(|e| {
 					log_error!(logger, "Failed to push onchain event to queue: {}", e);
 					e

@@ -1278,6 +1278,7 @@ sealed class Event {
     @kotlinx.serialization.Serializable
     data class OnchainTransactionReplaced(
         val `txid`: Txid,
+        val `conflicts`: List<Txid>,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
@@ -1798,6 +1799,8 @@ sealed class VssHeaderProviderException(message: String): kotlin.Exception(messa
     class InternalException(message: String) : VssHeaderProviderException(message)
     
 }
+
+
 
 
 

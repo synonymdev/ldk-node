@@ -8336,6 +8336,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 )
             11 -> Event.OnchainTransactionReplaced(
                 FfiConverterTypeTxid.read(buf),
+                FfiConverterSequenceTypeTxid.read(buf),
                 )
             12 -> Event.OnchainTransactionReorged(
                 FfiConverterTypeTxid.read(buf),
@@ -8476,6 +8477,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
             (
                 4UL
                 + FfiConverterTypeTxid.allocationSize(value.`txid`)
+                + FfiConverterSequenceTypeTxid.allocationSize(value.`conflicts`)
             )
         }
         is Event.OnchainTransactionReorged -> {
@@ -8614,6 +8616,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
             is Event.OnchainTransactionReplaced -> {
                 buf.putInt(11)
                 FfiConverterTypeTxid.write(value.`txid`, buf)
+                FfiConverterSequenceTypeTxid.write(value.`conflicts`, buf)
                 Unit
             }
             is Event.OnchainTransactionReorged -> {
@@ -11358,6 +11361,31 @@ object FfiConverterSequenceTypeSocketAddress: FfiConverterRustBuffer<List<Socket
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeSocketAddress.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypeTxid: FfiConverterRustBuffer<List<Txid>> {
+    override fun read(buf: ByteBuffer): List<Txid> {
+        val len = buf.getInt()
+        return List<Txid>(len) {
+            FfiConverterTypeTxid.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<Txid>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeTxid.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<Txid>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeTxid.write(it, buf)
         }
     }
 }
