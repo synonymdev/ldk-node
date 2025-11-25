@@ -241,6 +241,63 @@ pub(crate) enum ChainSource {
 
 use crate::event::TransactionDetails;
 
+/// Check for evicted transactions by comparing unconfirmed txids before and after sync.
+/// Returns a list of txids that were unconfirmed before but are no longer unconfirmed
+/// and are not confirmed in the wallet.
+fn check_evicted_transactions<B: Deref, E: Deref, L: Deref>(
+	prev_unconfirmed_txids: Vec<Txid>, wallet: &crate::wallet::Wallet<B, E, L>, logger: &Logger,
+) -> Vec<Txid>
+where
+	B::Target: BroadcasterInterface,
+	E::Target: FeeEstimator,
+	L::Target: LdkLogger,
+{
+	let current_unconfirmed_txids: std::collections::HashSet<Txid> =
+		wallet.get_unconfirmed_txids().into_iter().collect();
+
+	let mut evicted_txids = Vec::new();
+	for txid in prev_unconfirmed_txids {
+		// If transaction is still unconfirmed, skip it
+		if current_unconfirmed_txids.contains(&txid) {
+			continue;
+		}
+
+		// Check if transaction is confirmed in wallet
+		// If it's confirmed, it wasn't evicted - it was included in a block
+		if wallet.is_tx_confirmed(&txid) {
+			continue;
+		}
+
+		// Transaction is not unconfirmed and not confirmed in wallet
+		// This means it was evicted from the mempool
+		// (We don't need to check via chain source since the wallet state after sync
+		//  should be up-to-date - if it were confirmed, it would be in the wallet)
+		log_info!(logger, "Transaction {} was evicted from the mempool", txid);
+		evicted_txids.push(txid);
+	}
+
+	evicted_txids
+}
+
+/// Check for evicted transactions and emit events for them.
+fn check_and_emit_evicted_transactions<B: Deref, E: Deref, L: Deref, L2: Deref>(
+	prev_unconfirmed_txids: Vec<Txid>, wallet: &crate::wallet::Wallet<B, E, L>,
+	event_queue: &EventQueue<L2>, logger: &Logger,
+) where
+	B::Target: BroadcasterInterface,
+	E::Target: FeeEstimator,
+	L::Target: LdkLogger,
+	L2::Target: LdkLogger,
+{
+	let evicted_txids = check_evicted_transactions(prev_unconfirmed_txids, wallet, logger);
+
+	for txid in evicted_txids {
+		if let Err(e) = event_queue.add_event(Event::OnchainTransactionEvicted { txid }) {
+			log_error!(logger, "Failed to push evicted transaction event to queue: {}", e);
+		}
+	}
+}
+
 /// Get transaction details including inputs and outputs.
 fn get_transaction_details<B: Deref, E: Deref, L: Deref>(
 	txid: &bitcoin::Txid, wallet: &crate::wallet::Wallet<B, E, L>,
@@ -800,6 +857,9 @@ impl ChainSource {
 				}
 
 				let res = {
+					// Track unconfirmed transactions before sync to detect evictions
+					let prev_unconfirmed_txids = onchain_wallet.get_unconfirmed_txids();
+
 					// If this is our first sync, do a full scan with the configured gap limit.
 					// Otherwise just do an incremental sync.
 					let incremental_sync =
@@ -838,6 +898,14 @@ impl ChainSource {
 													channel_manager,
 													chain_monitor,
 												)?;
+
+												// Check for evicted transactions
+												check_and_emit_evicted_transactions(
+													prev_unconfirmed_txids,
+													&onchain_wallet,
+													eq,
+													logger,
+												);
 
 												// Emit SyncCompleted event
 												let synced_height = onchain_wallet.current_best_block().height;
@@ -982,13 +1050,18 @@ impl ChainSource {
 					})?;
 				}
 
+				// Track unconfirmed transactions before sync to detect evictions
+				let prev_unconfirmed_txids = onchain_wallet.get_unconfirmed_txids();
+
 				// If this is our first sync, do a full scan with the configured gap limit.
 				// Otherwise just do an incremental sync.
 				let incremental_sync =
 					node_metrics.read().unwrap().latest_onchain_wallet_sync_timestamp.is_some();
 
-				let apply_wallet_update =
-					|update_res: Result<BdkUpdate, Error>, now: Instant| match update_res {
+				let apply_wallet_update = |update_res: Result<BdkUpdate, Error>,
+				                           now: Instant|
+				 -> Result<(), Error> {
+					match update_res {
 						Ok(update) => match onchain_wallet.apply_update(update) {
 							Ok(wallet_events) => {
 								log_info!(
@@ -1022,6 +1095,14 @@ impl ChainSource {
 										channel_manager,
 										chain_monitor,
 									)?;
+
+									// Check for evicted transactions
+									check_and_emit_evicted_transactions(
+										prev_unconfirmed_txids,
+										&onchain_wallet,
+										eq,
+										logger,
+									);
 
 									// Emit SyncCompleted event
 									let synced_height = onchain_wallet.current_best_block().height;
@@ -1084,7 +1165,8 @@ impl ChainSource {
 							Err(e) => Err(e),
 						},
 						Err(e) => Err(e),
-					};
+					}
+				};
 
 				let cached_txs = onchain_wallet.get_cached_txs();
 

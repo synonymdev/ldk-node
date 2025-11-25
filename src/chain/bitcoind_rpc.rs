@@ -276,7 +276,7 @@ impl BitcoindRpcClient {
 		let mempool_entries_cache = self.mempool_entries_cache.lock().await;
 		let evicted_txids = unconfirmed_txids
 			.into_iter()
-			.filter(|txid| mempool_entries_cache.contains_key(txid))
+			.filter(|txid| !mempool_entries_cache.contains_key(txid))
 			.map(|txid| (txid, latest_mempool_timestamp))
 			.collect();
 		Ok(evicted_txids)

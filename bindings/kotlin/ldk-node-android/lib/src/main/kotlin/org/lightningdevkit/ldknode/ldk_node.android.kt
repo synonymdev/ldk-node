@@ -7686,6 +7686,93 @@ object FfiConverterTypeSpendableUtxo: FfiConverterRustBuffer<SpendableUtxo> {
 
 
 
+object FfiConverterTypeTransactionDetails: FfiConverterRustBuffer<TransactionDetails> {
+    override fun read(buf: ByteBuffer): TransactionDetails {
+        return TransactionDetails(
+            FfiConverterLong.read(buf),
+            FfiConverterSequenceTypeTxInput.read(buf),
+            FfiConverterSequenceTypeTxOutput.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TransactionDetails) = (
+            FfiConverterLong.allocationSize(value.`amountSats`) +
+            FfiConverterSequenceTypeTxInput.allocationSize(value.`inputs`) +
+            FfiConverterSequenceTypeTxOutput.allocationSize(value.`outputs`)
+    )
+
+    override fun write(value: TransactionDetails, buf: ByteBuffer) {
+        FfiConverterLong.write(value.`amountSats`, buf)
+        FfiConverterSequenceTypeTxInput.write(value.`inputs`, buf)
+        FfiConverterSequenceTypeTxOutput.write(value.`outputs`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypeTxInput: FfiConverterRustBuffer<TxInput> {
+    override fun read(buf: ByteBuffer): TxInput {
+        return TxInput(
+            FfiConverterTypeTxid.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TxInput) = (
+            FfiConverterTypeTxid.allocationSize(value.`txid`) +
+            FfiConverterUInt.allocationSize(value.`vout`) +
+            FfiConverterString.allocationSize(value.`scriptsig`) +
+            FfiConverterSequenceString.allocationSize(value.`witness`) +
+            FfiConverterUInt.allocationSize(value.`sequence`)
+    )
+
+    override fun write(value: TxInput, buf: ByteBuffer) {
+        FfiConverterTypeTxid.write(value.`txid`, buf)
+        FfiConverterUInt.write(value.`vout`, buf)
+        FfiConverterString.write(value.`scriptsig`, buf)
+        FfiConverterSequenceString.write(value.`witness`, buf)
+        FfiConverterUInt.write(value.`sequence`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypeTxOutput: FfiConverterRustBuffer<TxOutput> {
+    override fun read(buf: ByteBuffer): TxOutput {
+        return TxOutput(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TxOutput) = (
+            FfiConverterString.allocationSize(value.`scriptpubkey`) +
+            FfiConverterOptionalString.allocationSize(value.`scriptpubkeyType`) +
+            FfiConverterOptionalString.allocationSize(value.`scriptpubkeyAddress`) +
+            FfiConverterLong.allocationSize(value.`value`) +
+            FfiConverterUInt.allocationSize(value.`n`)
+    )
+
+    override fun write(value: TxOutput, buf: ByteBuffer) {
+        FfiConverterString.write(value.`scriptpubkey`, buf)
+        FfiConverterOptionalString.write(value.`scriptpubkeyType`, buf)
+        FfiConverterOptionalString.write(value.`scriptpubkeyAddress`, buf)
+        FfiConverterLong.write(value.`value`, buf)
+        FfiConverterUInt.write(value.`n`, buf)
+    }
+}
+
+
+
+
 
 object FfiConverterTypeBalanceSource: FfiConverterRustBuffer<BalanceSource> {
     override fun read(buf: ByteBuffer) = try {
@@ -8192,27 +8279,32 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 FfiConverterTypeBlockHash.read(buf),
                 FfiConverterUInt.read(buf),
                 FfiConverterULong.read(buf),
-                FfiConverterTypeTransactionContext.read(buf),
+                FfiConverterTypeTransactionDetails.read(buf),
                 )
-            10 -> Event.OnchainTransactionUnconfirmed(
+            10 -> Event.OnchainTransactionReceived(
+                FfiConverterTypeTxid.read(buf),
+                FfiConverterTypeTransactionDetails.read(buf),
+                )
+            11 -> Event.OnchainTransactionReplaced(
                 FfiConverterTypeTxid.read(buf),
                 )
-            11 -> Event.OnchainTransactionReceived(
+            12 -> Event.OnchainTransactionReorged(
                 FfiConverterTypeTxid.read(buf),
-                FfiConverterLong.read(buf),
-                FfiConverterTypeTransactionContext.read(buf),
                 )
-            12 -> Event.SyncProgress(
+            13 -> Event.OnchainTransactionEvicted(
+                FfiConverterTypeTxid.read(buf),
+                )
+            14 -> Event.SyncProgress(
                 FfiConverterTypeSyncType.read(buf),
                 FfiConverterUByte.read(buf),
                 FfiConverterUInt.read(buf),
                 FfiConverterUInt.read(buf),
                 )
-            13 -> Event.SyncCompleted(
+            15 -> Event.SyncCompleted(
                 FfiConverterTypeSyncType.read(buf),
                 FfiConverterUInt.read(buf),
                 )
-            14 -> Event.BalanceChanged(
+            16 -> Event.BalanceChanged(
                 FfiConverterULong.read(buf),
                 FfiConverterULong.read(buf),
                 FfiConverterULong.read(buf),
@@ -8319,14 +8411,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 + FfiConverterTypeBlockHash.allocationSize(value.`blockHash`)
                 + FfiConverterUInt.allocationSize(value.`blockHeight`)
                 + FfiConverterULong.allocationSize(value.`confirmationTime`)
-                + FfiConverterTypeTransactionContext.allocationSize(value.`context`)
-            )
-        }
-        is Event.OnchainTransactionUnconfirmed -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+                + FfiConverterTypeTransactionDetails.allocationSize(value.`details`)
             )
         }
         is Event.OnchainTransactionReceived -> {
@@ -8334,8 +8419,28 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
             (
                 4UL
                 + FfiConverterTypeTxid.allocationSize(value.`txid`)
-                + FfiConverterLong.allocationSize(value.`amountSats`)
-                + FfiConverterTypeTransactionContext.allocationSize(value.`context`)
+                + FfiConverterTypeTransactionDetails.allocationSize(value.`details`)
+            )
+        }
+        is Event.OnchainTransactionReplaced -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+        }
+        is Event.OnchainTransactionReorged -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+        }
+        is Event.OnchainTransactionEvicted -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
             )
         }
         is Event.SyncProgress -> {
@@ -8448,23 +8553,32 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 FfiConverterTypeBlockHash.write(value.`blockHash`, buf)
                 FfiConverterUInt.write(value.`blockHeight`, buf)
                 FfiConverterULong.write(value.`confirmationTime`, buf)
-                FfiConverterTypeTransactionContext.write(value.`context`, buf)
-                Unit
-            }
-            is Event.OnchainTransactionUnconfirmed -> {
-                buf.putInt(10)
-                FfiConverterTypeTxid.write(value.`txid`, buf)
+                FfiConverterTypeTransactionDetails.write(value.`details`, buf)
                 Unit
             }
             is Event.OnchainTransactionReceived -> {
+                buf.putInt(10)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                FfiConverterTypeTransactionDetails.write(value.`details`, buf)
+                Unit
+            }
+            is Event.OnchainTransactionReplaced -> {
                 buf.putInt(11)
                 FfiConverterTypeTxid.write(value.`txid`, buf)
-                FfiConverterLong.write(value.`amountSats`, buf)
-                FfiConverterTypeTransactionContext.write(value.`context`, buf)
+                Unit
+            }
+            is Event.OnchainTransactionReorged -> {
+                buf.putInt(12)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                Unit
+            }
+            is Event.OnchainTransactionEvicted -> {
+                buf.putInt(13)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
                 Unit
             }
             is Event.SyncProgress -> {
-                buf.putInt(12)
+                buf.putInt(14)
                 FfiConverterTypeSyncType.write(value.`syncType`, buf)
                 FfiConverterUByte.write(value.`progressPercent`, buf)
                 FfiConverterUInt.write(value.`currentBlockHeight`, buf)
@@ -8472,13 +8586,13 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
             is Event.SyncCompleted -> {
-                buf.putInt(13)
+                buf.putInt(15)
                 FfiConverterTypeSyncType.write(value.`syncType`, buf)
                 FfiConverterUInt.write(value.`syncedBlockHeight`, buf)
                 Unit
             }
             is Event.BalanceChanged -> {
-                buf.putInt(14)
+                buf.putInt(16)
                 FfiConverterULong.write(value.`oldSpendableOnchainBalanceSats`, buf)
                 FfiConverterULong.write(value.`newSpendableOnchainBalanceSats`, buf)
                 FfiConverterULong.write(value.`oldTotalOnchainBalanceSats`, buf)
@@ -9542,79 +9656,6 @@ object FfiConverterTypeSyncType: FfiConverterRustBuffer<SyncType> {
 
     override fun write(value: SyncType, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-object FfiConverterTypeTransactionContext : FfiConverterRustBuffer<TransactionContext>{
-    override fun read(buf: ByteBuffer): TransactionContext {
-        return when(buf.getInt()) {
-            1 -> TransactionContext.ChannelFunding(
-                FfiConverterTypeChannelId.read(buf),
-                FfiConverterTypeUserChannelId.read(buf),
-                FfiConverterTypePublicKey.read(buf),
-                )
-            2 -> TransactionContext.ChannelClosure(
-                FfiConverterTypeChannelId.read(buf),
-                FfiConverterTypeUserChannelId.read(buf),
-                FfiConverterOptionalTypePublicKey.read(buf),
-                )
-            3 -> TransactionContext.RegularWallet
-            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
-        }
-    }
-
-    override fun allocationSize(value: TransactionContext) = when(value) {
-        is TransactionContext.ChannelFunding -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterTypeChannelId.allocationSize(value.`channelId`)
-                + FfiConverterTypeUserChannelId.allocationSize(value.`userChannelId`)
-                + FfiConverterTypePublicKey.allocationSize(value.`counterpartyNodeId`)
-            )
-        }
-        is TransactionContext.ChannelClosure -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterTypeChannelId.allocationSize(value.`channelId`)
-                + FfiConverterTypeUserChannelId.allocationSize(value.`userChannelId`)
-                + FfiConverterOptionalTypePublicKey.allocationSize(value.`counterpartyNodeId`)
-            )
-        }
-        is TransactionContext.RegularWallet -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-            )
-        }
-    }
-
-    override fun write(value: TransactionContext, buf: ByteBuffer) {
-        when(value) {
-            is TransactionContext.ChannelFunding -> {
-                buf.putInt(1)
-                FfiConverterTypeChannelId.write(value.`channelId`, buf)
-                FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
-                FfiConverterTypePublicKey.write(value.`counterpartyNodeId`, buf)
-                Unit
-            }
-            is TransactionContext.ChannelClosure -> {
-                buf.putInt(2)
-                FfiConverterTypeChannelId.write(value.`channelId`, buf)
-                FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
-                FfiConverterOptionalTypePublicKey.write(value.`counterpartyNodeId`, buf)
-                Unit
-            }
-            is TransactionContext.RegularWallet -> {
-                buf.putInt(3)
-                Unit
-            }
-        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 }
 
@@ -10846,6 +10887,31 @@ object FfiConverterSequenceULong: FfiConverterRustBuffer<List<kotlin.ULong>> {
 
 
 
+object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterString.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
 object FfiConverterSequenceTypeChannelDetails: FfiConverterRustBuffer<List<ChannelDetails>> {
     override fun read(buf: ByteBuffer): List<ChannelDetails> {
         val len = buf.getInt()
@@ -10989,6 +11055,56 @@ object FfiConverterSequenceTypeSpendableUtxo: FfiConverterRustBuffer<List<Spenda
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeSpendableUtxo.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypeTxInput: FfiConverterRustBuffer<List<TxInput>> {
+    override fun read(buf: ByteBuffer): List<TxInput> {
+        val len = buf.getInt()
+        return List<TxInput>(len) {
+            FfiConverterTypeTxInput.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<TxInput>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeTxInput.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<TxInput>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeTxInput.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypeTxOutput: FfiConverterRustBuffer<List<TxOutput>> {
+    override fun read(buf: ByteBuffer): List<TxOutput> {
+        val len = buf.getInt()
+        return List<TxOutput>(len) {
+            FfiConverterTypeTxOutput.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<TxOutput>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeTxOutput.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<TxOutput>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeTxOutput.write(it, buf)
         }
     }
 }

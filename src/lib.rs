@@ -1376,11 +1376,7 @@ impl Node {
 						ChainSource::BitcoindRpc { .. } => {
 							chain_source.update_fee_rate_estimates().await?;
 							chain_source
-								.poll_and_update_listeners(
-									sync_cman,
-									sync_cmon,
-									sync_sweeper,
-								)
+								.poll_and_update_listeners(sync_cman, sync_cmon, sync_sweeper)
 								.await?;
 						},
 					}
