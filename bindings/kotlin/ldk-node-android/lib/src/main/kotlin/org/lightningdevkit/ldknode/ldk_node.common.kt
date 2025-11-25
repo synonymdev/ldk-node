@@ -364,6 +364,11 @@ interface NodeInterface {
     @Throws(NodeException::class)
     fun `forceCloseChannel`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `reason`: kotlin.String?)
     
+    @Throws(NodeException::class)
+    fun `getAddressBalance`(`addressStr`: kotlin.String): kotlin.ULong
+    
+    fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
+    
     fun `listBalances`(): BalanceDetails
     
     fun `listChannels`(): List<ChannelDetails>
@@ -948,6 +953,43 @@ data class SpendableUtxo (
 
 
 
+@kotlinx.serialization.Serializable
+data class TransactionDetails (
+    val `amountSats`: kotlin.Long, 
+    val `inputs`: List<TxInput>, 
+    val `outputs`: List<TxOutput>
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class TxInput (
+    val `txid`: Txid, 
+    val `vout`: kotlin.UInt, 
+    val `scriptsig`: kotlin.String, 
+    val `witness`: List<kotlin.String>, 
+    val `sequence`: kotlin.UInt
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class TxOutput (
+    val `scriptpubkey`: kotlin.String, 
+    val `scriptpubkeyType`: kotlin.String?, 
+    val `scriptpubkeyAddress`: kotlin.String?, 
+    val `value`: kotlin.Long, 
+    val `n`: kotlin.UInt
+) {
+    companion object
+}
+
+
+
 
 
 @kotlinx.serialization.Serializable
@@ -1224,19 +1266,28 @@ sealed class Event {
         val `blockHash`: BlockHash,
         val `blockHeight`: kotlin.UInt,
         val `confirmationTime`: kotlin.ULong,
-        val `context`: TransactionContext,
-    ) : Event() {
-    }
-    @kotlinx.serialization.Serializable
-    data class OnchainTransactionUnconfirmed(
-        val `txid`: Txid,
+        val `details`: TransactionDetails,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
     data class OnchainTransactionReceived(
         val `txid`: Txid,
-        val `amountSats`: kotlin.Long,
-        val `context`: TransactionContext,
+        val `details`: TransactionDetails,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class OnchainTransactionReplaced(
+        val `txid`: Txid,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class OnchainTransactionReorged(
+        val `txid`: Txid,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class OnchainTransactionEvicted(
+        val `txid`: Txid,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
@@ -1735,34 +1786,6 @@ enum class SyncType {
 
 
 
-@kotlinx.serialization.Serializable
-sealed class TransactionContext {
-    @kotlinx.serialization.Serializable
-    data class ChannelFunding(
-        val `channelId`: ChannelId,
-        val `userChannelId`: UserChannelId,
-        val `counterpartyNodeId`: PublicKey,
-    ) : TransactionContext() {
-    }
-    @kotlinx.serialization.Serializable
-    data class ChannelClosure(
-        val `channelId`: ChannelId,
-        val `userChannelId`: UserChannelId,
-        val `counterpartyNodeId`: PublicKey?,
-    ) : TransactionContext() {
-    }
-    
-    @kotlinx.serialization.Serializable
-    data object RegularWallet : TransactionContext() 
-    
-    
-}
-
-
-
-
-
-
 
 sealed class VssHeaderProviderException(message: String): kotlin.Exception(message) {
     
@@ -1775,6 +1798,14 @@ sealed class VssHeaderProviderException(message: String): kotlin.Exception(messa
     class InternalException(message: String) : VssHeaderProviderException(message)
     
 }
+
+
+
+
+
+
+
+
 
 
 

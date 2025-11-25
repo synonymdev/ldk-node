@@ -6,21 +6,33 @@
     - `OnchainTransactionReceived`: Emitted when a new unconfirmed transaction is
       first detected in the mempool (instant notification for incoming payments!)
     - `OnchainTransactionConfirmed`: Emitted when a transaction receives confirmations
-    - `OnchainTransactionUnconfirmed`: Emitted when a previously confirmed transaction
-      becomes unconfirmed (blockchain reorg)
+    - `OnchainTransactionReplaced`: Emitted when a transaction is replaced (via RBF or different transaction using a commmon input)
+    - `OnchainTransactionReorged`: Emitted when a previously confirmed transaction
+      becomes unconfirmed due to a blockchain reorg
+    - `OnchainTransactionEvicted`: Emitted when a transaction is evicted from the mempool
   - **Sync Completion Event** (fully implemented):
     - `SyncCompleted`: Emitted when onchain wallet sync finishes successfully
   - **Balance Change Event** (fully implemented):
     - `BalanceChanged`: Emitted when onchain or Lightning balances change, allowing
       applications to update balance displays immediately without polling
-- Added `TransactionContext` enum to onchain transaction events, which provides
-  information about whether a transaction is related to channel funding, channel
-  closure, or regular wallet activity. Applications can cross-reference with
-  `ChannelPending` and `ChannelClosed` events to identify channel-related
-  transactions.
+- Added `TransactionDetails`, `TxInput`, and `TxOutput` structs to provide comprehensive
+  transaction information in onchain events, including inputs and outputs. This enables
+  applications to analyze transaction data themselves to detect channel funding, closures,
+  and other transaction types.
+- Added `Node::get_transaction_details()` method to retrieve transaction details for any
+  transaction ID that exists in the wallet, returning `None` if the transaction is not found.
+- Added `Node::get_address_balance()` method to retrieve the current balance (in satoshis) for
+  any Bitcoin address. This queries the chain source (Esplora or Electrum) to get the balance.
+  Throws `InvalidAddress` if the address string cannot be parsed or doesn't match the node's
+  network. Returns 0 if the balance cannot be queried (e.g., chain source unavailable). Note: This
+  method is not available for BitcoindRpc chain source.
 - Added `SyncType` enum to distinguish between onchain wallet sync, Lightning
   wallet sync, and fee rate cache updates.
 - Balance tracking is now persisted in `NodeMetrics` to detect changes across restarts.
+
+## Bug Fixes and Improvements
+- Fixed bug in `BitcoindRpc` eviction detection where transactions were incorrectly
+  filtered (using `contains_key` instead of `!contains_key`).
 
 # 0.6.2 - Aug. 14, 2025
 This patch release fixes a panic that could have been hit when syncing to a

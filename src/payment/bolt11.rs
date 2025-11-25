@@ -105,8 +105,7 @@ impl Bolt11Payment {
 		connection_manager: Arc<ConnectionManager<Arc<Logger>>>,
 		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
 		payment_store: Arc<PaymentStore>, peer_store: Arc<PeerStore<Arc<Logger>>>,
-		config: Arc<Config>, logger: Arc<Logger>,
-		router: Arc<Router>,
+		config: Arc<Config>, logger: Arc<Logger>, router: Arc<Router>,
 	) -> Self {
 		Self {
 			runtime,
@@ -181,7 +180,9 @@ impl Bolt11Payment {
 
 				// Extract description from the invoice
 				let description = match invoice.description() {
-					lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => Some(desc.to_string()),
+					lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => {
+						Some(desc.to_string())
+					},
 					lightning_invoice::Bolt11InvoiceDescriptionRef::Hash(hash) => {
 						Some(crate::hex_utils::to_string(hash.0.as_ref()))
 					},
@@ -214,12 +215,14 @@ impl Bolt11Payment {
 					_ => {
 						// Extract description from the invoice
 						let description = match invoice.description() {
-							lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => Some(desc.to_string()),
+							lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => {
+								Some(desc.to_string())
+							},
 							lightning_invoice::Bolt11InvoiceDescriptionRef::Hash(hash) => {
 								Some(crate::hex_utils::to_string(hash.0.as_ref()))
 							},
 						};
-						
+
 						let kind = PaymentKind::Bolt11 {
 							hash: payment_hash,
 							preimage: None,
@@ -336,7 +339,9 @@ impl Bolt11Payment {
 
 				// Extract description from the invoice
 				let description = match invoice.description() {
-					lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => Some(desc.to_string()),
+					lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => {
+						Some(desc.to_string())
+					},
 					lightning_invoice::Bolt11InvoiceDescriptionRef::Hash(hash) => {
 						Some(crate::hex_utils::to_string(hash.0.as_ref()))
 					},
@@ -370,12 +375,14 @@ impl Bolt11Payment {
 					_ => {
 						// Extract description from the invoice
 						let description = match invoice.description() {
-							lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => Some(desc.to_string()),
+							lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => {
+								Some(desc.to_string())
+							},
 							lightning_invoice::Bolt11InvoiceDescriptionRef::Hash(hash) => {
 								Some(crate::hex_utils::to_string(hash.0.as_ref()))
 							},
 						};
-						
+
 						let kind = PaymentKind::Bolt11 {
 							hash: payment_hash,
 							preimage: None,
@@ -612,7 +619,7 @@ impl Bolt11Payment {
 		} else {
 			None
 		};
-		
+
 		// Extract description from the invoice
 		let description = match invoice.description() {
 			lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => Some(desc.to_string()),
@@ -620,7 +627,7 @@ impl Bolt11Payment {
 				Some(crate::hex_utils::to_string(hash.0.as_ref()))
 			},
 		};
-		
+
 		let kind = PaymentKind::Bolt11 {
 			hash: payment_hash,
 			preimage,
@@ -759,7 +766,7 @@ impl Bolt11Payment {
 		let id = PaymentId(payment_hash.0);
 		let preimage =
 			self.channel_manager.get_payment_preimage(payment_hash, payment_secret.clone()).ok();
-		
+
 		// Extract description from the invoice
 		let description = match invoice.description() {
 			lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => Some(desc.to_string()),
@@ -767,7 +774,7 @@ impl Bolt11Payment {
 				Some(crate::hex_utils::to_string(hash.0.as_ref()))
 			},
 		};
-		
+
 		let kind = PaymentKind::Bolt11Jit {
 			hash: payment_hash,
 			preimage,
@@ -893,7 +900,7 @@ impl Bolt11Payment {
 			return Err(Error::NotRunning);
 		}
 
-		let (_payment_hash, _recipient_onion, route_params) = 
+		let (_payment_hash, _recipient_onion, route_params) =
 			bolt11_payment::payment_parameters_from_invoice(&invoice).map_err(|_| {
 				log_error!(self.logger, "Failed to estimate routing fees due to invalid invoice.");
 				Error::InvalidInvoice
@@ -903,19 +910,19 @@ impl Bolt11Payment {
 		let first_hops = self.channel_manager.list_usable_channels();
 		let inflight_htlcs = self.channel_manager.compute_inflight_htlcs();
 
-		let route = router.find_route(
-			&self.channel_manager.get_our_node_id(),
-			&route_params,
-			Some(&first_hops.iter().collect::<Vec<_>>()),
-			inflight_htlcs,
-		).map_err(|e| {
-			log_error!(self.logger, "Failed to find route for fee estimation: {:?}", e);
-			Error::RouteNotFound
-		})?;
+		let route = router
+			.find_route(
+				&self.channel_manager.get_our_node_id(),
+				&route_params,
+				Some(&first_hops.iter().collect::<Vec<_>>()),
+				inflight_htlcs,
+			)
+			.map_err(|e| {
+				log_error!(self.logger, "Failed to find route for fee estimation: {:?}", e);
+				Error::RouteNotFound
+			})?;
 
-		let total_fees = route.paths.iter()
-			.map(|path| path.fee_msat())
-			.sum::<u64>();
+		let total_fees = route.paths.iter().map(|path| path.fee_msat()).sum::<u64>();
 
 		Ok(total_fees)
 	}
@@ -960,19 +967,19 @@ impl Bolt11Payment {
 		let first_hops = self.channel_manager.list_usable_channels();
 		let inflight_htlcs = self.channel_manager.compute_inflight_htlcs();
 
-		let route = router.find_route(
-			&self.channel_manager.get_our_node_id(),
-			&route_params,
-			Some(&first_hops.iter().collect::<Vec<_>>()),
-			inflight_htlcs,
-		).map_err(|e| {
-			log_error!(self.logger, "Failed to find route for fee estimation: {:?}", e);
-			Error::RouteNotFound
-		})?;
+		let route = router
+			.find_route(
+				&self.channel_manager.get_our_node_id(),
+				&route_params,
+				Some(&first_hops.iter().collect::<Vec<_>>()),
+				inflight_htlcs,
+			)
+			.map_err(|e| {
+				log_error!(self.logger, "Failed to find route for fee estimation: {:?}", e);
+				Error::RouteNotFound
+			})?;
 
-		let total_fees = route.paths.iter()
-			.map(|path| path.fee_msat())
-			.sum::<u64>();
+		let total_fees = route.paths.iter().map(|path| path.fee_msat()).sum::<u64>();
 
 		Ok(total_fees)
 	}

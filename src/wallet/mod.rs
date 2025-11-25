@@ -8,6 +8,7 @@
 use persist::KVStoreWalletPersister;
 
 use crate::config::Config;
+use crate::event::{TxInput, TxOutput};
 use crate::logger::{log_debug, log_error, log_info, log_trace, LdkLogger};
 
 use crate::fee_estimator::{ConfirmationTarget, FeeEstimator};
@@ -164,6 +165,15 @@ where
 			.collect()
 	}
 
+	pub(crate) fn is_tx_confirmed(&self, txid: &Txid) -> bool {
+		self.inner
+			.lock()
+			.unwrap()
+			.get_tx(*txid)
+			.map(|tx_node| tx_node.chain_position.is_confirmed())
+			.unwrap_or(false)
+	}
+
 	pub(crate) fn current_best_block(&self) -> BestBlock {
 		let checkpoint = self.inner.lock().unwrap().latest_checkpoint();
 		BestBlock { block_hash: checkpoint.hash(), height: checkpoint.height() }
@@ -176,7 +186,9 @@ where
 		Ok(change_address.address.script_pubkey())
 	}
 
-	pub(crate) fn apply_update(&self, update: impl Into<Update>) -> Result<Vec<WalletEvent>, Error> {
+	pub(crate) fn apply_update(
+		&self, update: impl Into<Update>,
+	) -> Result<Vec<WalletEvent>, Error> {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		match locked_wallet.apply_update_events(update) {
 			Ok(events) => {
@@ -880,13 +892,28 @@ where
 		self.get_balances(total_anchor_channels_reserve_sats).map(|(_, s)| s)
 	}
 
-	/// Get the net amount (received - sent) for a specific transaction.
+	/// Get transaction details including inputs, outputs, and net amount.
 	/// Returns None if the transaction is not found in the wallet.
-	pub(crate) fn get_tx_net_amount(&self, txid: &Txid) -> Option<i64> {
+	pub(crate) fn get_tx_details(&self, txid: &Txid) -> Option<(i64, Vec<TxInput>, Vec<TxOutput>)> {
 		let locked_wallet = self.inner.lock().unwrap();
 		let tx_node = locked_wallet.get_tx(*txid)?;
-		let (sent, received) = locked_wallet.sent_and_received(&tx_node.tx_node.tx);
-		Some(received.to_sat() as i64 - sent.to_sat() as i64)
+		let tx = &tx_node.tx_node.tx;
+		let (sent, received) = locked_wallet.sent_and_received(tx);
+		let net_amount = received.to_sat() as i64 - sent.to_sat() as i64;
+
+		let inputs: Vec<TxInput> =
+			tx.input.iter().map(|tx_input| TxInput::from_tx_input(tx_input)).collect();
+
+		let outputs: Vec<TxOutput> = tx
+			.output
+			.iter()
+			.enumerate()
+			.map(|(index, tx_output)| {
+				TxOutput::from_tx_output(tx_output, index as u32, self.config.network)
+			})
+			.collect();
+
+		Some((net_amount, inputs, outputs))
 	}
 
 	fn parse_and_validate_address(

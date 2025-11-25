@@ -1937,6 +1937,10 @@ public protocol NodeProtocol: AnyObject {
 
     func forceCloseChannel(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, reason: String?) throws
 
+    func getAddressBalance(addressStr: String) throws -> UInt64
+
+    func getTransactionDetails(txid: Txid) -> TransactionDetails?
+
     func listBalances() -> BalanceDetails
 
     func listChannels() -> [ChannelDetails]
@@ -2092,6 +2096,20 @@ open class Node:
                                                            FfiConverterTypePublicKey.lower(counterpartyNodeId),
                                                            FfiConverterOptionString.lower(reason), $0)
     }
+    }
+
+    open func getAddressBalance(addressStr: String) throws -> UInt64 {
+        return try FfiConverterUInt64.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_node_get_address_balance(self.uniffiClonePointer(),
+                                                               FfiConverterString.lower(addressStr), $0)
+        })
+    }
+
+    open func getTransactionDetails(txid: Txid) -> TransactionDetails? {
+        return try! FfiConverterOptionTypeTransactionDetails.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_node_get_transaction_details(self.uniffiClonePointer(),
+                                                                   FfiConverterTypeTxid.lower(txid), $0)
+        })
     }
 
     open func listBalances() -> BalanceDetails {
@@ -5078,6 +5096,218 @@ public func FfiConverterTypeSpendableUtxo_lower(_ value: SpendableUtxo) -> RustB
     return FfiConverterTypeSpendableUtxo.lower(value)
 }
 
+public struct TransactionDetails {
+    public var amountSats: Int64
+    public var inputs: [TxInput]
+    public var outputs: [TxOutput]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(amountSats: Int64, inputs: [TxInput], outputs: [TxOutput]) {
+        self.amountSats = amountSats
+        self.inputs = inputs
+        self.outputs = outputs
+    }
+}
+
+extension TransactionDetails: Equatable, Hashable {
+    public static func == (lhs: TransactionDetails, rhs: TransactionDetails) -> Bool {
+        if lhs.amountSats != rhs.amountSats {
+            return false
+        }
+        if lhs.inputs != rhs.inputs {
+            return false
+        }
+        if lhs.outputs != rhs.outputs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(amountSats)
+        hasher.combine(inputs)
+        hasher.combine(outputs)
+    }
+}
+
+public struct FfiConverterTypeTransactionDetails: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransactionDetails {
+        return
+            try TransactionDetails(
+                amountSats: FfiConverterInt64.read(from: &buf),
+                inputs: FfiConverterSequenceTypeTxInput.read(from: &buf),
+                outputs: FfiConverterSequenceTypeTxOutput.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: TransactionDetails, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.amountSats, into: &buf)
+        FfiConverterSequenceTypeTxInput.write(value.inputs, into: &buf)
+        FfiConverterSequenceTypeTxOutput.write(value.outputs, into: &buf)
+    }
+}
+
+public func FfiConverterTypeTransactionDetails_lift(_ buf: RustBuffer) throws -> TransactionDetails {
+    return try FfiConverterTypeTransactionDetails.lift(buf)
+}
+
+public func FfiConverterTypeTransactionDetails_lower(_ value: TransactionDetails) -> RustBuffer {
+    return FfiConverterTypeTransactionDetails.lower(value)
+}
+
+public struct TxInput {
+    public var txid: Txid
+    public var vout: UInt32
+    public var scriptsig: String
+    public var witness: [String]
+    public var sequence: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(txid: Txid, vout: UInt32, scriptsig: String, witness: [String], sequence: UInt32) {
+        self.txid = txid
+        self.vout = vout
+        self.scriptsig = scriptsig
+        self.witness = witness
+        self.sequence = sequence
+    }
+}
+
+extension TxInput: Equatable, Hashable {
+    public static func == (lhs: TxInput, rhs: TxInput) -> Bool {
+        if lhs.txid != rhs.txid {
+            return false
+        }
+        if lhs.vout != rhs.vout {
+            return false
+        }
+        if lhs.scriptsig != rhs.scriptsig {
+            return false
+        }
+        if lhs.witness != rhs.witness {
+            return false
+        }
+        if lhs.sequence != rhs.sequence {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(txid)
+        hasher.combine(vout)
+        hasher.combine(scriptsig)
+        hasher.combine(witness)
+        hasher.combine(sequence)
+    }
+}
+
+public struct FfiConverterTypeTxInput: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TxInput {
+        return
+            try TxInput(
+                txid: FfiConverterTypeTxid.read(from: &buf),
+                vout: FfiConverterUInt32.read(from: &buf),
+                scriptsig: FfiConverterString.read(from: &buf),
+                witness: FfiConverterSequenceString.read(from: &buf),
+                sequence: FfiConverterUInt32.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: TxInput, into buf: inout [UInt8]) {
+        FfiConverterTypeTxid.write(value.txid, into: &buf)
+        FfiConverterUInt32.write(value.vout, into: &buf)
+        FfiConverterString.write(value.scriptsig, into: &buf)
+        FfiConverterSequenceString.write(value.witness, into: &buf)
+        FfiConverterUInt32.write(value.sequence, into: &buf)
+    }
+}
+
+public func FfiConverterTypeTxInput_lift(_ buf: RustBuffer) throws -> TxInput {
+    return try FfiConverterTypeTxInput.lift(buf)
+}
+
+public func FfiConverterTypeTxInput_lower(_ value: TxInput) -> RustBuffer {
+    return FfiConverterTypeTxInput.lower(value)
+}
+
+public struct TxOutput {
+    public var scriptpubkey: String
+    public var scriptpubkeyType: String?
+    public var scriptpubkeyAddress: String?
+    public var value: Int64
+    public var n: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(scriptpubkey: String, scriptpubkeyType: String?, scriptpubkeyAddress: String?, value: Int64, n: UInt32) {
+        self.scriptpubkey = scriptpubkey
+        self.scriptpubkeyType = scriptpubkeyType
+        self.scriptpubkeyAddress = scriptpubkeyAddress
+        self.value = value
+        self.n = n
+    }
+}
+
+extension TxOutput: Equatable, Hashable {
+    public static func == (lhs: TxOutput, rhs: TxOutput) -> Bool {
+        if lhs.scriptpubkey != rhs.scriptpubkey {
+            return false
+        }
+        if lhs.scriptpubkeyType != rhs.scriptpubkeyType {
+            return false
+        }
+        if lhs.scriptpubkeyAddress != rhs.scriptpubkeyAddress {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        if lhs.n != rhs.n {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(scriptpubkey)
+        hasher.combine(scriptpubkeyType)
+        hasher.combine(scriptpubkeyAddress)
+        hasher.combine(value)
+        hasher.combine(n)
+    }
+}
+
+public struct FfiConverterTypeTxOutput: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TxOutput {
+        return
+            try TxOutput(
+                scriptpubkey: FfiConverterString.read(from: &buf),
+                scriptpubkeyType: FfiConverterOptionString.read(from: &buf),
+                scriptpubkeyAddress: FfiConverterOptionString.read(from: &buf),
+                value: FfiConverterInt64.read(from: &buf),
+                n: FfiConverterUInt32.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: TxOutput, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.scriptpubkey, into: &buf)
+        FfiConverterOptionString.write(value.scriptpubkeyType, into: &buf)
+        FfiConverterOptionString.write(value.scriptpubkeyAddress, into: &buf)
+        FfiConverterInt64.write(value.value, into: &buf)
+        FfiConverterUInt32.write(value.n, into: &buf)
+    }
+}
+
+public func FfiConverterTypeTxOutput_lift(_ buf: RustBuffer) throws -> TxOutput {
+    return try FfiConverterTypeTxOutput.lift(buf)
+}
+
+public func FfiConverterTypeTxOutput_lower(_ value: TxOutput) -> RustBuffer {
+    return FfiConverterTypeTxOutput.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -5616,10 +5846,14 @@ public enum Event {
     case channelPending(channelId: ChannelId, userChannelId: UserChannelId, formerTemporaryChannelId: ChannelId, counterpartyNodeId: PublicKey, fundingTxo: OutPoint)
     case channelReady(channelId: ChannelId, userChannelId: UserChannelId, counterpartyNodeId: PublicKey?)
     case channelClosed(channelId: ChannelId, userChannelId: UserChannelId, counterpartyNodeId: PublicKey?, reason: ClosureReason?)
-    case onchainTransactionConfirmed(txid: Txid, blockHash: BlockHash, blockHeight: UInt32, confirmationTime: UInt64, context: TransactionContext)
-    case onchainTransactionUnconfirmed(txid: Txid
+    case onchainTransactionConfirmed(txid: Txid, blockHash: BlockHash, blockHeight: UInt32, confirmationTime: UInt64, details: TransactionDetails)
+    case onchainTransactionReceived(txid: Txid, details: TransactionDetails)
+    case onchainTransactionReplaced(txid: Txid
     )
-    case onchainTransactionReceived(txid: Txid, amountSats: Int64, context: TransactionContext)
+    case onchainTransactionReorged(txid: Txid
+    )
+    case onchainTransactionEvicted(txid: Txid
+    )
     case syncProgress(syncType: SyncType, progressPercent: UInt8, currentBlockHeight: UInt32, targetBlockHeight: UInt32)
     case syncCompleted(syncType: SyncType, syncedBlockHeight: UInt32)
     case balanceChanged(oldSpendableOnchainBalanceSats: UInt64, newSpendableOnchainBalanceSats: UInt64, oldTotalOnchainBalanceSats: UInt64, newTotalOnchainBalanceSats: UInt64, oldTotalLightningBalanceSats: UInt64, newTotalLightningBalanceSats: UInt64)
@@ -5647,18 +5881,24 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
 
         case 8: return try .channelClosed(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterOptionTypePublicKey.read(from: &buf), reason: FfiConverterOptionTypeClosureReason.read(from: &buf))
 
-        case 9: return try .onchainTransactionConfirmed(txid: FfiConverterTypeTxid.read(from: &buf), blockHash: FfiConverterTypeBlockHash.read(from: &buf), blockHeight: FfiConverterUInt32.read(from: &buf), confirmationTime: FfiConverterUInt64.read(from: &buf), context: FfiConverterTypeTransactionContext.read(from: &buf))
+        case 9: return try .onchainTransactionConfirmed(txid: FfiConverterTypeTxid.read(from: &buf), blockHash: FfiConverterTypeBlockHash.read(from: &buf), blockHeight: FfiConverterUInt32.read(from: &buf), confirmationTime: FfiConverterUInt64.read(from: &buf), details: FfiConverterTypeTransactionDetails.read(from: &buf))
 
-        case 10: return try .onchainTransactionUnconfirmed(txid: FfiConverterTypeTxid.read(from: &buf)
+        case 10: return try .onchainTransactionReceived(txid: FfiConverterTypeTxid.read(from: &buf), details: FfiConverterTypeTransactionDetails.read(from: &buf))
+
+        case 11: return try .onchainTransactionReplaced(txid: FfiConverterTypeTxid.read(from: &buf)
             )
 
-        case 11: return try .onchainTransactionReceived(txid: FfiConverterTypeTxid.read(from: &buf), amountSats: FfiConverterInt64.read(from: &buf), context: FfiConverterTypeTransactionContext.read(from: &buf))
+        case 12: return try .onchainTransactionReorged(txid: FfiConverterTypeTxid.read(from: &buf)
+            )
 
-        case 12: return try .syncProgress(syncType: FfiConverterTypeSyncType.read(from: &buf), progressPercent: FfiConverterUInt8.read(from: &buf), currentBlockHeight: FfiConverterUInt32.read(from: &buf), targetBlockHeight: FfiConverterUInt32.read(from: &buf))
+        case 13: return try .onchainTransactionEvicted(txid: FfiConverterTypeTxid.read(from: &buf)
+            )
 
-        case 13: return try .syncCompleted(syncType: FfiConverterTypeSyncType.read(from: &buf), syncedBlockHeight: FfiConverterUInt32.read(from: &buf))
+        case 14: return try .syncProgress(syncType: FfiConverterTypeSyncType.read(from: &buf), progressPercent: FfiConverterUInt8.read(from: &buf), currentBlockHeight: FfiConverterUInt32.read(from: &buf), targetBlockHeight: FfiConverterUInt32.read(from: &buf))
 
-        case 14: return try .balanceChanged(oldSpendableOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), newSpendableOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), oldTotalOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), newTotalOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), oldTotalLightningBalanceSats: FfiConverterUInt64.read(from: &buf), newTotalLightningBalanceSats: FfiConverterUInt64.read(from: &buf))
+        case 15: return try .syncCompleted(syncType: FfiConverterTypeSyncType.read(from: &buf), syncedBlockHeight: FfiConverterUInt32.read(from: &buf))
+
+        case 16: return try .balanceChanged(oldSpendableOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), newSpendableOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), oldTotalOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), newTotalOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), oldTotalLightningBalanceSats: FfiConverterUInt64.read(from: &buf), newTotalLightningBalanceSats: FfiConverterUInt64.read(from: &buf))
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -5728,38 +5968,45 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
             FfiConverterOptionTypePublicKey.write(counterpartyNodeId, into: &buf)
             FfiConverterOptionTypeClosureReason.write(reason, into: &buf)
 
-        case let .onchainTransactionConfirmed(txid, blockHash, blockHeight, confirmationTime, context):
+        case let .onchainTransactionConfirmed(txid, blockHash, blockHeight, confirmationTime, details):
             writeInt(&buf, Int32(9))
             FfiConverterTypeTxid.write(txid, into: &buf)
             FfiConverterTypeBlockHash.write(blockHash, into: &buf)
             FfiConverterUInt32.write(blockHeight, into: &buf)
             FfiConverterUInt64.write(confirmationTime, into: &buf)
-            FfiConverterTypeTransactionContext.write(context, into: &buf)
+            FfiConverterTypeTransactionDetails.write(details, into: &buf)
 
-        case let .onchainTransactionUnconfirmed(txid):
+        case let .onchainTransactionReceived(txid, details):
             writeInt(&buf, Int32(10))
             FfiConverterTypeTxid.write(txid, into: &buf)
+            FfiConverterTypeTransactionDetails.write(details, into: &buf)
 
-        case let .onchainTransactionReceived(txid, amountSats, context):
+        case let .onchainTransactionReplaced(txid):
             writeInt(&buf, Int32(11))
             FfiConverterTypeTxid.write(txid, into: &buf)
-            FfiConverterInt64.write(amountSats, into: &buf)
-            FfiConverterTypeTransactionContext.write(context, into: &buf)
+
+        case let .onchainTransactionReorged(txid):
+            writeInt(&buf, Int32(12))
+            FfiConverterTypeTxid.write(txid, into: &buf)
+
+        case let .onchainTransactionEvicted(txid):
+            writeInt(&buf, Int32(13))
+            FfiConverterTypeTxid.write(txid, into: &buf)
 
         case let .syncProgress(syncType, progressPercent, currentBlockHeight, targetBlockHeight):
-            writeInt(&buf, Int32(12))
+            writeInt(&buf, Int32(14))
             FfiConverterTypeSyncType.write(syncType, into: &buf)
             FfiConverterUInt8.write(progressPercent, into: &buf)
             FfiConverterUInt32.write(currentBlockHeight, into: &buf)
             FfiConverterUInt32.write(targetBlockHeight, into: &buf)
 
         case let .syncCompleted(syncType, syncedBlockHeight):
-            writeInt(&buf, Int32(13))
+            writeInt(&buf, Int32(15))
             FfiConverterTypeSyncType.write(syncType, into: &buf)
             FfiConverterUInt32.write(syncedBlockHeight, into: &buf)
 
         case let .balanceChanged(oldSpendableOnchainBalanceSats, newSpendableOnchainBalanceSats, oldTotalOnchainBalanceSats, newTotalOnchainBalanceSats, oldTotalLightningBalanceSats, newTotalLightningBalanceSats):
-            writeInt(&buf, Int32(14))
+            writeInt(&buf, Int32(16))
             FfiConverterUInt64.write(oldSpendableOnchainBalanceSats, into: &buf)
             FfiConverterUInt64.write(newSpendableOnchainBalanceSats, into: &buf)
             FfiConverterUInt64.write(oldTotalOnchainBalanceSats, into: &buf)
@@ -7076,61 +7323,6 @@ public func FfiConverterTypeSyncType_lower(_ value: SyncType) -> RustBuffer {
 
 extension SyncType: Equatable, Hashable {}
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-
-public enum TransactionContext {
-    case channelFunding(channelId: ChannelId, userChannelId: UserChannelId, counterpartyNodeId: PublicKey)
-    case channelClosure(channelId: ChannelId, userChannelId: UserChannelId, counterpartyNodeId: PublicKey?)
-    case regularWallet
-}
-
-public struct FfiConverterTypeTransactionContext: FfiConverterRustBuffer {
-    typealias SwiftType = TransactionContext
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransactionContext {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        case 1: return try .channelFunding(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterTypePublicKey.read(from: &buf))
-
-        case 2: return try .channelClosure(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterOptionTypePublicKey.read(from: &buf))
-
-        case 3: return .regularWallet
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: TransactionContext, into buf: inout [UInt8]) {
-        switch value {
-        case let .channelFunding(channelId, userChannelId, counterpartyNodeId):
-            writeInt(&buf, Int32(1))
-            FfiConverterTypeChannelId.write(channelId, into: &buf)
-            FfiConverterTypeUserChannelId.write(userChannelId, into: &buf)
-            FfiConverterTypePublicKey.write(counterpartyNodeId, into: &buf)
-
-        case let .channelClosure(channelId, userChannelId, counterpartyNodeId):
-            writeInt(&buf, Int32(2))
-            FfiConverterTypeChannelId.write(channelId, into: &buf)
-            FfiConverterTypeUserChannelId.write(userChannelId, into: &buf)
-            FfiConverterOptionTypePublicKey.write(counterpartyNodeId, into: &buf)
-
-        case .regularWallet:
-            writeInt(&buf, Int32(3))
-        }
-    }
-}
-
-public func FfiConverterTypeTransactionContext_lift(_ buf: RustBuffer) throws -> TransactionContext {
-    return try FfiConverterTypeTransactionContext.lift(buf)
-}
-
-public func FfiConverterTypeTransactionContext_lower(_ value: TransactionContext) -> RustBuffer {
-    return FfiConverterTypeTransactionContext.lower(value)
-}
-
-extension TransactionContext: Equatable, Hashable {}
-
 public enum VssHeaderProviderError {
     case InvalidData(message: String)
 
@@ -7647,6 +7839,27 @@ private struct FfiConverterOptionTypeSendingParameters: FfiConverterRustBuffer {
     }
 }
 
+private struct FfiConverterOptionTypeTransactionDetails: FfiConverterRustBuffer {
+    typealias SwiftType = TransactionDetails?
+
+    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeTransactionDetails.write(value, into: &buf)
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeTransactionDetails.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 private struct FfiConverterOptionTypeClosureReason: FfiConverterRustBuffer {
     typealias SwiftType = ClosureReason?
 
@@ -8048,6 +8261,28 @@ private struct FfiConverterSequenceUInt64: FfiConverterRustBuffer {
     }
 }
 
+private struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
 private struct FfiConverterSequenceTypeChannelDetails: FfiConverterRustBuffer {
     typealias SwiftType = [ChannelDetails]
 
@@ -8175,6 +8410,50 @@ private struct FfiConverterSequenceTypeSpendableUtxo: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             try seq.append(FfiConverterTypeSpendableUtxo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+private struct FfiConverterSequenceTypeTxInput: FfiConverterRustBuffer {
+    typealias SwiftType = [TxInput]
+
+    static func write(_ value: [TxInput], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTxInput.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TxInput] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TxInput]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeTxInput.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+private struct FfiConverterSequenceTypeTxOutput: FfiConverterRustBuffer {
+    typealias SwiftType = [TxOutput]
+
+    static func write(_ value: [TxOutput], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTxOutput.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TxOutput] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TxOutput]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeTxOutput.read(from: &buf))
         }
         return seq
     }
@@ -9326,6 +9605,12 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_force_close_channel() != 48831 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_node_get_address_balance() != 45284 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_list_balances() != 57528 {
