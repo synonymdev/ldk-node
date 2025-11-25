@@ -364,6 +364,8 @@ interface NodeInterface {
     @Throws(NodeException::class)
     fun `forceCloseChannel`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `reason`: kotlin.String?)
     
+    fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
+    
     fun `listBalances`(): BalanceDetails
     
     fun `listChannels`(): List<ChannelDetails>
@@ -1793,6 +1795,8 @@ sealed class VssHeaderProviderException(message: String): kotlin.Exception(messa
     class InternalException(message: String) : VssHeaderProviderException(message)
     
 }
+
+
 
 
 

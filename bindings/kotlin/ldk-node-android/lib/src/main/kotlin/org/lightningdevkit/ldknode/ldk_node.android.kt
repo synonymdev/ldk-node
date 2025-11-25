@@ -1348,6 +1348,8 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1918,6 +1920,11 @@ internal interface UniffiLib : Library {
         `reason`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_fn_method_node_get_transaction_details(
+        `ptr`: Pointer?,
+        `txid`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_node_list_balances(
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -2547,6 +2554,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_node_force_close_channel(
     ): Short
+    fun uniffi_ldk_node_checksum_method_node_get_transaction_details(
+    ): Short
     fun uniffi_ldk_node_checksum_method_node_list_balances(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_list_channels(
@@ -2897,6 +2906,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_force_close_channel() != 48831.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_list_balances() != 57528.toShort()) {
@@ -5599,6 +5611,18 @@ open class Node: Disposable, NodeInterface {
                 )
             }
         }
+    }
+
+    override fun `getTransactionDetails`(`txid`: Txid): TransactionDetails? {
+        return FfiConverterOptionalTypeTransactionDetails.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_get_transaction_details(
+                    it,
+                    FfiConverterTypeTxid.lower(`txid`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
     }
 
     override fun `listBalances`(): BalanceDetails {
@@ -10337,6 +10361,35 @@ object FfiConverterOptionalTypeSendingParameters: FfiConverterRustBuffer<Sending
         } else {
             buf.put(1)
             FfiConverterTypeSendingParameters.write(value, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterOptionalTypeTransactionDetails: FfiConverterRustBuffer<TransactionDetails?> {
+    override fun read(buf: ByteBuffer): TransactionDetails? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeTransactionDetails.read(buf)
+    }
+
+    override fun allocationSize(value: TransactionDetails?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeTransactionDetails.allocationSize(value)
+        }
+    }
+
+    override fun write(value: TransactionDetails?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeTransactionDetails.write(value, buf)
         }
     }
 }

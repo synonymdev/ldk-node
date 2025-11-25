@@ -1937,6 +1937,8 @@ public protocol NodeProtocol: AnyObject {
 
     func forceCloseChannel(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, reason: String?) throws
 
+    func getTransactionDetails(txid: Txid) -> TransactionDetails?
+
     func listBalances() -> BalanceDetails
 
     func listChannels() -> [ChannelDetails]
@@ -2092,6 +2094,13 @@ open class Node:
                                                            FfiConverterTypePublicKey.lower(counterpartyNodeId),
                                                            FfiConverterOptionString.lower(reason), $0)
     }
+    }
+
+    open func getTransactionDetails(txid: Txid) -> TransactionDetails? {
+        return try! FfiConverterOptionTypeTransactionDetails.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_node_get_transaction_details(self.uniffiClonePointer(),
+                                                                   FfiConverterTypeTxid.lower(txid), $0)
+        })
     }
 
     open func listBalances() -> BalanceDetails {
@@ -7821,6 +7830,27 @@ private struct FfiConverterOptionTypeSendingParameters: FfiConverterRustBuffer {
     }
 }
 
+private struct FfiConverterOptionTypeTransactionDetails: FfiConverterRustBuffer {
+    typealias SwiftType = TransactionDetails?
+
+    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeTransactionDetails.write(value, into: &buf)
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeTransactionDetails.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 private struct FfiConverterOptionTypeClosureReason: FfiConverterRustBuffer {
     typealias SwiftType = ClosureReason?
 
@@ -9566,6 +9596,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_force_close_channel() != 48831 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_list_balances() != 57528 {
