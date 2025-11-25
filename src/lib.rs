@@ -112,7 +112,7 @@ pub use balance::{BalanceDetails, LightningBalance, PendingSweepBalance};
 pub use error::Error as NodeError;
 use error::Error;
 
-pub use event::{Event, SyncType, TransactionContext};
+pub use event::{Event, SyncType, TransactionDetails, TxInput, TxOutput};
 
 pub use io::utils::generate_entropy_mnemonic;
 
@@ -1340,31 +1340,47 @@ impl Node {
 						ChainSource::Esplora { .. } => {
 							chain_source.update_fee_rate_estimates().await?;
 							chain_source
-								.sync_lightning_wallet(sync_cman.clone(), sync_cmon.clone(), sync_sweeper)
+								.sync_lightning_wallet(
+									sync_cman.clone(),
+									sync_cmon.clone(),
+									sync_sweeper,
+								)
 								.await?;
-							chain_source.sync_onchain_wallet(
-								Some(&*event_queue),
-								Some(&sync_cman),
-								Some(&sync_cmon),
-								Some(&config),
-							).await?;
+							chain_source
+								.sync_onchain_wallet(
+									Some(&*event_queue),
+									Some(&sync_cman),
+									Some(&sync_cmon),
+									Some(&config),
+								)
+								.await?;
 						},
 						ChainSource::Electrum { .. } => {
 							chain_source.update_fee_rate_estimates().await?;
 							chain_source
-								.sync_lightning_wallet(sync_cman.clone(), sync_cmon.clone(), sync_sweeper)
+								.sync_lightning_wallet(
+									sync_cman.clone(),
+									sync_cmon.clone(),
+									sync_sweeper,
+								)
 								.await?;
-							chain_source.sync_onchain_wallet(
-								Some(&*event_queue),
-								Some(&sync_cman),
-								Some(&sync_cmon),
-								Some(&config),
-							).await?;
+							chain_source
+								.sync_onchain_wallet(
+									Some(&*event_queue),
+									Some(&sync_cman),
+									Some(&sync_cmon),
+									Some(&config),
+								)
+								.await?;
 						},
 						ChainSource::BitcoindRpc { .. } => {
 							chain_source.update_fee_rate_estimates().await?;
 							chain_source
-								.poll_and_update_listeners(sync_cman, sync_cmon, sync_sweeper)
+								.poll_and_update_listeners(
+									sync_cman,
+									sync_cmon,
+									sync_sweeper,
+								)
 								.await?;
 						},
 					}
@@ -1768,7 +1784,8 @@ where
 	let new_total_onchain = balance_details.total_onchain_balance_sats;
 	let new_total_lightning = balance_details.total_lightning_balance_sats;
 
-	let old_spendable_onchain = locked_metrics.last_known_spendable_onchain_balance_sats.unwrap_or(0);
+	let old_spendable_onchain =
+		locked_metrics.last_known_spendable_onchain_balance_sats.unwrap_or(0);
 	let old_total_onchain = locked_metrics.last_known_total_onchain_balance_sats.unwrap_or(0);
 	let old_total_lightning = locked_metrics.last_known_total_lightning_balance_sats.unwrap_or(0);
 

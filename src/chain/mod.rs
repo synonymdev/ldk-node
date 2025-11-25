@@ -27,7 +27,9 @@ use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger
 use crate::types::{Broadcaster, ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::{Error, NodeMetrics};
 
-use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget as LdkConfirmationTarget};
+use lightning::chain::chaininterface::{
+	BroadcasterInterface, ConfirmationTarget as LdkConfirmationTarget,
+};
 use lightning::chain::{Confirm, Filter, Listen, WatchedOutput};
 use lightning::util::ser::Writeable;
 
@@ -48,8 +50,8 @@ use esplora_client::AsyncClient as EsploraAsyncClient;
 
 use bitcoin::{FeeRate, Network, Script, ScriptBuf, Txid};
 
-use crate::event::{Event, EventQueue, SyncType};
 use crate::check_and_emit_balance_update;
+use crate::event::{Event, EventQueue, SyncType};
 
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -237,61 +239,29 @@ pub(crate) enum ChainSource {
 	},
 }
 
-use crate::event::TransactionContext;
-use crate::types::UserChannelId;
-use lightning::ln::types::ChannelId;
+use crate::event::TransactionDetails;
 
-/// Determine transaction context by checking against known channel funding outpoints.
-///
-/// This function attempts to identify whether a transaction is related to channel operations
-/// by checking against the channel manager and channel monitor data.
-fn determine_transaction_context(
-	txid: &bitcoin::Txid,
-	channel_manager: Option<&Arc<ChannelManager>>,
-	chain_monitor: Option<&Arc<ChainMonitor>>,
-) -> TransactionContext {
-	// Check if this transaction is a known channel funding transaction
-	if let Some(cm) = channel_manager {
-		// Check all channels for matching funding txids
-		for channel_details in cm.list_channels() {
-			if let Some(funding_txo) = channel_details.funding_txo {
-				if funding_txo.txid == *txid {
-					// This is a channel funding transaction
-					return TransactionContext::ChannelFunding {
-						channel_id: channel_details.channel_id,
-						user_channel_id: UserChannelId(channel_details.user_channel_id),
-						counterparty_node_id: channel_details.counterparty.node_id,
-					};
-				}
-			}
-		}
+/// Get transaction details including inputs and outputs.
+fn get_transaction_details<B: Deref, E: Deref, L: Deref>(
+	txid: &bitcoin::Txid, wallet: &crate::wallet::Wallet<B, E, L>,
+	_channel_manager: Option<&Arc<ChannelManager>>,
+) -> Option<TransactionDetails>
+where
+	B::Target: lightning::chain::chaininterface::BroadcasterInterface,
+	E::Target: crate::fee_estimator::FeeEstimator,
+	L::Target: crate::logger::LdkLogger,
+{
+	// Get transaction details from wallet
+	let (amount_sats, inputs, outputs) = wallet.get_tx_details(txid)?;
 
-		// Check recently closed channels - they might not be in the active list anymore
-		// but could still have pending transactions
-		for _channel_details in cm.list_recent_payments() {
-			// TODO: Once we have access to closed channel data, we can check those as well
-			// For now, we'll need to rely on the channel monitor
-		}
-	}
-
-	// Check channel monitors for channel closure transactions
-	if let Some(_monitor) = chain_monitor {
-		// The chain monitor can help identify channel closures
-		// TODO: Implement channel closure detection through monitor data
-		// This would require iterating through monitored channels and checking
-		// their closing transactions
-	}
-
-	// Default to regular wallet transaction if we can't identify it as channel-related
-	// Applications can still cross-reference with ChannelPending/ChannelClosed events
-	TransactionContext::RegularWallet
+	Some(TransactionDetails { amount_sats, inputs, outputs })
 }
 
 /// Process BDK wallet events and emit corresponding ldk-node events via the event queue.
 fn process_wallet_events<B: Deref, E: Deref, L: Deref, L2: Deref>(
 	wallet_events: Vec<BdkWalletEvent>, wallet: &crate::wallet::Wallet<B, E, L>,
 	event_queue: &EventQueue<L2>, logger: &Arc<Logger>,
-	channel_manager: Option<&Arc<ChannelManager>>, chain_monitor: Option<&Arc<ChainMonitor>>,
+	channel_manager: Option<&Arc<ChannelManager>>, _chain_monitor: Option<&Arc<ChainMonitor>>,
 ) -> Result<(), Error>
 where
 	B::Target: BroadcasterInterface,
@@ -302,6 +272,16 @@ where
 	for wallet_event in wallet_events {
 		match wallet_event {
 			BdkWalletEvent::TxConfirmed { txid, block_time, .. } => {
+				let details = get_transaction_details(&txid, wallet, channel_manager)
+					.unwrap_or_else(|| {
+						log_error!(logger, "Transaction {} not found in wallet", txid);
+						TransactionDetails {
+							amount_sats: 0,
+							inputs: Vec::new(),
+							outputs: Vec::new(),
+						}
+					});
+
 				log_info!(
 					logger,
 					"Onchain transaction {} confirmed at height {}",
@@ -309,15 +289,12 @@ where
 					block_time.block_id.height
 				);
 
-				// Determine the transaction context by checking channel data
-				let context = determine_transaction_context(&txid, channel_manager, chain_monitor);
-
 				let event = Event::OnchainTransactionConfirmed {
 					txid,
 					block_hash: block_time.block_id.hash,
 					block_height: block_time.block_id.height,
 					confirmation_time: block_time.confirmation_time,
-					context,
+					details,
 				};
 				event_queue.add_event(event).map_err(|e| {
 					log_error!(logger, "Failed to push onchain event to queue: {}", e);
@@ -328,8 +305,12 @@ where
 				match old_block_time {
 					Some(_) => {
 						// Transaction was previously confirmed but is now unconfirmed (reorg)
-						log_info!(logger, "Onchain transaction {} became unconfirmed (reorg)", txid);
-						let event = Event::OnchainTransactionUnconfirmed { txid };
+						log_info!(
+							logger,
+							"Onchain transaction {} became unconfirmed (reorg)",
+							txid
+						);
+						let event = Event::OnchainTransactionReorged { txid };
 						event_queue.add_event(event).map_err(|e| {
 							log_error!(logger, "Failed to push onchain event to queue: {}", e);
 							e
@@ -337,22 +318,24 @@ where
 					},
 					None => {
 						// New unconfirmed transaction detected in mempool
-						// Get transaction details from wallet to calculate the amount
-						let amount_sats = wallet.get_tx_net_amount(&txid).unwrap_or_else(|| {
-							// Shouldn't happen, but handle gracefully
-							log_error!(logger, "Transaction {} not found in wallet", txid);
-							0
-						});
+						let details = get_transaction_details(&txid, wallet, channel_manager)
+							.unwrap_or_else(|| {
+								log_error!(logger, "Transaction {} not found in wallet", txid);
+								TransactionDetails {
+									amount_sats: 0,
+									inputs: Vec::new(),
+									outputs: Vec::new(),
+								}
+							});
 
 						log_info!(
 							logger,
 							"New unconfirmed transaction {} detected in mempool (amount: {} sats)",
 							txid,
-							amount_sats
+							details.amount_sats
 						);
 
-						let context = determine_transaction_context(&txid, channel_manager, chain_monitor);
-						let event = Event::OnchainTransactionReceived { txid, amount_sats, context };
+						let event = Event::OnchainTransactionReceived { txid, details };
 						event_queue.add_event(event).map_err(|e| {
 							log_error!(logger, "Failed to push onchain event to queue: {}", e);
 							e
@@ -373,8 +356,7 @@ where
 			},
 			BdkWalletEvent::TxReplaced { txid, .. } => {
 				log_info!(logger, "Onchain transaction {} was replaced", txid);
-				// Treat a replacement as an unconfirm event
-				let event = Event::OnchainTransactionUnconfirmed { txid };
+				let event = Event::OnchainTransactionReplaced { txid };
 				event_queue.add_event(event).map_err(|e| {
 					log_error!(logger, "Failed to push onchain event to queue: {}", e);
 					e
@@ -1053,15 +1035,24 @@ impl ChainSource {
 										(channel_manager, chain_monitor, config)
 									{
 										// Compute current balances
-										let cur_anchor_reserve_sats = crate::total_anchor_channels_reserve_sats(cm, cfg);
-										let (total_onchain_balance_sats, spendable_onchain_balance_sats) =
-											onchain_wallet.get_balances(cur_anchor_reserve_sats).unwrap_or((0, 0));
+										let cur_anchor_reserve_sats =
+											crate::total_anchor_channels_reserve_sats(cm, cfg);
+										let (
+											total_onchain_balance_sats,
+											spendable_onchain_balance_sats,
+										) = onchain_wallet
+											.get_balances(cur_anchor_reserve_sats)
+											.unwrap_or((0, 0));
 
 										let mut total_lightning_balance_sats = 0;
-										for (funding_txo, _channel_id) in chain_mon.list_monitors() {
-											if let Ok(monitor) = chain_mon.get_monitor(funding_txo) {
-												for ldk_balance in monitor.get_claimable_balances() {
-													total_lightning_balance_sats += ldk_balance.claimable_amount_satoshis();
+										for (funding_txo, _channel_id) in chain_mon.list_monitors()
+										{
+											if let Ok(monitor) = chain_mon.get_monitor(funding_txo)
+											{
+												for ldk_balance in monitor.get_claimable_balances()
+												{
+													total_lightning_balance_sats +=
+														ldk_balance.claimable_amount_satoshis();
 												}
 											}
 										}
@@ -1071,7 +1062,7 @@ impl ChainSource {
 											spendable_onchain_balance_sats,
 											total_anchor_channels_reserve_sats: std::cmp::min(
 												cur_anchor_reserve_sats,
-												total_onchain_balance_sats
+												total_onchain_balance_sats,
 											),
 											total_lightning_balance_sats,
 											lightning_balances: Vec::new(), // We don't need full details for change detection
@@ -1909,4 +1900,3 @@ fn periodically_archive_fully_resolved_monitors(
 	}
 	Ok(())
 }
-
