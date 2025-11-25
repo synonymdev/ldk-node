@@ -255,8 +255,8 @@ use std::time::Duration;
 ///             println!("Amount: {} sats", details.amount_sats);
 ///             node.event_handled()?;
 ///         },
-///         Event::OnchainTransactionReplaced { txid } => {
-///             println!("Transaction {} was replaced (RBF)", txid);
+///         Event::OnchainTransactionReplaced { txid, conflicts } => {
+///             println!("Transaction {} was replaced (RBF) by {} transaction(s)", txid, conflicts.len());
 ///             node.event_handled()?;
 ///         },
 ///         Event::OnchainTransactionReorged { txid } => {
@@ -589,8 +589,11 @@ pub enum Event {
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// match node.wait_next_event() {
-	///     Event::OnchainTransactionReplaced { txid } => {
-	///         println!("Transaction {} was replaced", txid);
+	///     Event::OnchainTransactionReplaced { txid, conflicts } => {
+	///         println!("Transaction {} was replaced by {} transaction(s)", txid, conflicts.len());
+	///         for conflict_txid in conflicts {
+	///             println!("  Replacement transaction: {}", conflict_txid);
+	///         }
 	///         node.event_handled().unwrap();
 	///     },
 	///     _ => {}
@@ -599,6 +602,12 @@ pub enum Event {
 	OnchainTransactionReplaced {
 		/// The transaction ID that was replaced.
 		txid: bitcoin::Txid,
+		/// The transaction IDs that replaced this transaction (conflicts).
+		///
+		/// These are the transactions that share inputs with the replaced transaction
+		/// and caused it to be replaced. Typically there will be one replacement transaction,
+		/// but multiple are possible.
+		conflicts: Vec<bitcoin::Txid>,
 	},
 	/// An onchain transaction became unconfirmed due to a chain reorganization.
 	///
@@ -854,6 +863,7 @@ impl_writeable_tlv_based_enum!(Event,
 	},
 	(10, OnchainTransactionReplaced) => {
 		(0, txid, required),
+		(1, conflicts, required_vec),
 	},
 	(11, OnchainTransactionReorged) => {
 		(0, txid, required),

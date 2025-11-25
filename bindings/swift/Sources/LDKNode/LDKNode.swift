@@ -5848,8 +5848,7 @@ public enum Event {
     case channelClosed(channelId: ChannelId, userChannelId: UserChannelId, counterpartyNodeId: PublicKey?, reason: ClosureReason?)
     case onchainTransactionConfirmed(txid: Txid, blockHash: BlockHash, blockHeight: UInt32, confirmationTime: UInt64, details: TransactionDetails)
     case onchainTransactionReceived(txid: Txid, details: TransactionDetails)
-    case onchainTransactionReplaced(txid: Txid
-    )
+    case onchainTransactionReplaced(txid: Txid, conflicts: [Txid])
     case onchainTransactionReorged(txid: Txid
     )
     case onchainTransactionEvicted(txid: Txid
@@ -5885,8 +5884,7 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
 
         case 10: return try .onchainTransactionReceived(txid: FfiConverterTypeTxid.read(from: &buf), details: FfiConverterTypeTransactionDetails.read(from: &buf))
 
-        case 11: return try .onchainTransactionReplaced(txid: FfiConverterTypeTxid.read(from: &buf)
-            )
+        case 11: return try .onchainTransactionReplaced(txid: FfiConverterTypeTxid.read(from: &buf), conflicts: FfiConverterSequenceTypeTxid.read(from: &buf))
 
         case 12: return try .onchainTransactionReorged(txid: FfiConverterTypeTxid.read(from: &buf)
             )
@@ -5981,9 +5979,10 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
             FfiConverterTypeTxid.write(txid, into: &buf)
             FfiConverterTypeTransactionDetails.write(details, into: &buf)
 
-        case let .onchainTransactionReplaced(txid):
+        case let .onchainTransactionReplaced(txid, conflicts):
             writeInt(&buf, Int32(11))
             FfiConverterTypeTxid.write(txid, into: &buf)
+            FfiConverterSequenceTypeTxid.write(conflicts, into: &buf)
 
         case let .onchainTransactionReorged(txid):
             writeInt(&buf, Int32(12))
@@ -8608,6 +8607,28 @@ private struct FfiConverterSequenceTypeSocketAddress: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             try seq.append(FfiConverterTypeSocketAddress.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+private struct FfiConverterSequenceTypeTxid: FfiConverterRustBuffer {
+    typealias SwiftType = [Txid]
+
+    static func write(_ value: [Txid], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTxid.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Txid] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Txid]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeTxid.read(from: &buf))
         }
         return seq
     }
