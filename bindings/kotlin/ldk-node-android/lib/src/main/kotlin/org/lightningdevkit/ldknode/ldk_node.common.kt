@@ -364,6 +364,9 @@ interface NodeInterface {
     @Throws(NodeException::class)
     fun `forceCloseChannel`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `reason`: kotlin.String?)
     
+    @Throws(NodeException::class)
+    fun `getAddressBalance`(`addressStr`: kotlin.String): kotlin.ULong
+    
     fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
     
     fun `listBalances`(): BalanceDetails

@@ -1937,6 +1937,8 @@ public protocol NodeProtocol: AnyObject {
 
     func forceCloseChannel(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, reason: String?) throws
 
+    func getAddressBalance(addressStr: String) throws -> UInt64
+
     func getTransactionDetails(txid: Txid) -> TransactionDetails?
 
     func listBalances() -> BalanceDetails
@@ -2094,6 +2096,13 @@ open class Node:
                                                            FfiConverterTypePublicKey.lower(counterpartyNodeId),
                                                            FfiConverterOptionString.lower(reason), $0)
     }
+    }
+
+    open func getAddressBalance(addressStr: String) throws -> UInt64 {
+        return try FfiConverterUInt64.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_node_get_address_balance(self.uniffiClonePointer(),
+                                                               FfiConverterString.lower(addressStr), $0)
+        })
     }
 
     open func getTransactionDetails(txid: Txid) -> TransactionDetails? {
@@ -9596,6 +9605,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_force_close_channel() != 48831 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_node_get_address_balance() != 45284 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000 {

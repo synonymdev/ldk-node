@@ -1350,6 +1350,8 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1920,6 +1922,11 @@ internal interface UniffiLib : Library {
         `reason`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_fn_method_node_get_address_balance(
+        `ptr`: Pointer?,
+        `addressStr`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long
     fun uniffi_ldk_node_fn_method_node_get_transaction_details(
         `ptr`: Pointer?,
         `txid`: RustBufferByValue,
@@ -2554,6 +2561,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_node_force_close_channel(
     ): Short
+    fun uniffi_ldk_node_checksum_method_node_get_address_balance(
+    ): Short
     fun uniffi_ldk_node_checksum_method_node_get_transaction_details(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_list_balances(
@@ -2906,6 +2915,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_force_close_channel() != 48831.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_node_get_address_balance() != 45284.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000.toShort()) {
@@ -5611,6 +5623,19 @@ open class Node: Disposable, NodeInterface {
                 )
             }
         }
+    }
+
+    @Throws(NodeException::class)
+    override fun `getAddressBalance`(`addressStr`: kotlin.String): kotlin.ULong {
+        return FfiConverterULong.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_get_address_balance(
+                    it,
+                    FfiConverterString.lower(`addressStr`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
     }
 
     override fun `getTransactionDetails`(`txid`: Txid): TransactionDetails? {

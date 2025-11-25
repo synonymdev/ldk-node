@@ -82,6 +82,31 @@ impl ElectrumRuntimeClient {
 		Ok(Self { electrum_client, bdk_electrum_client, tx_sync, runtime, config, logger })
 	}
 
+	pub(crate) async fn get_address_balance(&self, address: &bitcoin::Address) -> Option<u64> {
+		use electrum_client::ElectrumApi;
+
+		let script = address.script_pubkey();
+		let electrum_client = Arc::clone(&self.electrum_client);
+		let script_clone = script.clone();
+		let balance_result = self
+			.runtime
+			.spawn_blocking(move || {
+				electrum_client
+					.script_get_balance(&script_clone)
+					.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)))
+			})
+			.await;
+
+		match balance_result {
+			Ok(Ok(balance)) => {
+				let confirmed = balance.confirmed.max(0) as u64;
+				let unconfirmed = balance.unconfirmed.max(0) as u64;
+				Some(confirmed + unconfirmed)
+			},
+			_ => None,
+		}
+	}
+
 	pub(crate) async fn sync_confirmables(
 		&self, confirmables: Vec<Arc<dyn Confirm + Sync + Send>>,
 	) -> Result<(), Error> {
