@@ -159,7 +159,7 @@ async fn multi_hop_sending() {
 		let sync_config = EsploraSyncConfig { background_sync_config: None };
 		setup_builder!(builder, config.node_config);
 		builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
-		let node = builder.build().unwrap();
+		let node = builder.build(config.node_entropy.into()).unwrap();
 		node.start().unwrap();
 		nodes.push(node);
 	}
@@ -272,7 +272,8 @@ async fn start_stop_reinit() {
 	setup_builder!(builder, config.node_config);
 	builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
 
-	let node = builder.build_with_store(Arc::clone(&test_sync_store)).unwrap();
+	let node =
+		builder.build_with_store(config.node_entropy.into(), Arc::clone(&test_sync_store)).unwrap();
 	node.start().unwrap();
 
 	let expected_node_id = node.node_id();
@@ -310,7 +311,8 @@ async fn start_stop_reinit() {
 	setup_builder!(builder, config.node_config);
 	builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
 
-	let reinitialized_node = builder.build_with_store(Arc::clone(&test_sync_store)).unwrap();
+	let reinitialized_node =
+		builder.build_with_store(config.node_entropy.into(), Arc::clone(&test_sync_store)).unwrap();
 	reinitialized_node.start().unwrap();
 	assert_eq!(reinitialized_node.node_id(), expected_node_id);
 
@@ -619,10 +621,9 @@ async fn onchain_wallet_recovery() {
 
 	let chain_source = TestChainSource::Esplora(&electrsd);
 
-	let seed_bytes = vec![42u8; 64];
-
 	let original_config = random_config(true);
-	let original_node = setup_node(&chain_source, original_config, Some(seed_bytes.clone()));
+	let original_node_entropy = original_config.node_entropy;
+	let original_node = setup_node(&chain_source, original_config);
 
 	let premine_amount_sat = 100_000;
 
@@ -661,8 +662,9 @@ async fn onchain_wallet_recovery() {
 	drop(original_node);
 
 	// Now we start from scratch, only the seed remains the same.
-	let recovered_config = random_config(true);
-	let recovered_node = setup_node(&chain_source, recovered_config, Some(seed_bytes));
+	let mut recovered_config = random_config(true);
+	recovered_config.node_entropy = original_node_entropy;
+	let recovered_node = setup_node(&chain_source, recovered_config);
 
 	recovered_node.sync_wallets().unwrap();
 	assert_eq!(
@@ -716,7 +718,7 @@ async fn run_rbf_test(is_insert_block: bool) {
 	macro_rules! config_node {
 		($chain_source:expr, $anchor_channels:expr) => {{
 			let config_a = random_config($anchor_channels);
-			let node = setup_node(&$chain_source, config_a, None);
+			let node = setup_node(&$chain_source, config_a);
 			node
 		}};
 	}
@@ -835,7 +837,7 @@ async fn sign_verify_msg() {
 	let (_bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let config = random_config(true);
 	let chain_source = TestChainSource::Esplora(&electrsd);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	// Tests arbitrary message signing and later verification
 	let msg = "OK computer".as_bytes();
@@ -1309,7 +1311,6 @@ async fn async_payment() {
 	let node_sender = setup_node_for_async_payments(
 		&chain_source,
 		config_sender,
-		None,
 		Some(AsyncPaymentsRole::Client),
 	);
 
@@ -1319,7 +1320,6 @@ async fn async_payment() {
 	let node_sender_lsp = setup_node_for_async_payments(
 		&chain_source,
 		config_sender_lsp,
-		None,
 		Some(AsyncPaymentsRole::Server),
 	);
 
@@ -1330,7 +1330,6 @@ async fn async_payment() {
 	let node_receiver_lsp = setup_node_for_async_payments(
 		&chain_source,
 		config_receiver_lsp,
-		None,
 		Some(AsyncPaymentsRole::Server),
 	);
 
@@ -1339,7 +1338,7 @@ async fn async_payment() {
 	config_receiver.node_config.node_alias = None;
 	config_receiver.log_writer =
 		TestLogWriter::Custom(Arc::new(MultiNodeLogger::new("receiver    ".to_string())));
-	let node_receiver = setup_node(&chain_source, config_receiver, None);
+	let node_receiver = setup_node(&chain_source, config_receiver);
 
 	let address_sender = node_sender.onchain_payment().new_address().unwrap();
 	let address_sender_lsp = node_sender_lsp.onchain_payment().new_address().unwrap();
@@ -1463,8 +1462,8 @@ async fn test_node_announcement_propagation() {
 	config_b.node_config.listening_addresses = Some(node_b_listening_addresses.clone());
 	config_b.node_config.announcement_addresses = None;
 
-	let node_a = setup_node(&chain_source, config_a, None);
-	let node_b = setup_node(&chain_source, config_b, None);
+	let node_a = setup_node(&chain_source, config_a);
+	let node_b = setup_node(&chain_source, config_b);
 
 	let address_a = node_a.onchain_payment().new_address().unwrap();
 	let premine_amount_sat = 5_000_000;
@@ -1724,7 +1723,7 @@ async fn do_lsps2_client_service_integration(client_trusts_lsp: bool) {
 	setup_builder!(service_builder, service_config.node_config);
 	service_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
 	service_builder.set_liquidity_provider_lsps2(lsps2_service_config);
-	let service_node = service_builder.build().unwrap();
+	let service_node = service_builder.build(service_config.node_entropy.into()).unwrap();
 	service_node.start().unwrap();
 
 	let service_node_id = service_node.node_id();
@@ -1734,13 +1733,13 @@ async fn do_lsps2_client_service_integration(client_trusts_lsp: bool) {
 	setup_builder!(client_builder, client_config.node_config);
 	client_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
 	client_builder.set_liquidity_source_lsps2(service_node_id, service_addr, None);
-	let client_node = client_builder.build().unwrap();
+	let client_node = client_builder.build(client_config.node_entropy.into()).unwrap();
 	client_node.start().unwrap();
 
 	let payer_config = random_config(true);
 	setup_builder!(payer_builder, payer_config.node_config);
 	payer_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
-	let payer_node = payer_builder.build().unwrap();
+	let payer_node = payer_builder.build(payer_config.node_entropy.into()).unwrap();
 	payer_node.start().unwrap();
 
 	let service_addr = service_node.onchain_payment().new_address().unwrap();
@@ -1929,7 +1928,7 @@ async fn facade_logging() {
 	config.log_writer = TestLogWriter::LogFacade;
 
 	println!("== Facade logging starts ==");
-	let _node = setup_node(&chain_source, config, None);
+	let _node = setup_node(&chain_source, config);
 
 	assert!(!logger.retrieve_logs().is_empty());
 	for (_, entry) in logger.retrieve_logs().iter().enumerate() {
@@ -2008,10 +2007,8 @@ async fn spontaneous_send_with_custom_preimage() {
 async fn drop_in_async_context() {
 	let (_bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
-	let seed_bytes = vec![42u8; 64];
-
 	let config = random_config(true);
-	let node = setup_node(&chain_source, config, Some(seed_bytes));
+	let node = setup_node(&chain_source, config);
 	node.stop().unwrap();
 }
 
@@ -2043,7 +2040,7 @@ async fn lsps2_client_trusts_lsp() {
 	setup_builder!(service_builder, service_config.node_config);
 	service_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
 	service_builder.set_liquidity_provider_lsps2(lsps2_service_config);
-	let service_node = service_builder.build().unwrap();
+	let service_node = service_builder.build(service_config.node_entropy.into()).unwrap();
 	service_node.start().unwrap();
 	let service_node_id = service_node.node_id();
 	let service_addr = service_node.listening_addresses().unwrap().first().unwrap().clone();
@@ -2052,14 +2049,189 @@ async fn lsps2_client_trusts_lsp() {
 	setup_builder!(client_builder, client_config.node_config);
 	client_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
 	client_builder.set_liquidity_source_lsps2(service_node_id, service_addr.clone(), None);
-	let client_node = client_builder.build().unwrap();
+	let client_node = client_builder.build(client_config.node_entropy.into()).unwrap();
 	client_node.start().unwrap();
 	let client_node_id = client_node.node_id();
 
 	let payer_config = random_config(true);
 	setup_builder!(payer_builder, payer_config.node_config);
 	payer_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
-	let payer_node = payer_builder.build().unwrap();
+	let payer_node = payer_builder.build(payer_config.node_entropy.into()).unwrap();
+	payer_node.start().unwrap();
+
+	let service_addr_onchain = service_node.onchain_payment().new_address().unwrap();
+	let client_addr_onchain = client_node.onchain_payment().new_address().unwrap();
+	let payer_addr_onchain = payer_node.onchain_payment().new_address().unwrap();
+
+	let premine_amount_sat = 10_000_000;
+
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![service_addr_onchain, client_addr_onchain, payer_addr_onchain],
+		Amount::from_sat(premine_amount_sat),
+	)
+	.await;
+	service_node.sync_wallets().unwrap();
+	client_node.sync_wallets().unwrap();
+	payer_node.sync_wallets().unwrap();
+	println!("Premine complete!");
+	// Open a channel payer -> service that will allow paying the JIT invoice
+	open_channel(&payer_node, &service_node, 5_000_000, false, &electrsd).await;
+
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+	service_node.sync_wallets().unwrap();
+	payer_node.sync_wallets().unwrap();
+	expect_channel_ready_event!(payer_node, service_node.node_id());
+	expect_channel_ready_event!(service_node, payer_node.node_id());
+
+	let invoice_description =
+		Bolt11InvoiceDescription::Direct(Description::new(String::from("asdf")).unwrap());
+	let jit_amount_msat = 100_000_000;
+
+	println!("Generating JIT invoice!");
+	let manual_preimage = PaymentPreimage([42u8; 32]);
+	let manual_payment_hash: PaymentHash = manual_preimage.into();
+	let res = client_node
+		.bolt11_payment()
+		.receive_via_jit_channel_for_hash(
+			jit_amount_msat,
+			&invoice_description.into(),
+			1024,
+			None,
+			manual_payment_hash,
+		)
+		.unwrap();
+
+	// Have the payer_node pay the invoice, therby triggering channel open service_node -> client_node.
+	println!("Paying JIT invoice!");
+	let payment_id = payer_node.bolt11_payment().send(&res, None).unwrap();
+	println!("Payment ID: {:?}", payment_id);
+	let funding_txo = expect_channel_pending_event!(service_node, client_node.node_id());
+	expect_channel_ready_event!(service_node, client_node.node_id());
+	expect_channel_pending_event!(client_node, service_node.node_id());
+	expect_channel_ready_event!(client_node, service_node.node_id());
+
+	// Check the funding transaction hasn't been broadcasted yet and nodes aren't seeing it.
+	println!("Try to find funding tx... It won't be found yet, as the client has not claimed it.");
+	tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+	let mempool = bitcoind.client.get_raw_mempool().unwrap().into_model().unwrap();
+	let funding_tx_found = mempool.0.iter().any(|txid| *txid == funding_txo.txid);
+	assert!(!funding_tx_found, "Funding transaction should NOT be broadcast yet");
+
+	service_node.sync_wallets().unwrap();
+	client_node.sync_wallets().unwrap();
+	assert_eq!(
+		client_node
+			.list_channels()
+			.iter()
+			.find(|c| c.counterparty_node_id == service_node_id)
+			.unwrap()
+			.confirmations,
+		Some(0)
+	);
+	assert_eq!(
+		service_node
+			.list_channels()
+			.iter()
+			.find(|c| c.counterparty_node_id == client_node_id)
+			.unwrap()
+			.confirmations,
+		Some(0)
+	);
+
+	// Now claim the JIT payment, which should release the funding transaction
+	let service_fee_msat = (jit_amount_msat * channel_opening_fee_ppm as u64) / 1_000_000;
+	let expected_received_amount_msat = jit_amount_msat - service_fee_msat;
+
+	let _ = expect_payment_claimable_event!(
+		client_node,
+		payment_id,
+		manual_payment_hash,
+		expected_received_amount_msat
+	);
+
+	client_node
+		.bolt11_payment()
+		.claim_for_hash(manual_payment_hash, jit_amount_msat, manual_preimage)
+		.unwrap();
+
+	expect_payment_successful_event!(payer_node, Some(payment_id), None);
+
+	let _ = expect_payment_received_event!(client_node, expected_received_amount_msat).unwrap();
+
+	// Check the nodes pick up on the confirmed funding tx now.
+	wait_for_tx(&electrsd.client, funding_txo.txid).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+	service_node.sync_wallets().unwrap();
+	client_node.sync_wallets().unwrap();
+	assert_eq!(
+		client_node
+			.list_channels()
+			.iter()
+			.find(|c| c.counterparty_node_id == service_node_id)
+			.unwrap()
+			.confirmations,
+		Some(6)
+	);
+	assert_eq!(
+		service_node
+			.list_channels()
+			.iter()
+			.find(|c| c.counterparty_node_id == client_node_id)
+			.unwrap()
+			.confirmations,
+		Some(6)
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn lsps2_lsp_trusts_client_but_client_does_not_claim() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+
+	let esplora_url = format!("http://{}", electrsd.esplora_url.as_ref().unwrap());
+
+	let sync_config = EsploraSyncConfig { background_sync_config: None };
+
+	// Setup three nodes: service, client, and payer
+	let channel_opening_fee_ppm = 10_000;
+	let channel_over_provisioning_ppm = 100_000;
+	let lsps2_service_config = LSPS2ServiceConfig {
+		require_token: None,
+		advertise_service: false,
+		channel_opening_fee_ppm,
+		channel_over_provisioning_ppm,
+		max_payment_size_msat: 1_000_000_000,
+		min_payment_size_msat: 0,
+		min_channel_lifetime: 100,
+		min_channel_opening_fee_msat: 0,
+		max_client_to_self_delay: 1024,
+		client_trusts_lsp: false,
+	};
+
+	let service_config = random_config(true);
+	setup_builder!(service_builder, service_config.node_config);
+	service_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
+	service_builder.set_liquidity_provider_lsps2(lsps2_service_config);
+	let service_node = service_builder.build(service_config.node_entropy.into()).unwrap();
+	service_node.start().unwrap();
+
+	let service_node_id = service_node.node_id();
+	let service_addr = service_node.listening_addresses().unwrap().first().unwrap().clone();
+
+	let client_config = random_config(true);
+	setup_builder!(client_builder, client_config.node_config);
+	client_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
+	client_builder.set_liquidity_source_lsps2(service_node_id, service_addr.clone(), None);
+	let client_node = client_builder.build(client_config.node_entropy.into()).unwrap();
+	client_node.start().unwrap();
+
+	let client_node_id = client_node.node_id();
+
+	let payer_config = random_config(true);
+	setup_builder!(payer_builder, payer_config.node_config);
+	payer_builder.set_chain_source_esplora(esplora_url.clone(), Some(sync_config));
+	let payer_node = payer_builder.build(payer_config.node_entropy.into()).unwrap();
 	payer_node.start().unwrap();
 
 	let service_addr_onchain = service_node.onchain_payment().new_address().unwrap();
@@ -2147,7 +2319,7 @@ async fn onchain_transaction_events() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	let addr = node.onchain_payment().new_address().unwrap();
 	let premine_amount_sat = 100_000;
@@ -2217,7 +2389,7 @@ async fn onchain_transaction_events_electrum() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Electrum(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	let addr = node.onchain_payment().new_address().unwrap();
 	let premine_amount_sat = 50_000;
@@ -2266,7 +2438,7 @@ fn sync_completed_event() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	while node.next_event().is_some() {
 		node.event_handled().unwrap();
@@ -2308,7 +2480,7 @@ async fn balance_changed_event() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	node.sync_wallets().unwrap();
 
@@ -2537,7 +2709,7 @@ fn test_concurrent_event_emission() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 	let config = random_config(false);
-	let node = Arc::new(setup_node(&chain_source, config, None));
+	let node = Arc::new(setup_node(&chain_source, config));
 
 	while node.next_event().is_some() {
 		node.event_handled().unwrap();
@@ -2591,7 +2763,7 @@ async fn test_reorg_event_emission() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	// Get a new address and fund it
 	let addr = node.onchain_payment().new_address().unwrap();
@@ -2640,7 +2812,7 @@ async fn onchain_transaction_evicted_event() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	// Fund the node first
 	let addr = node.onchain_payment().new_address().unwrap();
@@ -2770,7 +2942,7 @@ async fn get_transaction_details() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	// Fund the node
 	let addr = node.onchain_payment().new_address().unwrap();
@@ -2853,7 +3025,7 @@ async fn get_address_balance_esplora() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	// Fund an address
 	let addr = node.onchain_payment().new_address().unwrap();
@@ -2893,7 +3065,7 @@ async fn get_address_balance_electrum() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Electrum(&electrsd);
 	let config = random_config(false);
-	let node = setup_node(&chain_source, config, None);
+	let node = setup_node(&chain_source, config);
 
 	// Fund an address
 	let addr = node.onchain_payment().new_address().unwrap();
