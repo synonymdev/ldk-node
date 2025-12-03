@@ -7683,7 +7683,8 @@ class Config:
     probing_liquidity_limit_multiplier: "int"
     anchor_channels_config: "typing.Optional[AnchorChannelsConfig]"
     route_parameters: "typing.Optional[RouteParametersConfig]"
-    def __init__(self, *, storage_dir_path: "str", network: "Network", listening_addresses: "typing.Optional[typing.List[SocketAddress]]", announcement_addresses: "typing.Optional[typing.List[SocketAddress]]", node_alias: "typing.Optional[NodeAlias]", trusted_peers_0conf: "typing.List[PublicKey]", probing_liquidity_limit_multiplier: "int", anchor_channels_config: "typing.Optional[AnchorChannelsConfig]", route_parameters: "typing.Optional[RouteParametersConfig]"):
+    include_untrusted_pending_in_spendable: "bool"
+    def __init__(self, *, storage_dir_path: "str", network: "Network", listening_addresses: "typing.Optional[typing.List[SocketAddress]]", announcement_addresses: "typing.Optional[typing.List[SocketAddress]]", node_alias: "typing.Optional[NodeAlias]", trusted_peers_0conf: "typing.List[PublicKey]", probing_liquidity_limit_multiplier: "int", anchor_channels_config: "typing.Optional[AnchorChannelsConfig]", route_parameters: "typing.Optional[RouteParametersConfig]", include_untrusted_pending_in_spendable: "bool"):
         self.storage_dir_path = storage_dir_path
         self.network = network
         self.listening_addresses = listening_addresses
@@ -7693,9 +7694,10 @@ class Config:
         self.probing_liquidity_limit_multiplier = probing_liquidity_limit_multiplier
         self.anchor_channels_config = anchor_channels_config
         self.route_parameters = route_parameters
+        self.include_untrusted_pending_in_spendable = include_untrusted_pending_in_spendable
 
     def __str__(self):
-        return "Config(storage_dir_path={}, network={}, listening_addresses={}, announcement_addresses={}, node_alias={}, trusted_peers_0conf={}, probing_liquidity_limit_multiplier={}, anchor_channels_config={}, route_parameters={})".format(self.storage_dir_path, self.network, self.listening_addresses, self.announcement_addresses, self.node_alias, self.trusted_peers_0conf, self.probing_liquidity_limit_multiplier, self.anchor_channels_config, self.route_parameters)
+        return "Config(storage_dir_path={}, network={}, listening_addresses={}, announcement_addresses={}, node_alias={}, trusted_peers_0conf={}, probing_liquidity_limit_multiplier={}, anchor_channels_config={}, route_parameters={}, include_untrusted_pending_in_spendable={})".format(self.storage_dir_path, self.network, self.listening_addresses, self.announcement_addresses, self.node_alias, self.trusted_peers_0conf, self.probing_liquidity_limit_multiplier, self.anchor_channels_config, self.route_parameters, self.include_untrusted_pending_in_spendable)
 
     def __eq__(self, other):
         if self.storage_dir_path != other.storage_dir_path:
@@ -7716,6 +7718,8 @@ class Config:
             return False
         if self.route_parameters != other.route_parameters:
             return False
+        if self.include_untrusted_pending_in_spendable != other.include_untrusted_pending_in_spendable:
+            return False
         return True
 
 class _UniffiConverterTypeConfig(_UniffiConverterRustBuffer):
@@ -7731,6 +7735,7 @@ class _UniffiConverterTypeConfig(_UniffiConverterRustBuffer):
             probing_liquidity_limit_multiplier=_UniffiConverterUInt64.read(buf),
             anchor_channels_config=_UniffiConverterOptionalTypeAnchorChannelsConfig.read(buf),
             route_parameters=_UniffiConverterOptionalTypeRouteParametersConfig.read(buf),
+            include_untrusted_pending_in_spendable=_UniffiConverterBool.read(buf),
         )
 
     @staticmethod
@@ -7744,6 +7749,7 @@ class _UniffiConverterTypeConfig(_UniffiConverterRustBuffer):
         _UniffiConverterUInt64.check_lower(value.probing_liquidity_limit_multiplier)
         _UniffiConverterOptionalTypeAnchorChannelsConfig.check_lower(value.anchor_channels_config)
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(value.route_parameters)
+        _UniffiConverterBool.check_lower(value.include_untrusted_pending_in_spendable)
 
     @staticmethod
     def write(value, buf):
@@ -7756,6 +7762,7 @@ class _UniffiConverterTypeConfig(_UniffiConverterRustBuffer):
         _UniffiConverterUInt64.write(value.probing_liquidity_limit_multiplier, buf)
         _UniffiConverterOptionalTypeAnchorChannelsConfig.write(value.anchor_channels_config, buf)
         _UniffiConverterOptionalTypeRouteParametersConfig.write(value.route_parameters, buf)
+        _UniffiConverterBool.write(value.include_untrusted_pending_in_spendable, buf)
 
 
 class CustomTlvRecord:

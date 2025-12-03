@@ -4901,10 +4901,11 @@ public struct Config {
     public var probingLiquidityLimitMultiplier: UInt64
     public var anchorChannelsConfig: AnchorChannelsConfig?
     public var routeParameters: RouteParametersConfig?
+    public var includeUntrustedPendingInSpendable: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(storageDirPath: String, network: Network, listeningAddresses: [SocketAddress]?, announcementAddresses: [SocketAddress]?, nodeAlias: NodeAlias?, trustedPeers0conf: [PublicKey], probingLiquidityLimitMultiplier: UInt64, anchorChannelsConfig: AnchorChannelsConfig?, routeParameters: RouteParametersConfig?) {
+    public init(storageDirPath: String, network: Network, listeningAddresses: [SocketAddress]?, announcementAddresses: [SocketAddress]?, nodeAlias: NodeAlias?, trustedPeers0conf: [PublicKey], probingLiquidityLimitMultiplier: UInt64, anchorChannelsConfig: AnchorChannelsConfig?, routeParameters: RouteParametersConfig?, includeUntrustedPendingInSpendable: Bool) {
         self.storageDirPath = storageDirPath
         self.network = network
         self.listeningAddresses = listeningAddresses
@@ -4914,6 +4915,7 @@ public struct Config {
         self.probingLiquidityLimitMultiplier = probingLiquidityLimitMultiplier
         self.anchorChannelsConfig = anchorChannelsConfig
         self.routeParameters = routeParameters
+        self.includeUntrustedPendingInSpendable = includeUntrustedPendingInSpendable
     }
 }
 
@@ -4946,6 +4948,9 @@ extension Config: Equatable, Hashable {
         if lhs.routeParameters != rhs.routeParameters {
             return false
         }
+        if lhs.includeUntrustedPendingInSpendable != rhs.includeUntrustedPendingInSpendable {
+            return false
+        }
         return true
     }
 
@@ -4959,6 +4964,7 @@ extension Config: Equatable, Hashable {
         hasher.combine(probingLiquidityLimitMultiplier)
         hasher.combine(anchorChannelsConfig)
         hasher.combine(routeParameters)
+        hasher.combine(includeUntrustedPendingInSpendable)
     }
 }
 
@@ -4977,7 +4983,8 @@ public struct FfiConverterTypeConfig: FfiConverterRustBuffer {
                 trustedPeers0conf: FfiConverterSequenceTypePublicKey.read(from: &buf),
                 probingLiquidityLimitMultiplier: FfiConverterUInt64.read(from: &buf),
                 anchorChannelsConfig: FfiConverterOptionTypeAnchorChannelsConfig.read(from: &buf),
-                routeParameters: FfiConverterOptionTypeRouteParametersConfig.read(from: &buf)
+                routeParameters: FfiConverterOptionTypeRouteParametersConfig.read(from: &buf),
+                includeUntrustedPendingInSpendable: FfiConverterBool.read(from: &buf)
             )
     }
 
@@ -4991,6 +4998,7 @@ public struct FfiConverterTypeConfig: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.probingLiquidityLimitMultiplier, into: &buf)
         FfiConverterOptionTypeAnchorChannelsConfig.write(value.anchorChannelsConfig, into: &buf)
         FfiConverterOptionTypeRouteParametersConfig.write(value.routeParameters, into: &buf)
+        FfiConverterBool.write(value.includeUntrustedPendingInSpendable, into: &buf)
     }
 }
 

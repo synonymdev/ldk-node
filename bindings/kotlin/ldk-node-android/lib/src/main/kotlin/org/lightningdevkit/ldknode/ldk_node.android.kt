@@ -9112,6 +9112,7 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
             FfiConverterULong.read(buf),
             FfiConverterOptionalTypeAnchorChannelsConfig.read(buf),
             FfiConverterOptionalTypeRouteParametersConfig.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -9124,7 +9125,8 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
             FfiConverterSequenceTypePublicKey.allocationSize(value.`trustedPeers0conf`) +
             FfiConverterULong.allocationSize(value.`probingLiquidityLimitMultiplier`) +
             FfiConverterOptionalTypeAnchorChannelsConfig.allocationSize(value.`anchorChannelsConfig`) +
-            FfiConverterOptionalTypeRouteParametersConfig.allocationSize(value.`routeParameters`)
+            FfiConverterOptionalTypeRouteParametersConfig.allocationSize(value.`routeParameters`) +
+            FfiConverterBoolean.allocationSize(value.`includeUntrustedPendingInSpendable`)
     )
 
     override fun write(value: Config, buf: ByteBuffer) {
@@ -9137,6 +9139,7 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
         FfiConverterULong.write(value.`probingLiquidityLimitMultiplier`, buf)
         FfiConverterOptionalTypeAnchorChannelsConfig.write(value.`anchorChannelsConfig`, buf)
         FfiConverterOptionalTypeRouteParametersConfig.write(value.`routeParameters`, buf)
+        FfiConverterBoolean.write(value.`includeUntrustedPendingInSpendable`, buf)
     }
 }
 
