@@ -3,8 +3,8 @@
 
 import PackageDescription
 
-let tag = "v0.6.2"
-let checksum = "dee28eb2bc019eeb61cc28ca5c19fdada465a6eb2b5169d2dbaa369f0c63ba03"
+let tag = "v0.7.0-rc.0"
+let checksum = "44f19e8fa77a1d86c56d3630be5dca52aae606bf3e10971fe59652022713c615"
 let url = "https://github.com/synonymdev/ldk-node/releases/download/\(tag)/LDKNodeFFI.xcframework.zip"
 
 let package = Package(
@@ -27,7 +27,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "LDKNodeFFI",
-            path: "./bindings/swift/LDKNodeFFI.xcframework"
+            url: url,
+            checksum: checksum
             )
     ]
 )

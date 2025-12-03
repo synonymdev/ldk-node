@@ -126,6 +126,7 @@ use config::{
 	NODE_ANN_BCAST_INTERVAL, PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
 };
 use connection::ConnectionManager;
+pub use entropy::WordCount;
 pub use error::Error as NodeError;
 use error::Error;
 pub use event::{Event, SyncType, TransactionDetails, TxInput, TxOutput};
@@ -162,7 +163,6 @@ use types::{
 	Broadcaster, BumpTransactionEventHandler, ChainMonitor, ChannelManager, Graph, KeysManager,
 	OnionMessenger, PaymentStore, PeerManager, Router, Scorer, Sweeper, Wallet,
 };
-pub use entropy::WordCount;
 pub use types::{
 	ChannelDetails, CustomTlvRecord, DynStore, PeerDetails, SpendableUtxo, SyncAndAsyncKVStore,
 	UserChannelId,
