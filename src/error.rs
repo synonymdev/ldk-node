@@ -39,6 +39,8 @@ pub enum Error {
 	InvalidCustomTlvs,
 	/// Sending a payment probe has failed.
 	ProbeSendingFailed,
+	/// A route could not be found for fee estimation.
+	RouteNotFound,
 	/// A channel could not be opened.
 	ChannelCreationFailed,
 	/// A channel could not be closed.
@@ -127,6 +129,16 @@ pub enum Error {
 	InvalidBlindedPaths,
 	/// Asynchronous payment services are disabled.
 	AsyncPaymentServicesDisabled,
+	/// Cannot RBF a channel funding transaction.
+	CannotRbfFundingTransaction,
+	/// The transaction was not found in the wallet.
+	TransactionNotFound,
+	/// The transaction is already confirmed and cannot be modified.
+	TransactionAlreadyConfirmed,
+	/// The transaction has no spendable outputs.
+	NoSpendableOutputs,
+	/// Coin selection failed to find suitable UTXOs.
+	CoinSelectionFailed,
 }
 
 impl fmt::Display for Error {
@@ -145,6 +157,7 @@ impl fmt::Display for Error {
 			Self::PaymentSendingFailed => write!(f, "Failed to send the given payment."),
 			Self::InvalidCustomTlvs => write!(f, "Failed to construct payment with custom TLVs."),
 			Self::ProbeSendingFailed => write!(f, "Failed to send the given payment probe."),
+			Self::RouteNotFound => write!(f, "Failed to find a route for fee estimation."),
 			Self::ChannelCreationFailed => write!(f, "Failed to create channel."),
 			Self::ChannelClosingFailed => write!(f, "Failed to close channel."),
 			Self::ChannelSplicingFailed => write!(f, "Failed to splice channel."),
@@ -205,6 +218,15 @@ impl fmt::Display for Error {
 			Self::AsyncPaymentServicesDisabled => {
 				write!(f, "Asynchronous payment services are disabled.")
 			},
+			Self::CannotRbfFundingTransaction => {
+				write!(f, "Cannot RBF a channel funding transaction.")
+			},
+			Self::TransactionNotFound => write!(f, "The transaction was not found in the wallet."),
+			Self::TransactionAlreadyConfirmed => {
+				write!(f, "The transaction is already confirmed and cannot be modified.")
+			},
+			Self::NoSpendableOutputs => write!(f, "The transaction has no spendable outputs."),
+			Self::CoinSelectionFailed => write!(f, "Coin selection failed to find suitable UTXOs."),
 		}
 	}
 }

@@ -3,7 +3,12 @@
 BINDINGS_DIR="bindings/kotlin"
 TARGET_DIR="target"
 PROJECT_DIR="ldk-node-android"
-UNIFFI_BINDGEN_BIN="cargo run --manifest-path bindings/uniffi-bindgen/Cargo.toml"
+ANDROID_LIB_DIR="$BINDINGS_DIR/$PROJECT_DIR"
+
+# Install gobley-uniffi-bindgen from fork with patched version
+echo "Installing gobley-uniffi-bindgen fork..."
+cargo install --git https://github.com/ovitrif/gobley.git --branch fix-v0.2.0 gobley-uniffi-bindgen --force
+UNIFFI_BINDGEN_BIN="gobley-uniffi-bindgen"
 
 export_variable_if_not_present() {
   local name="$1"
@@ -34,16 +39,47 @@ case "$OSTYPE" in
 
 PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/$LLVM_ARCH_PATH/bin:$PATH"
 
-rustup target add x86_64-linux-android aarch64-linux-android armv7-linux-androideabi
-RUSTFLAGS="-C link-args=-Wl,-z,max-page-size=16384,-z,common-page-size=16384" CFLAGS="-D__ANDROID_MIN_SDK_VERSION__=21" AR=llvm-ar CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="x86_64-linux-android21-clang" CC="x86_64-linux-android21-clang" cargo build --profile release-smaller --features uniffi --target x86_64-linux-android || exit 1
-RUSTFLAGS="-C link-args=-Wl,-z,max-page-size=16384,-z,common-page-size=16384" CFLAGS="-D__ANDROID_MIN_SDK_VERSION__=21" AR=llvm-ar CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="armv7a-linux-androideabi21-clang" CC="armv7a-linux-androideabi21-clang" cargo build --profile release-smaller --features uniffi --target armv7-linux-androideabi || exit 1
-RUSTFLAGS="-C link-args=-Wl,-z,max-page-size=16384,-z,common-page-size=16384" CFLAGS="-D__ANDROID_MIN_SDK_VERSION__=21" AR=llvm-ar CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="aarch64-linux-android21-clang" CC="aarch64-linux-android21-clang" cargo build --profile release-smaller --features uniffi --target aarch64-linux-android || exit 1
-$UNIFFI_BINDGEN_BIN generate bindings/ldk_node.udl --language kotlin --config uniffi-android.toml -o "$BINDINGS_DIR"/"$PROJECT_DIR"/lib/src/main/kotlin || exit 1
+# Install cargo-ndk if not already installed
+if ! command -v cargo-ndk &> /dev/null; then
+    echo "Installing cargo-ndk..."
+    cargo install cargo-ndk
+fi
 
-JNI_LIB_DIR="$BINDINGS_DIR"/"$PROJECT_DIR"/lib/src/main/jniLibs/ 
-mkdir -p $JNI_LIB_DIR/x86_64 || exit 1
-mkdir -p $JNI_LIB_DIR/armeabi-v7a || exit 1
-mkdir -p $JNI_LIB_DIR/arm64-v8a || exit 1
-cp $TARGET_DIR/x86_64-linux-android/release-smaller/libldk_node.so $JNI_LIB_DIR/x86_64/ || exit 1
-cp $TARGET_DIR/armv7-linux-androideabi/release-smaller/libldk_node.so $JNI_LIB_DIR/armeabi-v7a/ || exit 1
-cp $TARGET_DIR/aarch64-linux-android/release-smaller/libldk_node.so $JNI_LIB_DIR/arm64-v8a/ || exit 1
+# Add Android targets
+echo "Adding Android targets..."
+rustup target add x86_64-linux-android aarch64-linux-android armv7-linux-androideabi
+
+# Build for all Android architectures with page size optimizations
+echo "Building for Android architectures..."
+JNI_LIB_DIR="$ANDROID_LIB_DIR/lib/src/main/jniLibs"
+export RUSTFLAGS="-C link-args=-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
+export CFLAGS="-D__ANDROID_MIN_SDK_VERSION__=21"
+cargo ndk \
+    -o "$JNI_LIB_DIR" \
+    -t armeabi-v7a \
+    -t arm64-v8a \
+    -t x86_64 \
+    build --profile release-smaller --features uniffi || exit 1
+
+# Generate Kotlin bindings
+echo "Generating Kotlin bindings..."
+$UNIFFI_BINDGEN_BIN bindings/ldk_node.udl --lib-file $TARGET_DIR/aarch64-linux-android/release-smaller/libldk_node.so --config uniffi-android.toml -o "$ANDROID_LIB_DIR/lib/src" || exit 1
+
+# Fix incorrect kotlinx.coroutines.IO import (removed in newer kotlinx.coroutines versions)
+echo "Fixing Kotlin coroutines imports..."
+KOTLIN_BINDINGS_FILE="$ANDROID_LIB_DIR/lib/src/main/kotlin/org/lightningdevkit/ldknode/ldk_node.android.kt"
+sed -i.bak '/import kotlinx\.coroutines\.IO/d' "$KOTLIN_BINDINGS_FILE"
+rm -f "$KOTLIN_BINDINGS_FILE.bak"
+
+# Sync version from Cargo.toml
+echo "Syncing version from Cargo.toml..."
+CARGO_VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/' | head -1)
+sed -i.bak "s/^libraryVersion=.*/libraryVersion=$CARGO_VERSION/" "$ANDROID_LIB_DIR/gradle.properties"
+rm -f "$ANDROID_LIB_DIR/gradle.properties.bak"
+echo "Version synced: $CARGO_VERSION"
+
+# Verify android library publish
+echo "Testing android library publish to Maven Local..."
+$ANDROID_LIB_DIR/gradlew --project-dir "$ANDROID_LIB_DIR" clean publishToMavenLocal
+
+echo "Android build process completed successfully!"

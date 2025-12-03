@@ -4,11 +4,13 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:7.1.2")
+        classpath("com.android.tools.build:gradle:8.1.1")
     }
 }
 
 plugins {
+    kotlin("android") version "1.9.20" apply false
+    kotlin("plugin.serialization") version "1.9.20" apply false
 }
 
 // library version is defined in gradle.properties
