@@ -789,7 +789,8 @@ data class Config (
     val `trustedPeers0conf`: List<PublicKey>, 
     val `probingLiquidityLimitMultiplier`: kotlin.ULong, 
     val `anchorChannelsConfig`: AnchorChannelsConfig?, 
-    val `routeParameters`: RouteParametersConfig?
+    val `routeParameters`: RouteParametersConfig?, 
+    val `includeUntrustedPendingInSpendable`: kotlin.Boolean
 ) {
     companion object
 }
