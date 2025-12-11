@@ -1,3 +1,57 @@
+# 0.7.0-rc.1 (Synonym Fork)
+
+## Synonym Fork Additions
+- Added reactive event system for wallet monitoring without polling:
+  - **Onchain Transaction Events** (fully implemented):
+    - `OnchainTransactionReceived`: Emitted when a new unconfirmed transaction is
+      first detected in the mempool (instant notification for incoming payments!)
+    - `OnchainTransactionConfirmed`: Emitted when a transaction receives confirmations
+    - `OnchainTransactionReplaced`: Emitted when a transaction is replaced (via RBF or different transaction using a common input). Includes the replaced transaction ID and the list of conflicting replacement transaction IDs.
+    - `OnchainTransactionReorged`: Emitted when a previously confirmed transaction
+      becomes unconfirmed due to a blockchain reorg
+    - `OnchainTransactionEvicted`: Emitted when a transaction is evicted from the mempool
+  - **Sync Completion Event** (fully implemented):
+    - `SyncCompleted`: Emitted when onchain wallet sync finishes successfully
+  - **Balance Change Event** (fully implemented):
+    - `BalanceChanged`: Emitted when onchain or Lightning balances change, allowing
+      applications to update balance displays immediately without polling
+- Added `TransactionDetails`, `TxInput`, and `TxOutput` structs to provide comprehensive
+  transaction information in onchain events, including inputs and outputs. This enables
+  applications to analyze transaction data themselves to detect channel funding, closures,
+  and other transaction types.
+- Added `Node::get_transaction_details()` method to retrieve transaction details for any
+  transaction ID that exists in the wallet, returning `None` if the transaction is not found.
+- Added `Node::get_address_balance()` method to retrieve the current balance (in satoshis) for
+  any Bitcoin address. This queries the chain source (Esplora or Electrum) to get the balance.
+  Throws `InvalidAddress` if the address string cannot be parsed or doesn't match the node's
+  network. Returns 0 if the balance cannot be queried (e.g., chain source unavailable). Note: This
+  method is not available for BitcoindRpc chain source.
+- Added `SyncType` enum to distinguish between onchain wallet sync, Lightning
+  wallet sync, and fee rate cache updates.
+- Balance tracking is now persisted in `NodeMetrics` to detect changes across restarts.
+- Added RBF (Replace-By-Fee) support via `OnchainPayment::bump_fee_by_rbf()` to replace
+  unconfirmed transactions with higher fee versions. Prevents RBF of channel funding
+  transactions to protect channel integrity.
+- Added CPFP (Child-Pays-For-Parent) support via `OnchainPayment::accelerate_by_cpfp()` and
+  `OnchainPayment::calculate_cpfp_fee_rate()` to accelerate unconfirmed transactions by
+  creating child transactions with higher effective fee rates.
+- Added UTXO management APIs:
+  - `OnchainPayment::list_spendable_outputs()`: Lists all UTXOs safe to spend (excludes channel funding UTXOs).
+  - `OnchainPayment::select_utxos_with_algorithm()`: Selects UTXOs using configurable coin selection algorithms (BranchAndBound, LargestFirst, OldestFirst, SingleRandomDraw).
+  - `SpendableUtxo` struct and `CoinSelectionAlgorithm` enum for UTXO management.
+- Added fee estimation APIs:
+  - `OnchainPayment::calculate_total_fee()`: Calculates transaction fees before sending.
+  - `Bolt11Payment::estimate_routing_fees()`: Estimates Lightning routing fees before sending.
+  - `Bolt11Payment::estimate_routing_fees_using_amount()`: Estimates fees for amount-less invoices.
+- Enhanced `OnchainPayment::send_to_address()` to accept optional `utxos_to_spend` parameter
+  for manual UTXO selection.
+- Added `Config::include_untrusted_pending_in_spendable` option to control whether unconfirmed
+  funds from external sources are included in `spendable_onchain_balance_sats`. When set to `true`,
+  the spendable balance will include `untrusted_pending` UTXOs (unconfirmed transactions received
+  from external wallets). Default is `false` for safety, as spending unconfirmed external funds
+  carries risk of double-spending. This affects all balance reporting including `list_balances()`
+  and `BalanceChanged` events.
+
 # 0.7.0 - Dec. 3, 2025
 This seventh minor release introduces numerous new features, bug fixes, and API improvements. In particular, it adds support for channel Splicing, Async Payments, as well as sourcing chain data from a Bitcoin Core REST backend.
 

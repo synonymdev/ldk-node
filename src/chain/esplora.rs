@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bdk_esplora::EsploraAsyncExt;
+use bdk_wallet::event::WalletEvent;
 use bitcoin::{FeeRate, Network, Script, Transaction, Txid};
 use esplora_client::AsyncClient as EsploraAsyncClient;
 use lightning::chain::{Confirm, Filter, WatchedOutput};
@@ -38,10 +39,10 @@ pub(super) struct EsploraChainSource {
 	tx_sync: Arc<EsploraSyncClient<Arc<Logger>>>,
 	lightning_wallet_sync_status: Mutex<WalletSyncStatus>,
 	fee_estimator: Arc<OnchainFeeEstimator>,
-	kv_store: Arc<DynStore>,
-	config: Arc<Config>,
+	pub(super) kv_store: Arc<DynStore>,
+	pub(super) config: Arc<Config>,
 	logger: Arc<Logger>,
-	node_metrics: Arc<RwLock<NodeMetrics>>,
+	pub(super) node_metrics: Arc<RwLock<NodeMetrics>>,
 }
 
 impl EsploraChainSource {
@@ -79,28 +80,37 @@ impl EsploraChainSource {
 
 	pub(super) async fn sync_onchain_wallet(
 		&self, onchain_wallet: Arc<Wallet>,
-	) -> Result<(), Error> {
+	) -> Result<Vec<WalletEvent>, Error> {
 		let receiver_res = {
 			let mut status_lock = self.onchain_wallet_sync_status.lock().unwrap();
 			status_lock.register_or_subscribe_pending_sync()
 		};
 		if let Some(mut sync_receiver) = receiver_res {
 			log_info!(self.logger, "Sync in progress, skipping.");
-			return sync_receiver.recv().await.map_err(|e| {
-				debug_assert!(false, "Failed to receive wallet sync result: {:?}", e);
-				log_error!(self.logger, "Failed to receive wallet sync result: {:?}", e);
-				Error::WalletOperationFailed
-			})?;
+			match sync_receiver.recv().await {
+				Ok(Ok(())) => return Ok(Vec::new()),
+				Ok(Err(e)) => return Err(e),
+				Err(e) => {
+					debug_assert!(false, "Failed to receive wallet sync result: {:?}", e);
+					log_error!(self.logger, "Failed to receive wallet sync result: {:?}", e);
+					return Err(Error::WalletOperationFailed);
+				},
+			}
 		}
 
 		let res = self.sync_onchain_wallet_inner(onchain_wallet).await;
 
-		self.onchain_wallet_sync_status.lock().unwrap().propagate_result_to_subscribers(res);
+		self.onchain_wallet_sync_status
+			.lock()
+			.unwrap()
+			.propagate_result_to_subscribers(res.as_ref().map(|_| ()).map_err(|e| e.clone()));
 
 		res
 	}
 
-	async fn sync_onchain_wallet_inner(&self, onchain_wallet: Arc<Wallet>) -> Result<(), Error> {
+	async fn sync_onchain_wallet_inner(
+		&self, onchain_wallet: Arc<Wallet>,
+	) -> Result<Vec<WalletEvent>, Error> {
 		// If this is our first sync, do a full scan with the configured gap limit.
 		// Otherwise just do an incremental sync.
 		let incremental_sync =
@@ -112,7 +122,7 @@ impl EsploraChainSource {
 				match $sync_future.await {
 					Ok(res) => match res {
 						Ok(update) => match onchain_wallet.apply_update(update) {
-							Ok(()) => {
+							Ok(wallet_events) => {
 								log_info!(
 									self.logger,
 									"{} of on-chain wallet finished in {}ms.",
@@ -132,7 +142,7 @@ impl EsploraChainSource {
 											Arc::clone(&self.logger)
 										)?;
 									}
-									Ok(())
+									Ok(wallet_events)
 							},
 							Err(e) => Err(e),
 						},
@@ -431,6 +441,31 @@ impl EsploraChainSource {
 					);
 				},
 			}
+		}
+	}
+
+	pub(super) async fn get_address_balance(&self, address: &bitcoin::Address) -> Option<u64> {
+		let script = address.script_pubkey();
+		match self.esplora_client.scripthash_txs(&script, None).await {
+			Ok(txs) => {
+				let mut balance = 0i64;
+				for tx in txs {
+					for output in &tx.vout {
+						if output.scriptpubkey == script {
+							balance += output.value as i64;
+						}
+					}
+					for input in &tx.vin {
+						if let Some(prevout) = &input.prevout {
+							if prevout.scriptpubkey == script {
+								balance -= prevout.value as i64;
+							}
+						}
+					}
+				}
+				Some(balance.max(0) as u64)
+			},
+			Err(_) => None,
 		}
 	}
 }

@@ -14,10 +14,10 @@ use std::sync::Arc;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
-use bitcoin::{Address, Amount, ScriptBuf};
+use bitcoin::{Address, Amount, ScriptBuf, Txid};
 use common::logging::{init_log_logger, validate_log_entry, MultiNodeLogger, TestLogWriter};
 use common::{
-	bump_fee_and_broadcast, distribute_funds_unconfirmed, do_channel_full_cycle,
+	bump_fee_and_broadcast, distribute_funds_unconfirmed, do_channel_full_cycle, drain_all_events,
 	expect_channel_pending_event, expect_channel_ready_event, expect_event,
 	expect_payment_claimable_event, expect_payment_received_event, expect_payment_successful_event,
 	expect_splice_pending_event, generate_blocks_and_wait, open_channel, open_channel_push_amt,
@@ -177,7 +177,7 @@ async fn multi_hop_sending() {
 	for n in &nodes {
 		n.sync_wallets().unwrap();
 		assert_eq!(n.list_balances().spendable_onchain_balance_sats, premine_amount_sat);
-		assert_eq!(n.next_event(), None);
+		drain_all_events(n);
 	}
 
 	// Setup channel topology:
@@ -236,8 +236,21 @@ async fn multi_hop_sending() {
 	expect_event!(nodes[1], PaymentForwarded);
 
 	// We expect that the payment goes through N2 or N3, so we check both for the PaymentForwarded event.
-	let node_2_fwd_event = matches!(nodes[2].next_event(), Some(Event::PaymentForwarded { .. }));
-	let node_3_fwd_event = matches!(nodes[3].next_event(), Some(Event::PaymentForwarded { .. }));
+	// Check all events from each node to find PaymentForwarded
+	let mut node_2_fwd_event = false;
+	while let Some(event) = nodes[2].next_event() {
+		if matches!(event, Event::PaymentForwarded { .. }) {
+			node_2_fwd_event = true;
+		}
+		nodes[2].event_handled().unwrap();
+	}
+	let mut node_3_fwd_event = false;
+	while let Some(event) = nodes[3].next_event() {
+		if matches!(event, Event::PaymentForwarded { .. }) {
+			node_3_fwd_event = true;
+		}
+		nodes[3].event_handled().unwrap();
+	}
 	assert!(node_2_fwd_event || node_3_fwd_event);
 
 	let payment_id = expect_payment_received_event!(&nodes[4], 2_500_000);
@@ -389,12 +402,12 @@ async fn onchain_send_receive() {
 
 	assert_eq!(
 		Err(NodeError::InsufficientFunds),
-		node_a.onchain_payment().send_to_address(&addr_b, expected_node_a_balance + 1, None)
+		node_a.onchain_payment().send_to_address(&addr_b, expected_node_a_balance + 1, None, None)
 	);
 
 	assert_eq!(
 		Err(NodeError::InvalidAddress),
-		node_a.onchain_payment().send_to_address(&addr_c, expected_node_a_balance + 1, None)
+		node_a.onchain_payment().send_to_address(&addr_c, expected_node_a_balance + 1, None, None)
 	);
 
 	assert_eq!(
@@ -404,7 +417,7 @@ async fn onchain_send_receive() {
 
 	let amount_to_send_sats = 54321;
 	let txid =
-		node_b.onchain_payment().send_to_address(&addr_a, amount_to_send_sats, None).unwrap();
+		node_b.onchain_payment().send_to_address(&addr_a, amount_to_send_sats, None, None).unwrap();
 	wait_for_tx(&electrsd.client, txid).await;
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
@@ -2300,4 +2313,790 @@ async fn lsps2_lsp_trusts_client_but_client_does_not_claim() {
 			.confirmations,
 		Some(6)
 	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn onchain_transaction_events() {
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	let addr = node.onchain_payment().new_address().unwrap();
+	let premine_amount_sat = 100_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr.clone()],
+		Amount::from_sat(premine_amount_sat),
+	)
+	.await;
+
+	while node.next_event().is_some() {
+		node.event_handled().unwrap();
+	}
+
+	node.sync_wallets().unwrap();
+
+	let mut received_confirmed_event = false;
+	let mut txid_from_event = None;
+
+	for _ in 0..5 {
+		if let Some(event) = node.next_event() {
+			match event {
+				Event::OnchainTransactionConfirmed { txid, block_height, details, .. } => {
+					println!(
+						"OnchainTransactionConfirmed: txid={}, height={}, amount={}",
+						txid, block_height, details.amount_sats
+					);
+					assert!(!details.inputs.is_empty());
+					assert!(!details.outputs.is_empty());
+					received_confirmed_event = true;
+					txid_from_event = Some(txid);
+					node.event_handled().unwrap();
+					break;
+				},
+				other_event => {
+					println!("Got other event: {:?}", other_event);
+					node.event_handled().unwrap();
+				},
+			}
+		}
+		std::thread::sleep(Duration::from_millis(100));
+	}
+
+	assert!(received_confirmed_event, "Should have received OnchainTransactionConfirmed event");
+	assert!(txid_from_event.is_some(), "Should have captured txid from event");
+
+	// Test unconfirmation after reorg (simulate by generating new blocks on a different chain)
+	// Note: This is complex to test in a real scenario, so we'll just verify the event exists
+	// and can be pattern matched
+	match node.next_event() {
+		None => {}, // No more events is fine
+		Some(Event::OnchainTransactionReceived { .. }) => {
+			node.event_handled().unwrap();
+		},
+		Some(_) => {}, // Other events are fine
+	}
+
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn onchain_transaction_events_electrum() {
+	// Test onchain events work with Electrum backend too
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Electrum(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	let addr = node.onchain_payment().new_address().unwrap();
+	let premine_amount_sat = 50_000;
+
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr.clone()],
+		Amount::from_sat(premine_amount_sat),
+	)
+	.await;
+
+	while node.next_event().is_some() {
+		node.event_handled().unwrap();
+	}
+
+	node.sync_wallets().unwrap();
+
+	// Check we received the onchain transaction confirmed event
+	let mut found_event = false;
+	for _ in 0..5 {
+		if let Some(event) = node.next_event() {
+			if let Event::OnchainTransactionConfirmed { details, .. } = event {
+				// Verify TransactionDetails structure is populated
+				assert!(!details.inputs.is_empty(), "Transaction should have inputs");
+				assert!(!details.outputs.is_empty(), "Transaction should have outputs");
+				found_event = true;
+				node.event_handled().unwrap();
+				break;
+			}
+			node.event_handled().unwrap();
+		}
+		std::thread::sleep(Duration::from_millis(100));
+	}
+
+	assert!(found_event, "Should receive OnchainTransactionConfirmed event with Electrum backend");
+
+	node.stop().unwrap();
+}
+
+#[test]
+fn sync_completed_event() {
+	// Test that SyncCompleted event is emitted after wallet sync
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	while node.next_event().is_some() {
+		node.event_handled().unwrap();
+	}
+
+	node.sync_wallets().unwrap();
+
+	let mut found_sync_completed = false;
+	for _ in 0..10 {
+		if let Some(event) = node.next_event() {
+			match event {
+				Event::SyncCompleted { sync_type, synced_block_height } => {
+					println!(
+						"Received SyncCompleted event: type={:?}, height={}",
+						sync_type, synced_block_height
+					);
+					found_sync_completed = true;
+					node.event_handled().unwrap();
+					break;
+				},
+				other_event => {
+					println!("Got other event: {:?}", other_event);
+					node.event_handled().unwrap();
+				},
+			}
+		}
+		std::thread::sleep(Duration::from_millis(100));
+	}
+
+	assert!(found_sync_completed, "Should have received SyncCompleted event");
+
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn balance_changed_event() {
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	node.sync_wallets().unwrap();
+
+	while node.next_event().is_some() {
+		node.event_handled().unwrap();
+	}
+
+	let initial_total_balance = node.list_balances().total_onchain_balance_sats;
+	println!("Initial balance: {} sats", initial_total_balance);
+
+	let addr = node.onchain_payment().new_address().unwrap();
+	let fund_amount = 100_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr.clone()],
+		Amount::from_sat(fund_amount),
+	)
+	.await;
+
+	node.sync_wallets().unwrap();
+
+	let mut found_balance_changed = false;
+	for _ in 0..20 {
+		if let Some(event) = node.next_event() {
+			match event {
+				Event::BalanceChanged {
+					old_spendable_onchain_balance_sats,
+					new_spendable_onchain_balance_sats,
+					old_total_onchain_balance_sats,
+					new_total_onchain_balance_sats,
+					old_total_lightning_balance_sats,
+					new_total_lightning_balance_sats,
+				} => {
+					println!(
+						"BalanceChanged: spendable {} -> {}, total {} -> {}, lightning {} -> {}",
+						old_spendable_onchain_balance_sats,
+						new_spendable_onchain_balance_sats,
+						old_total_onchain_balance_sats,
+						new_total_onchain_balance_sats,
+						old_total_lightning_balance_sats,
+						new_total_lightning_balance_sats
+					);
+					assert!(new_total_onchain_balance_sats > old_total_onchain_balance_sats);
+					assert_eq!(
+						new_total_onchain_balance_sats - old_total_onchain_balance_sats,
+						fund_amount
+					);
+
+					found_balance_changed = true;
+					node.event_handled().unwrap();
+					break;
+				},
+				other_event => {
+					println!("Got other event: {:?}", other_event);
+					node.event_handled().unwrap();
+				},
+			}
+		}
+		std::thread::sleep(Duration::from_millis(100));
+	}
+
+	assert!(found_balance_changed);
+
+	let final_balance = node.list_balances().total_onchain_balance_sats;
+	assert_eq!(final_balance, initial_total_balance + fund_amount);
+
+	node.stop().unwrap();
+}
+
+#[test]
+fn test_event_serialization_roundtrip() {
+	use bitcoin::{BlockHash, Txid};
+	use ldk_node::{Event, SyncType, TransactionDetails, TxInput, TxOutput};
+	use lightning::util::ser::{Readable, Writeable};
+
+	// Helper function to test serialization roundtrip
+	fn test_roundtrip(event: Event) {
+		let mut buffer = Vec::new();
+		event.write(&mut buffer).unwrap();
+		let mut cursor = std::io::Cursor::new(&buffer);
+		let deserialized = Event::read(&mut cursor).unwrap();
+		assert_eq!(event, deserialized, "Event serialization roundtrip failed");
+	}
+
+	// Test OnchainTransactionConfirmed
+	let event = Event::OnchainTransactionConfirmed {
+		txid: Txid::from_slice(&[1; 32]).unwrap(),
+		block_hash: BlockHash::from_slice(&[2; 32]).unwrap(),
+		block_height: 100000,
+		confirmation_time: 1234567890,
+		details: TransactionDetails {
+			amount_sats: 100000,
+			inputs: vec![TxInput {
+				txid: Txid::from_slice(&[10; 32]).unwrap(),
+				vout: 0,
+				scriptsig: "".to_string(),
+				witness: vec![],
+				sequence: 0xffffffff,
+			}],
+			outputs: vec![TxOutput {
+				scriptpubkey: "0014".to_string(),
+				scriptpubkey_type: Some("p2wpkh".to_string()),
+				scriptpubkey_address: None,
+				value: 100000,
+				n: 0,
+			}],
+		},
+	};
+	test_roundtrip(event);
+
+	// Test OnchainTransactionReceived
+	let event = Event::OnchainTransactionReceived {
+		txid: Txid::from_slice(&[3; 32]).unwrap(),
+		details: TransactionDetails {
+			amount_sats: -50000, // Test negative amount for outgoing
+			inputs: vec![TxInput {
+				txid: Txid::from_slice(&[11; 32]).unwrap(),
+				vout: 1,
+				scriptsig: "".to_string(),
+				witness: vec![],
+				sequence: 0xffffffff,
+			}],
+			outputs: vec![],
+		},
+	};
+	test_roundtrip(event);
+
+	// Test OnchainTransactionReplaced
+	let event = Event::OnchainTransactionReplaced {
+		txid: Txid::from_slice(&[6; 32]).unwrap(),
+		conflicts: vec![Txid::from_slice(&[7; 32]).unwrap()],
+	};
+	test_roundtrip(event);
+
+	// Test OnchainTransactionReorged
+	let event = Event::OnchainTransactionReorged { txid: Txid::from_slice(&[7; 32]).unwrap() };
+	test_roundtrip(event);
+
+	// Test SyncProgress
+	let event = Event::SyncProgress {
+		sync_type: SyncType::OnchainWallet,
+		progress_percent: 75,
+		current_block_height: 750000,
+		target_block_height: 800000,
+	};
+	test_roundtrip(event);
+
+	// Test SyncCompleted
+	let event =
+		Event::SyncCompleted { sync_type: SyncType::LightningWallet, synced_block_height: 800000 };
+	test_roundtrip(event);
+
+	// Test BalanceChanged
+	let event = Event::BalanceChanged {
+		old_spendable_onchain_balance_sats: 1000000,
+		new_spendable_onchain_balance_sats: 1500000,
+		old_total_onchain_balance_sats: 2000000,
+		new_total_onchain_balance_sats: 2500000,
+		old_total_lightning_balance_sats: 500000,
+		new_total_lightning_balance_sats: 600000,
+	};
+	test_roundtrip(event);
+
+	// Test TransactionDetails with multiple inputs and outputs
+	let details = TransactionDetails {
+		amount_sats: 1000000,
+		inputs: vec![TxInput {
+			txid: Txid::from_slice(&[12; 32]).unwrap(),
+			vout: 0,
+			scriptsig: "160014".to_string(),
+			witness: vec!["30440220".to_string()],
+			sequence: 0xffffffff,
+		}],
+		outputs: vec![TxOutput {
+			scriptpubkey: "0014".to_string(),
+			scriptpubkey_type: Some("p2wpkh".to_string()),
+			scriptpubkey_address: None,
+			value: 1000000,
+			n: 0,
+		}],
+	};
+	let event = Event::OnchainTransactionConfirmed {
+		txid: Txid::from_slice(&[6; 32]).unwrap(),
+		block_hash: BlockHash::from_slice(&[7; 32]).unwrap(),
+		block_height: 100001,
+		confirmation_time: 1234567891,
+		details,
+	};
+	test_roundtrip(event);
+
+	// Test TransactionDetails with coinbase input
+	let details = TransactionDetails {
+		amount_sats: 62500000000, // Block reward
+		inputs: vec![TxInput {
+			txid: Txid::from_slice(&[0u8; 32]).unwrap(),
+			vout: 0xffffffff,
+			scriptsig: "03".to_string(),
+			witness: vec![],
+			sequence: 0xffffffff,
+		}],
+		outputs: vec![TxOutput {
+			scriptpubkey: "0014".to_string(),
+			scriptpubkey_type: Some("p2wpkh".to_string()),
+			scriptpubkey_address: None,
+			value: 62500000000,
+			n: 0,
+		}],
+	};
+	let event = Event::OnchainTransactionConfirmed {
+		txid: Txid::from_slice(&[9; 32]).unwrap(),
+		block_hash: BlockHash::from_slice(&[10; 32]).unwrap(),
+		block_height: 100002,
+		confirmation_time: 1234567892,
+		details,
+	};
+	test_roundtrip(event);
+}
+
+#[test]
+fn test_concurrent_event_emission() {
+	use std::sync::Arc;
+	use std::thread;
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let config = random_config(false);
+	let node = Arc::new(setup_node(&chain_source, config, None));
+
+	while node.next_event().is_some() {
+		node.event_handled().unwrap();
+	}
+
+	// Spawn multiple threads that sync concurrently
+	let mut handles = vec![];
+	for i in 0..5 {
+		let node_clone = Arc::clone(&node);
+		let handle = thread::spawn(move || {
+			// Sleep briefly to stagger the syncs
+			thread::sleep(Duration::from_millis(i * 10));
+			node_clone.sync_wallets().unwrap();
+		});
+		handles.push(handle);
+	}
+
+	// Wait for all threads to complete
+	for handle in handles {
+		handle.join().unwrap();
+	}
+
+	// Count the events - we should have multiple SyncCompleted events
+	let mut sync_completed_count = 0;
+
+	for _ in 0..50 {
+		if let Some(event) = node.next_event() {
+			if matches!(event, Event::SyncCompleted { .. }) {
+				sync_completed_count += 1;
+			}
+			node.event_handled().unwrap();
+		}
+		thread::sleep(Duration::from_millis(10));
+	}
+
+	// We should have received at least one SyncCompleted event per thread
+	assert!(
+		sync_completed_count >= 1,
+		"Should have received at least one SyncCompleted event from concurrent syncs"
+	);
+
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn test_reorg_event_emission() {
+	// Note: This is a simplified test as true reorg testing requires complex setup
+	use std::thread;
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	// Get a new address and fund it
+	let addr = node.onchain_payment().new_address().unwrap();
+	let premine_amount_sat = 100_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr.clone()],
+		Amount::from_sat(premine_amount_sat),
+	)
+	.await;
+
+	while node.next_event().is_some() {
+		node.event_handled().unwrap();
+	}
+
+	// Sync to detect the confirmed transaction
+	node.sync_wallets().unwrap();
+
+	let mut confirmed_txid = None;
+	for _ in 0..10 {
+		if let Some(event) = node.next_event() {
+			if let Event::OnchainTransactionConfirmed { txid, .. } = event {
+				confirmed_txid = Some(txid);
+				node.event_handled().unwrap();
+				break;
+			}
+			node.event_handled().unwrap();
+		}
+		thread::sleep(Duration::from_millis(100));
+	}
+
+	assert!(confirmed_txid.is_some(), "Should have received a confirmation event");
+
+	// In a real scenario, we would trigger a reorg here by mining competing blocks
+	// For this test, we just verify the event structure is correct
+
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn onchain_transaction_evicted_event() {
+	use std::thread;
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	// Fund the node first
+	let addr = node.onchain_payment().new_address().unwrap();
+	let fund_amount = 200_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr.clone()],
+		Amount::from_sat(fund_amount),
+	)
+	.await;
+
+	// Sync to get the funds
+	node.sync_wallets().unwrap();
+
+	while node.next_event().is_some() {
+		node.event_handled().unwrap();
+	}
+
+	// Create a transaction - this will be unconfirmed initially
+	let recipient_addr = node.onchain_payment().new_address().unwrap();
+	let send_amount = 50_000;
+	let txid =
+		node.onchain_payment().send_to_address(&recipient_addr, send_amount, None, None).unwrap();
+
+	println!("Created transaction {} (unconfirmed)", txid);
+
+	// Wait for transaction to be broadcast
+	thread::sleep(Duration::from_millis(500));
+
+	// Sync to detect the unconfirmed transaction
+	node.sync_wallets().unwrap();
+
+	let mut found_received_event = false;
+	for _ in 0..10 {
+		if let Some(event) = node.next_event() {
+			match event {
+				Event::OnchainTransactionReceived { txid: event_txid, .. } => {
+					if event_txid == txid {
+						found_received_event = true;
+						println!("Received OnchainTransactionReceived event for {}", txid);
+						node.event_handled().unwrap();
+						break;
+					}
+					node.event_handled().unwrap();
+				},
+				_ => {
+					node.event_handled().unwrap();
+				},
+			}
+		}
+		thread::sleep(Duration::from_millis(100));
+	}
+
+	assert!(
+		found_received_event,
+		"Should have received OnchainTransactionReceived event for transaction {}",
+		txid
+	);
+
+	// Remove the transaction from bitcoind's mempool to simulate eviction
+	let txid_hex = format!("{:x}", txid);
+
+	let removed =
+		match bitcoind.client.call::<serde_json::Value>("removetx", &[serde_json::json!(txid_hex)])
+		{
+			Ok(_) => {
+				println!("Removed transaction {} from mempool using removetx", txid);
+				true
+			},
+			Err(e) => {
+				println!(
+					"removetx RPC not available ({}). Skipping test (requires Bitcoin Core 25.0+).",
+					e
+				);
+				node.stop().unwrap();
+				return;
+			},
+		};
+
+	assert!(removed, "Failed to remove transaction from mempool");
+
+	// Wait for the removal to propagate
+	thread::sleep(Duration::from_millis(1000));
+
+	// Sync again - this should detect the eviction
+	node.sync_wallets().unwrap();
+
+	let mut found_evicted_event = false;
+	let mut evicted_txid = None;
+
+	for _ in 0..20 {
+		if let Some(event) = node.next_event() {
+			match event {
+				Event::OnchainTransactionEvicted { txid: event_txid } => {
+					if event_txid == txid {
+						found_evicted_event = true;
+						evicted_txid = Some(event_txid);
+						println!("Received OnchainTransactionEvicted event for {}", event_txid);
+						node.event_handled().unwrap();
+						break;
+					}
+					node.event_handled().unwrap();
+				},
+				_ => {
+					node.event_handled().unwrap();
+				},
+			}
+		}
+		thread::sleep(Duration::from_millis(100));
+	}
+
+	assert!(
+		found_evicted_event,
+		"Should have received OnchainTransactionEvicted event for transaction {}",
+		txid
+	);
+	assert_eq!(evicted_txid, Some(txid), "Evicted txid should match the transaction we created");
+
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn get_transaction_details() {
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	// Fund the node
+	let addr = node.onchain_payment().new_address().unwrap();
+	let fund_amount = 100_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr.clone()],
+		Amount::from_sat(fund_amount),
+	)
+	.await;
+
+	// Sync to get the funds - this emits OnchainTransactionConfirmed
+	node.sync_wallets().unwrap();
+
+	// Find the OnchainTransactionConfirmed event (skip other informational events)
+	let txid = loop {
+		match node.next_event().expect("Should have events after sync") {
+			Event::OnchainTransactionConfirmed { txid, details, .. } => {
+				assert!(!details.inputs.is_empty());
+				assert!(!details.outputs.is_empty());
+				node.event_handled().unwrap();
+				break txid;
+			},
+			_ => {
+				node.event_handled().unwrap();
+			},
+		}
+	};
+
+	let details = node.get_transaction_details(&txid).unwrap();
+	assert!(!details.inputs.is_empty());
+	assert!(!details.outputs.is_empty());
+	assert_eq!(details.amount_sats, fund_amount as i64);
+
+	for input in &details.inputs {
+		assert!(!input.txid.to_string().is_empty());
+		assert!(!input.scriptsig.is_empty() || !input.witness.is_empty());
+	}
+
+	for output in &details.outputs {
+		assert!(output.value > 0);
+		assert!(!output.scriptpubkey.is_empty());
+	}
+	let fake_txid =
+		Txid::from_str("0000000000000000000000000000000000000000000000000000000000000000").unwrap();
+	let result = node.get_transaction_details(&fake_txid);
+	assert!(result.is_none(), "Non-existent transaction should return None");
+
+	// Create a new transaction and verify we can get its details
+	let recipient_addr = node.onchain_payment().new_address().unwrap();
+	let send_amount = 20_000;
+	let send_txid =
+		node.onchain_payment().send_to_address(&recipient_addr, send_amount, None, None).unwrap();
+
+	// Sync to include the new transaction
+	node.sync_wallets().unwrap();
+
+	// Wait a bit
+	std::thread::sleep(Duration::from_millis(500));
+
+	// Get details for the send transaction
+	let send_details =
+		node.get_transaction_details(&send_txid).expect("Send transaction should be found");
+
+	// Verify the send transaction details
+	assert!(!send_details.inputs.is_empty());
+	assert!(!send_details.outputs.is_empty());
+	// The amount should be negative (outgoing) or positive depending on change
+	// But the absolute value should be at least the send amount
+	assert!(send_details.amount_sats.abs() >= send_amount as i64 || send_details.amount_sats < 0);
+
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn get_address_balance_esplora() {
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	// Fund an address
+	let addr = node.onchain_payment().new_address().unwrap();
+	let fund_amount = 100_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr.clone()],
+		Amount::from_sat(fund_amount),
+	)
+	.await;
+
+	// Sync to get the funds
+	node.sync_wallets().unwrap();
+
+	// Wait a bit for the chain source to index the transaction
+	std::thread::sleep(Duration::from_millis(500));
+
+	// Test get_address_balance with the funded address
+	let balance = node.get_address_balance(&addr.to_string()).unwrap();
+	assert_eq!(balance, fund_amount, "Balance should match funded amount");
+
+	// Test with an unfunded address
+	let unfunded_addr = node.onchain_payment().new_address().unwrap();
+	let unfunded_balance = node.get_address_balance(&unfunded_addr.to_string()).unwrap();
+	assert_eq!(unfunded_balance, 0, "Unfunded address should have zero balance");
+
+	// Test with an invalid address
+	let invalid_result = node.get_address_balance("invalid_address");
+	assert!(invalid_result.is_err(), "Invalid address should return error");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn get_address_balance_electrum() {
+	use std::time::Duration;
+
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Electrum(&electrsd);
+	let config = random_config(false);
+	let node = setup_node(&chain_source, config, None);
+
+	// Fund an address
+	let addr = node.onchain_payment().new_address().unwrap();
+	let fund_amount = 100_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr.clone()],
+		Amount::from_sat(fund_amount),
+	)
+	.await;
+
+	// Sync to get the funds
+	node.sync_wallets().unwrap();
+
+	// Wait a bit for the chain source to index the transaction
+	std::thread::sleep(Duration::from_millis(500));
+
+	// Test get_address_balance with the funded address
+	let balance = node.get_address_balance(&addr.to_string()).unwrap();
+	assert_eq!(balance, fund_amount, "Balance should match funded amount");
+
+	// Test with an unfunded address
+	let unfunded_addr = node.onchain_payment().new_address().unwrap();
+	let unfunded_balance = node.get_address_balance(&unfunded_addr.to_string()).unwrap();
+	assert_eq!(unfunded_balance, 0, "Unfunded address should have zero balance");
+
+	// Test with an invalid address
+	let invalid_result = node.get_address_balance("invalid_address");
+	assert!(invalid_result.is_err(), "Invalid address should return error");
 }

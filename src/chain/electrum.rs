@@ -14,6 +14,7 @@ use bdk_chain::bdk_core::spk_client::{
 	SyncRequest as BdkSyncRequest, SyncResponse as BdkSyncResponse,
 };
 use bdk_electrum::BdkElectrumClient;
+use bdk_wallet::event::WalletEvent;
 use bdk_wallet::{KeychainKind as BdkKeyChainKind, Update as BdkUpdate};
 use bitcoin::{FeeRate, Network, Script, ScriptBuf, Transaction, Txid};
 use electrum_client::{
@@ -50,10 +51,10 @@ pub(super) struct ElectrumChainSource {
 	onchain_wallet_sync_status: Mutex<WalletSyncStatus>,
 	lightning_wallet_sync_status: Mutex<WalletSyncStatus>,
 	fee_estimator: Arc<OnchainFeeEstimator>,
-	kv_store: Arc<DynStore>,
-	config: Arc<Config>,
+	pub(super) kv_store: Arc<DynStore>,
+	pub(super) config: Arc<Config>,
 	logger: Arc<Logger>,
-	node_metrics: Arc<RwLock<NodeMetrics>>,
+	pub(super) node_metrics: Arc<RwLock<NodeMetrics>>,
 }
 
 impl ElectrumChainSource {
@@ -94,28 +95,37 @@ impl ElectrumChainSource {
 
 	pub(crate) async fn sync_onchain_wallet(
 		&self, onchain_wallet: Arc<Wallet>,
-	) -> Result<(), Error> {
+	) -> Result<Vec<WalletEvent>, Error> {
 		let receiver_res = {
 			let mut status_lock = self.onchain_wallet_sync_status.lock().unwrap();
 			status_lock.register_or_subscribe_pending_sync()
 		};
 		if let Some(mut sync_receiver) = receiver_res {
 			log_info!(self.logger, "Sync in progress, skipping.");
-			return sync_receiver.recv().await.map_err(|e| {
-				debug_assert!(false, "Failed to receive wallet sync result: {:?}", e);
-				log_error!(self.logger, "Failed to receive wallet sync result: {:?}", e);
-				Error::WalletOperationFailed
-			})?;
+			match sync_receiver.recv().await {
+				Ok(Ok(())) => return Ok(Vec::new()),
+				Ok(Err(e)) => return Err(e),
+				Err(e) => {
+					debug_assert!(false, "Failed to receive wallet sync result: {:?}", e);
+					log_error!(self.logger, "Failed to receive wallet sync result: {:?}", e);
+					return Err(Error::WalletOperationFailed);
+				},
+			}
 		}
 
 		let res = self.sync_onchain_wallet_inner(onchain_wallet).await;
 
-		self.onchain_wallet_sync_status.lock().unwrap().propagate_result_to_subscribers(res);
+		self.onchain_wallet_sync_status
+			.lock()
+			.unwrap()
+			.propagate_result_to_subscribers(res.as_ref().map(|_| ()).map_err(|e| e.clone()));
 
 		res
 	}
 
-	async fn sync_onchain_wallet_inner(&self, onchain_wallet: Arc<Wallet>) -> Result<(), Error> {
+	async fn sync_onchain_wallet_inner(
+		&self, onchain_wallet: Arc<Wallet>,
+	) -> Result<Vec<WalletEvent>, Error> {
 		let electrum_client: Arc<ElectrumRuntimeClient> =
 			if let Some(client) = self.electrum_runtime_status.read().unwrap().client().as_ref() {
 				Arc::clone(client)
@@ -134,7 +144,7 @@ impl ElectrumChainSource {
 		let apply_wallet_update =
 			|update_res: Result<BdkUpdate, Error>, now: Instant| match update_res {
 				Ok(update) => match onchain_wallet.apply_update(update) {
-					Ok(()) => {
+					Ok(wallet_events) => {
 						log_info!(
 							self.logger,
 							"{} of on-chain wallet finished in {}ms.",
@@ -153,7 +163,7 @@ impl ElectrumChainSource {
 								Arc::clone(&self.logger),
 							)?;
 						}
-						Ok(())
+						Ok(wallet_events)
 					},
 					Err(e) => Err(e),
 				},
@@ -307,6 +317,16 @@ impl ElectrumChainSource {
 			electrum_client.broadcast(tx).await;
 		}
 	}
+
+	pub(super) async fn get_address_balance(&self, address: &bitcoin::Address) -> Option<u64> {
+		let electrum_client: Arc<ElectrumRuntimeClient> =
+			if let Some(client) = self.electrum_runtime_status.read().unwrap().client().as_ref() {
+				Arc::clone(client)
+			} else {
+				return None;
+			};
+		electrum_client.get_address_balance(address).await
+	}
 }
 
 impl Filter for ElectrumChainSource {
@@ -426,6 +446,31 @@ impl ElectrumRuntimeClient {
 			})?,
 		);
 		Ok(Self { electrum_client, bdk_electrum_client, tx_sync, runtime, config, logger })
+	}
+
+	pub(crate) async fn get_address_balance(&self, address: &bitcoin::Address) -> Option<u64> {
+		use electrum_client::ElectrumApi;
+
+		let script = address.script_pubkey();
+		let electrum_client = Arc::clone(&self.electrum_client);
+		let script_clone = script.clone();
+		let balance_result = self
+			.runtime
+			.spawn_blocking(move || {
+				electrum_client
+					.script_get_balance(&script_clone)
+					.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)))
+			})
+			.await;
+
+		match balance_result {
+			Ok(Ok(balance)) => {
+				let confirmed = balance.confirmed.max(0) as u64;
+				let unconfirmed = balance.unconfirmed.max(0) as u64;
+				Some(confirmed + unconfirmed)
+			},
+			_ => None,
+		}
 	}
 
 	async fn sync_confirmables(

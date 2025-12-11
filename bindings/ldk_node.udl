@@ -13,6 +13,7 @@ dictionary Config {
 	u64 probing_liquidity_limit_multiplier;
 	AnchorChannelsConfig? anchor_channels_config;
 	RouteParametersConfig? route_parameters;
+	boolean include_untrusted_pending_in_spendable;
 };
 
 dictionary AnchorChannelsConfig {
@@ -139,6 +140,9 @@ interface Node {
 	Bolt12Payment bolt12_payment();
 	SpontaneousPayment spontaneous_payment();
 	OnchainPayment onchain_payment();
+	TransactionDetails? get_transaction_details([ByRef]Txid txid);
+	[Throws=NodeError]
+	u64 get_address_balance([ByRef]string address_str);
 	UnifiedQrPayment unified_qr_payment();
 	LSPS1Liquidity lsps1_liquidity();
 	[Throws=NodeError]
@@ -210,6 +214,10 @@ interface Bolt11Payment {
 	Bolt11Invoice receive_variable_amount_via_jit_channel([ByRef]Bolt11InvoiceDescription description, u32 expiry_secs, u64? max_proportional_lsp_fee_limit_ppm_msat);
 	[Throws=NodeError]
 	Bolt11Invoice receive_variable_amount_via_jit_channel_for_hash([ByRef]Bolt11InvoiceDescription description, u32 expiry_secs, u64? max_proportional_lsp_fee_limit_ppm_msat, PaymentHash payment_hash);
+	[Throws=NodeError]
+	u64 estimate_routing_fees([ByRef]Bolt11Invoice invoice);
+	[Throws=NodeError]
+	u64 estimate_routing_fees_using_amount([ByRef]Bolt11Invoice invoice, u64 amount_msat);
 };
 
 interface Bolt12Payment {
@@ -247,12 +255,36 @@ interface SpontaneousPayment {
 };
 
 interface OnchainPayment {
-	[Throws=NodeError]
-	Address new_address();
-	[Throws=NodeError]
-	Txid send_to_address([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate);
-	[Throws=NodeError]
-	Txid send_all_to_address([ByRef]Address address, boolean retain_reserve, FeeRate? fee_rate);
+    [Throws=NodeError]
+    Address new_address();
+    [Throws=NodeError]
+    sequence<SpendableUtxo> list_spendable_outputs();
+    [Throws=NodeError]
+    sequence<SpendableUtxo> select_utxos_with_algorithm(u64 target_amount_sats, FeeRate? fee_rate, CoinSelectionAlgorithm algorithm, sequence<SpendableUtxo>? utxos);
+    [Throws=NodeError]
+    Txid send_to_address([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate, sequence<SpendableUtxo>? utxos_to_spend);
+    [Throws=NodeError]
+    Txid send_all_to_address([ByRef]Address address, boolean retain_reserve, FeeRate? fee_rate);
+    [Throws=NodeError]
+    Txid bump_fee_by_rbf([ByRef]Txid txid, FeeRate fee_rate);
+    [Throws=NodeError]
+    Txid accelerate_by_cpfp([ByRef]Txid txid, FeeRate? fee_rate, Address? destination_address);
+    [Throws=NodeError]
+    FeeRate calculate_cpfp_fee_rate([ByRef]Txid parent_txid, boolean urgent);
+    [Throws=NodeError]
+    u64 calculate_total_fee([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate, sequence<SpendableUtxo>? utxos_to_spend);
+};
+
+enum CoinSelectionAlgorithm {
+	"BranchAndBound",
+	"LargestFirst",
+	"OldestFirst",
+	"SingleRandomDraw",
+};
+
+dictionary SpendableUtxo {
+    OutPoint outpoint;
+    u64 value_sats;
 };
 
 interface FeeRate {
@@ -292,6 +324,7 @@ enum NodeError {
 	"PaymentSendingFailed",
 	"InvalidCustomTlvs",
 	"ProbeSendingFailed",
+	"RouteNotFound",
 	"ChannelCreationFailed",
 	"ChannelClosingFailed",
 	"ChannelSplicingFailed",
@@ -336,6 +369,11 @@ enum NodeError {
 	"LiquidityFeeTooHigh",
 	"InvalidBlindedPaths",
 	"AsyncPaymentServicesDisabled",
+	"CannotRbfFundingTransaction",
+    "TransactionNotFound",
+    "TransactionAlreadyConfirmed",
+    "NoSpendableOutputs",
+    "CoinSelectionFailed",
 };
 
 dictionary NodeStatus {
@@ -389,6 +427,34 @@ enum VssHeaderProviderError {
 	"InternalError",
 };
 
+dictionary TxInput {
+	Txid txid;
+	u32 vout;
+	string scriptsig;
+	sequence<string> witness;
+	u32 sequence;
+};
+
+dictionary TxOutput {
+	string scriptpubkey;
+	string? scriptpubkey_type;
+	string? scriptpubkey_address;
+	i64 value;
+	u32 n;
+};
+
+dictionary TransactionDetails {
+	i64 amount_sats;
+	sequence<TxInput> inputs;
+	sequence<TxOutput> outputs;
+};
+
+enum SyncType {
+	"OnchainWallet",
+	"LightningWallet",
+	"FeeRateCache",
+};
+
 [Enum]
 interface Event {
 	PaymentSuccessful(PaymentId? payment_id, PaymentHash payment_hash, PaymentPreimage? payment_preimage, u64? fee_paid_msat);
@@ -402,6 +468,14 @@ interface Event {
 	ChannelClosed(ChannelId channel_id, UserChannelId user_channel_id, PublicKey? counterparty_node_id, ClosureReason? reason);
 	SplicePending(ChannelId channel_id, UserChannelId user_channel_id, PublicKey counterparty_node_id, OutPoint new_funding_txo);
 	SpliceFailed(ChannelId channel_id, UserChannelId user_channel_id, PublicKey counterparty_node_id, OutPoint? abandoned_funding_txo);
+	OnchainTransactionConfirmed(Txid txid, BlockHash block_hash, u32 block_height, u64 confirmation_time, TransactionDetails details);
+	OnchainTransactionReceived(Txid txid, TransactionDetails details);
+	OnchainTransactionReplaced(Txid txid, sequence<Txid> conflicts);
+	OnchainTransactionReorged(Txid txid);
+	OnchainTransactionEvicted(Txid txid);
+	SyncProgress(SyncType sync_type, u8 progress_percent, u32 current_block_height, u32 target_block_height);
+	SyncCompleted(SyncType sync_type, u32 synced_block_height);
+	BalanceChanged(u64 old_spendable_onchain_balance_sats, u64 new_spendable_onchain_balance_sats, u64 old_total_onchain_balance_sats, u64 new_total_onchain_balance_sats, u64 old_total_lightning_balance_sats, u64 new_total_lightning_balance_sats);
 };
 
 enum PaymentFailureReason {
@@ -439,8 +513,8 @@ interface ClosureReason {
 [Enum]
 interface PaymentKind {
 	Onchain(Txid txid, ConfirmationStatus status);
-	Bolt11(PaymentHash hash, PaymentPreimage? preimage, PaymentSecret? secret);
-	Bolt11Jit(PaymentHash hash, PaymentPreimage? preimage, PaymentSecret? secret, u64? counterparty_skimmed_fee_msat, LSPFeeLimits lsp_fee_limits);
+	Bolt11(PaymentHash hash, PaymentPreimage? preimage, PaymentSecret? secret, string? description, string? bolt11);
+	Bolt11Jit(PaymentHash hash, PaymentPreimage? preimage, PaymentSecret? secret, u64? counterparty_skimmed_fee_msat, LSPFeeLimits lsp_fee_limits, string? description, string? bolt11);
 	Bolt12Offer(PaymentHash? hash, PaymentPreimage? preimage, PaymentSecret? secret, OfferId offer_id, UntrustedString? payer_note, u64? quantity);
 	Bolt12Refund(PaymentHash? hash, PaymentPreimage? preimage, PaymentSecret? secret, UntrustedString? payer_note, u64? quantity);
 	Spontaneous(PaymentHash hash, PaymentPreimage? preimage);

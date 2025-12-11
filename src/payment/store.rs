@@ -136,9 +136,11 @@ impl Readable for PaymentDetails {
 						secret,
 						counterparty_skimmed_fee_msat,
 						lsp_fee_limits,
+						description: None,
+						bolt11: None,
 					}
 				} else {
-					PaymentKind::Bolt11 { hash, preimage, secret }
+					PaymentKind::Bolt11 { hash, preimage, secret, description: None, bolt11: None }
 				}
 			} else {
 				PaymentKind::Spontaneous { hash, preimage }
@@ -362,6 +364,10 @@ pub enum PaymentKind {
 		preimage: Option<PaymentPreimage>,
 		/// The secret used by the payment.
 		secret: Option<PaymentSecret>,
+		/// The description from the BOLT 11 invoice.
+		description: Option<String>,
+		/// The BOLT 11 invoice string.
+		bolt11: Option<String>,
 	},
 	/// A [BOLT 11] payment intended to open an [bLIP-52 / LSPS 2] just-in-time channel.
 	///
@@ -389,6 +395,10 @@ pub enum PaymentKind {
 		///
 		/// [`LdkChannelConfig::accept_underpaying_htlcs`]: lightning::util::config::ChannelConfig::accept_underpaying_htlcs
 		lsp_fee_limits: LSPFeeLimits,
+		/// The description from the BOLT 11 invoice.
+		description: Option<String>,
+		/// The BOLT 11 invoice string.
+		bolt11: Option<String>,
 	},
 	/// A [BOLT 12] 'offer' payment, i.e., a payment for an [`Offer`].
 	///
@@ -454,6 +464,8 @@ impl_writeable_tlv_based_enum!(PaymentKind,
 		(0, hash, required),
 		(2, preimage, option),
 		(4, secret, option),
+		(6, description, option),
+		(8, bolt11, option),
 	},
 	(4, Bolt11Jit) => {
 		(0, hash, required),
@@ -461,6 +473,8 @@ impl_writeable_tlv_based_enum!(PaymentKind,
 		(2, preimage, option),
 		(4, secret, option),
 		(6, lsp_fee_limits, required),
+		(8, description, option),
+		(10, bolt11, option),
 	},
 	(6, Bolt12Offer) => {
 		(0, hash, option),
@@ -669,7 +683,13 @@ mod tests {
 			);
 
 			match bolt11_decoded.kind {
-				PaymentKind::Bolt11 { hash: h, preimage: p, secret: s } => {
+				PaymentKind::Bolt11 {
+					hash: h,
+					preimage: p,
+					secret: s,
+					description: _,
+					bolt11: _,
+				} => {
 					assert_eq!(hash, h);
 					assert_eq!(preimage, p);
 					assert_eq!(secret, s);
@@ -718,6 +738,8 @@ mod tests {
 					secret: s,
 					counterparty_skimmed_fee_msat: c,
 					lsp_fee_limits: l,
+					description: _,
+					bolt11: _,
 				} => {
 					assert_eq!(hash, h);
 					assert_eq!(preimage, p);

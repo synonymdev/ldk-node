@@ -104,6 +104,7 @@ mod wallet;
 
 use std::default::Default;
 use std::net::ToSocketAddrs;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -123,7 +124,7 @@ use config::{
 use connection::ConnectionManager;
 pub use error::Error as NodeError;
 use error::Error;
-pub use event::Event;
+pub use event::{Event, SyncType, TransactionDetails, TxInput, TxOutput};
 use event::{EventHandler, EventQueue};
 use fee_estimator::{ConfirmationTarget, FeeEstimator, OnchainFeeEstimator};
 #[cfg(feature = "uniffi")]
@@ -159,9 +160,10 @@ use types::{
 	OnionMessenger, PaymentStore, PeerManager, Router, Scorer, Sweeper, Wallet,
 };
 pub use types::{
-	ChannelDetails, CustomTlvRecord, DynStore, PeerDetails, SyncAndAsyncKVStore, UserChannelId,
-	WordCount,
+	ChannelDetails, CustomTlvRecord, DynStore, PeerDetails, SpendableUtxo, SyncAndAsyncKVStore,
+	UserChannelId, WordCount,
 };
+pub use wallet::CoinSelectionAlgorithm;
 pub use {
 	bip39, bitcoin, lightning, lightning_invoice, lightning_liquidity, lightning_types, tokio,
 	vss_client,
@@ -240,6 +242,9 @@ impl Node {
 		// Block to ensure we update our fee rate cache once on startup
 		let chain_source = Arc::clone(&self.chain_source);
 		self.runtime.block_on(async move { chain_source.update_fee_rate_estimates().await })?;
+
+		// Set event queue for onchain event emission
+		self.chain_source.set_event_queue(Arc::clone(&self.event_queue));
 
 		// Spawn background task continuously syncing onchain, lightning, and fee rate cache.
 		let stop_sync_receiver = self.stop_sender.subscribe();
@@ -841,6 +846,7 @@ impl Node {
 			Arc::clone(&self.config),
 			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
+			Arc::clone(&self._router),
 		)
 	}
 
@@ -859,6 +865,7 @@ impl Node {
 			Arc::clone(&self.config),
 			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
+			Arc::clone(&self._router),
 		))
 	}
 
@@ -940,6 +947,40 @@ impl Node {
 			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		))
+	}
+
+	/// Returns transaction details for the given transaction ID, if available in the wallet.
+	///
+	/// Returns `None` if the transaction is not found in the wallet.
+	pub fn get_transaction_details(&self, txid: &bitcoin::Txid) -> Option<TransactionDetails> {
+		let (amount_sats, inputs, outputs) = self.wallet.get_tx_details(txid)?;
+		Some(TransactionDetails { amount_sats, inputs, outputs })
+	}
+
+	/// Gets the current balance (in satoshis) for a Bitcoin address.
+	///
+	/// This queries the chain source (Esplora or Electrum) to get the current balance of the
+	/// address. Returns 0 if the balance cannot be queried (e.g., chain source unavailable).
+	///
+	/// Returns [`Error::InvalidAddress`] if the address string cannot be parsed or doesn't match
+	/// the node's network.
+	pub fn get_address_balance(&self, address_str: &str) -> Result<u64, Error> {
+		use std::str::FromStr;
+
+		use bitcoin::address::NetworkUnchecked;
+
+		let addr_unchecked = bitcoin::Address::<NetworkUnchecked>::from_str(address_str)
+			.map_err(|_| Error::InvalidAddress)?;
+
+		let addr_checked = addr_unchecked
+			.require_network(self.config.network)
+			.map_err(|_| Error::InvalidAddress)?;
+
+		let chain_source = Arc::clone(&self.chain_source);
+		let balance = self
+			.runtime
+			.block_on(async move { chain_source.get_address_balance(&addr_checked).await });
+		Ok(balance.unwrap_or(0))
 	}
 
 	/// Returns a payment handler allowing to create [BIP 21] URIs with an on-chain, [BOLT 11],
@@ -1445,9 +1486,15 @@ impl Node {
 			if chain_source.is_transaction_based() {
 				chain_source.update_fee_rate_estimates().await?;
 				chain_source
-					.sync_lightning_wallet(sync_cman, sync_cmon, Arc::clone(&sync_sweeper))
+					.sync_lightning_wallet(
+						Arc::clone(&sync_cman),
+						Arc::clone(&sync_cmon),
+						Arc::clone(&sync_sweeper),
+					)
 					.await?;
-				chain_source.sync_onchain_wallet(sync_wallet).await?;
+				chain_source
+					.sync_onchain_wallet(sync_wallet, Some(sync_cman), Some(sync_cmon))
+					.await?;
 			} else {
 				chain_source.update_fee_rate_estimates().await?;
 				chain_source
@@ -1790,6 +1837,9 @@ pub(crate) struct NodeMetrics {
 	latest_pathfinding_scores_sync_timestamp: Option<u64>,
 	latest_node_announcement_broadcast_timestamp: Option<u64>,
 	latest_channel_monitor_archival_height: Option<u32>,
+	last_known_spendable_onchain_balance_sats: Option<u64>,
+	last_known_total_onchain_balance_sats: Option<u64>,
+	last_known_total_lightning_balance_sats: Option<u64>,
 }
 
 impl Default for NodeMetrics {
@@ -1802,6 +1852,9 @@ impl Default for NodeMetrics {
 			latest_pathfinding_scores_sync_timestamp: None,
 			latest_node_announcement_broadcast_timestamp: None,
 			latest_channel_monitor_archival_height: None,
+			last_known_spendable_onchain_balance_sats: None,
+			last_known_total_onchain_balance_sats: None,
+			last_known_total_lightning_balance_sats: None,
 		}
 	}
 }
@@ -1814,7 +1867,75 @@ impl_writeable_tlv_based!(NodeMetrics, {
 	(6, latest_rgs_snapshot_timestamp, option),
 	(8, latest_node_announcement_broadcast_timestamp, option),
 	(10, latest_channel_monitor_archival_height, option),
+	(12, last_known_spendable_onchain_balance_sats, option),
+	(14, last_known_total_onchain_balance_sats, option),
+	(16, last_known_total_lightning_balance_sats, option),
 });
+
+// Check if balances have changed and emit BalanceChanged event if so.
+pub(crate) async fn check_and_emit_balance_update<L: Deref>(
+	node_metrics: &Arc<RwLock<NodeMetrics>>, balance_details: &BalanceDetails,
+	event_queue: &EventQueue<L>, kv_store: &Arc<DynStore>, logger: &Arc<Logger>,
+) -> Result<(), Error>
+where
+	L::Target: LdkLogger,
+{
+	let new_spendable_onchain = balance_details.spendable_onchain_balance_sats;
+	let new_total_onchain = balance_details.total_onchain_balance_sats;
+	let new_total_lightning = balance_details.total_lightning_balance_sats;
+
+	// Read old values while holding the lock (drop before await)
+	let (old_spendable_onchain, old_total_onchain, old_total_lightning) = {
+		let locked_metrics = node_metrics.read().unwrap();
+		(
+			locked_metrics.last_known_spendable_onchain_balance_sats.unwrap_or(0),
+			locked_metrics.last_known_total_onchain_balance_sats.unwrap_or(0),
+			locked_metrics.last_known_total_lightning_balance_sats.unwrap_or(0),
+		)
+	};
+
+	// Check if any balance has changed
+	if old_spendable_onchain != new_spendable_onchain
+		|| old_total_onchain != new_total_onchain
+		|| old_total_lightning != new_total_lightning
+	{
+		log_info!(
+			logger,
+			"Balance changed: onchain {} -> {} (spendable), {} -> {} (total), lightning {} -> {}",
+			old_spendable_onchain,
+			new_spendable_onchain,
+			old_total_onchain,
+			new_total_onchain,
+			old_total_lightning,
+			new_total_lightning
+		);
+
+		// Emit balance changed event (lock dropped before await)
+		event_queue
+			.add_event(Event::BalanceChanged {
+				old_spendable_onchain_balance_sats: old_spendable_onchain,
+				new_spendable_onchain_balance_sats: new_spendable_onchain,
+				old_total_onchain_balance_sats: old_total_onchain,
+				new_total_onchain_balance_sats: new_total_onchain,
+				old_total_lightning_balance_sats: old_total_lightning,
+				new_total_lightning_balance_sats: new_total_lightning,
+			})
+			.await?;
+
+		// Update tracked balances (reacquire lock after await)
+		{
+			let mut locked_metrics = node_metrics.write().unwrap();
+			locked_metrics.last_known_spendable_onchain_balance_sats = Some(new_spendable_onchain);
+			locked_metrics.last_known_total_onchain_balance_sats = Some(new_total_onchain);
+			locked_metrics.last_known_total_lightning_balance_sats = Some(new_total_lightning);
+
+			// Persist updated metrics
+			write_node_metrics(&*locked_metrics, Arc::clone(kv_store), Arc::clone(logger))?;
+		}
+	}
+
+	Ok(())
+}
 
 pub(crate) fn total_anchor_channels_reserve_sats(
 	channel_manager: &ChannelManager, config: &Config,
