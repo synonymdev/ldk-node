@@ -1,6 +1,8 @@
 namespace ldk_node {
 	Mnemonic generate_entropy_mnemonic(WordCount? word_count);
 	Config default_config();
+	[Throws=BuildError]
+	sequence<u8> derive_node_secret_from_mnemonic(string mnemonic, string? passphrase);
 };
 
 dictionary Config {
