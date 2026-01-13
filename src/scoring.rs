@@ -6,9 +6,7 @@ use lightning::routing::scoring::ChannelLiquidities;
 use lightning::util::ser::Readable;
 use lightning::{log_error, log_info, log_trace};
 
-use crate::config::{
-	EXTERNAL_PATHFINDING_SCORES_SYNC_INTERVAL, EXTERNAL_PATHFINDING_SCORES_SYNC_TIMEOUT_SECS,
-};
+use crate::config::{RuntimeSyncIntervals, EXTERNAL_PATHFINDING_SCORES_SYNC_TIMEOUT_SECS};
 use crate::io::utils::write_external_pathfinding_scores_to_cache;
 use crate::logger::LdkLogger;
 use crate::runtime::Runtime;
@@ -19,6 +17,7 @@ use crate::{write_node_metrics, DynStore, Logger, NodeMetrics, Scorer};
 pub fn setup_background_pathfinding_scores_sync(
 	url: String, scorer: Arc<Mutex<crate::types::Scorer>>, node_metrics: Arc<RwLock<NodeMetrics>>,
 	kv_store: Arc<DynStore>, logger: Arc<Logger>, runtime: Arc<Runtime>,
+	runtime_sync_intervals: Arc<RwLock<RuntimeSyncIntervals>>,
 	mut stop_receiver: tokio::sync::watch::Receiver<()>,
 ) {
 	log_info!(logger, "External scores background syncing enabled from {}", url);
@@ -26,8 +25,9 @@ pub fn setup_background_pathfinding_scores_sync(
 	let logger = Arc::clone(&logger);
 
 	runtime.spawn_background_processor_task(async move {
-		let mut interval = tokio::time::interval(EXTERNAL_PATHFINDING_SCORES_SYNC_INTERVAL);
 		loop {
+			let interval_secs =
+				runtime_sync_intervals.read().unwrap().pathfinding_scores_sync_interval_secs;
 			tokio::select! {
 				_ = stop_receiver.changed() => {
 					log_trace!(
@@ -36,7 +36,7 @@ pub fn setup_background_pathfinding_scores_sync(
 					);
 					return;
 				}
-				_ = interval.tick() => {
+				_ = tokio::time::sleep(Duration::from_secs(interval_secs)) => {
 					log_trace!(
 						logger,
 						"Background sync of external scores started.",

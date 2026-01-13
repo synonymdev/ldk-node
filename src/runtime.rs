@@ -18,6 +18,7 @@ use crate::logger::{log_debug, log_error, log_trace, LdkLogger, Logger};
 
 pub(crate) struct Runtime {
 	mode: RuntimeMode,
+	is_single_threaded: bool,
 	background_tasks: Mutex<JoinSet<()>>,
 	cancellable_background_tasks: Mutex<JoinSet<()>>,
 	background_processor_task: Mutex<Option<JoinHandle<()>>>,
@@ -25,11 +26,15 @@ pub(crate) struct Runtime {
 }
 
 impl Runtime {
-	pub fn new(logger: Arc<Logger>) -> Result<Self, std::io::Error> {
+	pub fn new(logger: Arc<Logger>, use_single_threaded: bool) -> Result<Self, std::io::Error> {
 		let mode = match tokio::runtime::Handle::try_current() {
 			Ok(handle) => RuntimeMode::Handle(handle),
 			Err(_) => {
-				let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+				let rt = if use_single_threaded {
+					tokio::runtime::Builder::new_current_thread().enable_all().build()?
+				} else {
+					tokio::runtime::Builder::new_multi_thread().enable_all().build()?
+				};
 				RuntimeMode::Owned(rt)
 			},
 		};
@@ -39,6 +44,7 @@ impl Runtime {
 
 		Ok(Self {
 			mode,
+			is_single_threaded: use_single_threaded,
 			background_tasks,
 			cancellable_background_tasks,
 			background_processor_task,
@@ -54,6 +60,7 @@ impl Runtime {
 
 		Self {
 			mode,
+			is_single_threaded: false,
 			background_tasks,
 			cancellable_background_tasks,
 			background_processor_task,
@@ -116,7 +123,12 @@ impl Runtime {
 		// Since it seems to make a difference to `tokio` (see
 		// https://docs.rs/tokio/latest/tokio/time/fn.timeout.html#panics) we make sure the futures
 		// are always put in an `async` / `.await` closure.
-		tokio::task::block_in_place(move || handle.block_on(async { future.await }))
+		if self.is_single_threaded {
+			// block_in_place panics on current_thread runtime, so use block_on directly
+			handle.block_on(async { future.await })
+		} else {
+			tokio::task::block_in_place(move || handle.block_on(async { future.await }))
+		}
 	}
 
 	pub fn abort_cancellable_background_tasks(&self) {

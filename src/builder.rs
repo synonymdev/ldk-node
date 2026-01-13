@@ -46,8 +46,9 @@ use vss_client::headers::{FixedHeaders, LnurlAuthToJwtProvider, VssHeaderProvide
 use crate::chain::ChainSource;
 use crate::config::{
 	default_user_config, may_announce_channel, AnnounceError, AsyncPaymentsRole,
-	BitcoindRestClientConfig, Config, ElectrumSyncConfig, EsploraSyncConfig,
-	DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME, DEFAULT_LOG_LEVEL, WALLET_KEYS_SEED_LEN,
+	BitcoindRestClientConfig, Config, ElectrumSyncConfig, EsploraSyncConfig, LightModeConfig,
+	RuntimeSyncIntervals, DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME, DEFAULT_LOG_LEVEL,
+	WALLET_KEYS_SEED_LEN,
 };
 use crate::connection::ConnectionManager;
 use crate::event::EventQueue;
@@ -269,6 +270,7 @@ pub struct NodeBuilder {
 	runtime_handle: Option<tokio::runtime::Handle>,
 	pathfinding_scores_sync_config: Option<PathfindingScoresSyncConfig>,
 	channel_data_migration: Option<ChannelDataMigration>,
+	light_mode_config: Option<LightModeConfig>,
 }
 
 impl NodeBuilder {
@@ -288,6 +290,7 @@ impl NodeBuilder {
 		let runtime_handle = None;
 		let pathfinding_scores_sync_config = None;
 		let channel_data_migration = None;
+		let light_mode_config = None;
 		Self {
 			config,
 			entropy_source_config,
@@ -299,6 +302,7 @@ impl NodeBuilder {
 			async_payments_role: None,
 			pathfinding_scores_sync_config,
 			channel_data_migration,
+			light_mode_config,
 		}
 	}
 
@@ -612,6 +616,36 @@ impl NodeBuilder {
 		Ok(self)
 	}
 
+	/// Enables light mode with the given configuration.
+	///
+	/// Light mode reduces memory footprint and resource usage for constrained environments
+	/// like iOS Notification Service Extensions and Android background services.
+	///
+	/// See [`LightModeConfig`] for available options.
+	pub fn set_light_mode(&mut self, config: LightModeConfig) -> &mut Self {
+		self.light_mode_config = Some(config);
+		self
+	}
+
+	/// Enables light mode with minimal configuration for iOS Notification Service Extensions.
+	///
+	/// This is equivalent to calling `set_light_mode(LightModeConfig::minimal())` and enables:
+	///
+	/// - Single-threaded Tokio runtime
+	/// - All optional background tasks disabled
+	///
+	/// The node can still:
+	/// - Start and stop
+	/// - Connect to peers manually
+	/// - Send and receive payments
+	/// - Sync wallets manually via [`Node::sync_wallets`]
+	///
+	/// See [`LightModeConfig::minimal`] for the full configuration.
+	pub fn set_light_mode_minimal(&mut self) -> &mut Self {
+		self.light_mode_config = Some(LightModeConfig::minimal());
+		self
+	}
+
 	/// Builds a [`Node`] instance with a [`SqliteStore`] backend and according to the options
 	/// previously configured.
 	pub fn build(&self) -> Result<Node, BuildError> {
@@ -738,7 +772,9 @@ impl NodeBuilder {
 		let runtime = if let Some(handle) = self.runtime_handle.as_ref() {
 			Arc::new(Runtime::with_handle(handle.clone(), Arc::clone(&logger)))
 		} else {
-			Arc::new(Runtime::new(Arc::clone(&logger)).map_err(|e| {
+			let use_single_threaded =
+				self.light_mode_config.as_ref().map_or(false, |c| c.single_threaded_runtime);
+			Arc::new(Runtime::new(Arc::clone(&logger), use_single_threaded).map_err(|e| {
 				log_error!(logger, "Failed to setup tokio runtime: {}", e);
 				BuildError::RuntimeSetupFailed
 			})?)
@@ -774,6 +810,7 @@ impl NodeBuilder {
 			self.liquidity_source_config.as_ref(),
 			self.pathfinding_scores_sync_config.as_ref(),
 			self.async_payments_role,
+			self.light_mode_config.clone(),
 			seed_bytes,
 			runtime,
 			logger,
@@ -789,7 +826,9 @@ impl NodeBuilder {
 		let runtime = if let Some(handle) = self.runtime_handle.as_ref() {
 			Arc::new(Runtime::with_handle(handle.clone(), Arc::clone(&logger)))
 		} else {
-			Arc::new(Runtime::new(Arc::clone(&logger)).map_err(|e| {
+			let use_single_threaded =
+				self.light_mode_config.as_ref().map_or(false, |c| c.single_threaded_runtime);
+			Arc::new(Runtime::new(Arc::clone(&logger), use_single_threaded).map_err(|e| {
 				log_error!(logger, "Failed to setup tokio runtime: {}", e);
 				BuildError::RuntimeSetupFailed
 			})?)
@@ -809,6 +848,7 @@ impl NodeBuilder {
 			self.liquidity_source_config.as_ref(),
 			self.pathfinding_scores_sync_config.as_ref(),
 			self.async_payments_role,
+			self.light_mode_config.clone(),
 			seed_bytes,
 			runtime,
 			logger,
@@ -1088,6 +1128,34 @@ impl ArcedNodeBuilder {
 		self.inner.write().unwrap().set_async_payments_role(role).map(|_| ())
 	}
 
+	/// Enables light mode with the given configuration.
+	///
+	/// Light mode reduces memory footprint and resource usage for constrained environments
+	/// like iOS Notification Service Extensions and Android background services.
+	///
+	/// See [`LightModeConfig`] for available options.
+	pub fn set_light_mode(&self, config: LightModeConfig) {
+		self.inner.write().unwrap().set_light_mode(config);
+	}
+
+	/// Enables light mode with minimal configuration for iOS Notification Service Extensions.
+	///
+	/// This is equivalent to calling `set_light_mode(LightModeConfig::minimal())` and enables:
+	///
+	/// - Single-threaded Tokio runtime
+	/// - All optional background tasks disabled
+	///
+	/// The node can still:
+	/// - Start and stop
+	/// - Connect to peers manually
+	/// - Send and receive payments
+	/// - Sync wallets manually via [`Node::sync_wallets`]
+	///
+	/// See [`LightModeConfig::minimal`] for the full configuration.
+	pub fn set_light_mode_minimal(&self) {
+		self.inner.write().unwrap().set_light_mode_minimal();
+	}
+
 	/// Builds a [`Node`] instance with a [`SqliteStore`] backend and according to the options
 	/// previously configured.
 	pub fn build(&self) -> Result<Arc<Node>, BuildError> {
@@ -1183,8 +1251,8 @@ fn build_with_store_internal(
 	gossip_source_config: Option<&GossipSourceConfig>,
 	liquidity_source_config: Option<&LiquiditySourceConfig>,
 	pathfinding_scores_sync_config: Option<&PathfindingScoresSyncConfig>,
-	async_payments_role: Option<AsyncPaymentsRole>, seed_bytes: [u8; 64], runtime: Arc<Runtime>,
-	logger: Arc<Logger>, kv_store: Arc<DynStore>,
+	async_payments_role: Option<AsyncPaymentsRole>, light_mode_config: Option<LightModeConfig>,
+	seed_bytes: [u8; 64], runtime: Arc<Runtime>, logger: Arc<Logger>, kv_store: Arc<DynStore>,
 	channel_data_migration: Option<&ChannelDataMigration>,
 ) -> Result<Node, BuildError> {
 	optionally_install_rustls_cryptoprovider();
@@ -1881,6 +1949,8 @@ fn build_with_store_internal(
 
 	let pathfinding_scores_sync_url = pathfinding_scores_sync_config.map(|c| c.url.clone());
 
+	let runtime_sync_intervals = Arc::new(RwLock::new(RuntimeSyncIntervals::default()));
+
 	Ok(Node {
 		runtime,
 		stop_sender,
@@ -1901,6 +1971,8 @@ fn build_with_store_internal(
 		network_graph,
 		gossip_source,
 		pathfinding_scores_sync_url,
+		light_mode_config,
+		runtime_sync_intervals,
 		liquidity_source,
 		kv_store,
 		logger,

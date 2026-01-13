@@ -23,9 +23,9 @@ use crate::logger::LogLevel;
 
 // Config defaults
 const DEFAULT_NETWORK: Network = Network::Bitcoin;
-const DEFAULT_BDK_WALLET_SYNC_INTERVAL_SECS: u64 = 80;
-const DEFAULT_LDK_WALLET_SYNC_INTERVAL_SECS: u64 = 30;
-const DEFAULT_FEE_RATE_CACHE_UPDATE_INTERVAL_SECS: u64 = 60 * 10;
+pub(crate) const DEFAULT_BDK_WALLET_SYNC_INTERVAL_SECS: u64 = 80;
+pub(crate) const DEFAULT_LDK_WALLET_SYNC_INTERVAL_SECS: u64 = 30;
+pub(crate) const DEFAULT_FEE_RATE_CACHE_UPDATE_INTERVAL_SECS: u64 = 60 * 10;
 const DEFAULT_PROBING_LIQUIDITY_LIMIT_MULTIPLIER: u64 = 3;
 const DEFAULT_ANCHOR_PER_CHANNEL_RESERVE_SATS: u64 = 25_000;
 
@@ -57,17 +57,11 @@ pub(crate) const LDK_PAYMENT_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
 // The interval (in block height) after which we retry archiving fully resolved channel monitors.
 pub(crate) const RESOLVED_CHANNEL_MONITOR_ARCHIVAL_INTERVAL: u32 = 6;
 
-// The time in-between peer reconnection attempts.
-pub(crate) const PEER_RECONNECTION_INTERVAL: Duration = Duration::from_secs(60);
-
-// The time in-between RGS sync attempts.
-pub(crate) const RGS_SYNC_INTERVAL: Duration = Duration::from_secs(60 * 60);
-
-// The time in-between external scores sync attempts.
-pub(crate) const EXTERNAL_PATHFINDING_SCORES_SYNC_INTERVAL: Duration = Duration::from_secs(60 * 60);
-
-// The time in-between node announcement broadcast attempts.
-pub(crate) const NODE_ANN_BCAST_INTERVAL: Duration = Duration::from_secs(60 * 60);
+// Default sync intervals (now configurable via RuntimeSyncIntervals)
+pub(crate) const DEFAULT_PEER_RECONNECTION_INTERVAL_SECS: u64 = 60;
+pub(crate) const DEFAULT_RGS_SYNC_INTERVAL_SECS: u64 = 60 * 60;
+pub(crate) const DEFAULT_PATHFINDING_SCORES_SYNC_INTERVAL_SECS: u64 = 60 * 60;
+pub(crate) const DEFAULT_NODE_ANN_BCAST_INTERVAL_SECS: u64 = 60 * 60;
 
 // The lower limit which we apply to any configured wallet sync intervals.
 pub(crate) const WALLET_SYNC_INTERVAL_MINIMUM_SECS: u64 = 10;
@@ -565,6 +559,213 @@ pub enum AsyncPaymentsRole {
 	/// Node acts as a server in an async payments context. This means that it will hold async payments HTLCs and onion
 	/// messages for its peers.
 	Server,
+}
+
+/// Configuration for light mode operation, optimized for constrained environments
+/// like iOS Notification Service Extensions.
+///
+/// Light mode reduces memory footprint and resource usage by disabling optional
+/// background tasks and using a single-threaded runtime. This is useful for
+/// environments with hard memory limits (e.g., iOS NSE's ~24MB limit).
+///
+/// ### Defaults
+///
+/// | Parameter                         | Value |
+/// |-----------------------------------|-------|
+/// | `single_threaded_runtime`         | false |
+/// | `disable_listening`               | false |
+/// | `disable_peer_reconnection`       | false |
+/// | `disable_node_announcements`      | false |
+/// | `disable_rgs_sync`                | false |
+/// | `disable_pathfinding_scores_sync` | false |
+/// | `disable_liquidity_handler`       | false |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LightModeConfig {
+	/// Use single-threaded Tokio runtime instead of multi-threaded.
+	///
+	/// This significantly reduces memory footprint (saves ~10-15MB) but may affect
+	/// concurrent task handling. Recommended for constrained environments.
+	pub single_threaded_runtime: bool,
+
+	/// Disable network listeners to prevent accepting incoming connections.
+	///
+	/// When enabled, the node will not bind to listening addresses and will only
+	/// be able to make outbound connections. This saves memory and is suitable
+	/// for mobile clients that don't need to accept inbound connections.
+	pub disable_listening: bool,
+
+	/// Disable the background peer reconnection task.
+	///
+	/// When enabled, the node will not automatically reconnect to persisted peers.
+	/// Peers must be connected manually via [`Node::connect`].
+	///
+	/// [`Node::connect`]: crate::Node::connect
+	pub disable_peer_reconnection: bool,
+
+	/// Disable node announcement broadcasting.
+	///
+	/// When enabled, the node will not broadcast node announcements to the gossip
+	/// network. This is suitable for private/mobile nodes that don't need to be
+	/// discoverable.
+	pub disable_node_announcements: bool,
+
+	/// Disable Rapid Gossip Sync (RGS) background updates.
+	///
+	/// When enabled, the node will use cached gossip data and not fetch new RGS
+	/// snapshots. This saves memory and network bandwidth but may result in
+	/// slightly stale routing information.
+	pub disable_rgs_sync: bool,
+
+	/// Disable external pathfinding scores sync.
+	///
+	/// When enabled, the node will not fetch and merge external pathfinding scores.
+	/// The node will use locally-computed scores only.
+	pub disable_pathfinding_scores_sync: bool,
+
+	/// Disable the liquidity source handler.
+	///
+	/// When enabled, the node will not process LSPS1/LSPS2 liquidity events in
+	/// the background. This is suitable when liquidity services are not needed.
+	pub disable_liquidity_handler: bool,
+}
+
+impl Default for LightModeConfig {
+	fn default() -> Self {
+		Self {
+			single_threaded_runtime: false,
+			disable_listening: false,
+			disable_peer_reconnection: false,
+			disable_node_announcements: false,
+			disable_rgs_sync: false,
+			disable_pathfinding_scores_sync: false,
+			disable_liquidity_handler: false,
+		}
+	}
+}
+
+impl LightModeConfig {
+	/// Returns a configuration optimized for minimal memory footprint.
+	///
+	/// This preset is designed for iOS Notification Service Extensions and other
+	/// environments with strict memory constraints (~24MB limit). It enables:
+	///
+	/// - Single-threaded Tokio runtime
+	/// - All optional background tasks disabled
+	///
+	/// The node can still:
+	/// - Start and stop
+	/// - Connect to peers manually
+	/// - Send and receive payments
+	/// - Sync wallets manually via [`Node::sync_wallets`]
+	///
+	/// [`Node::sync_wallets`]: crate::Node::sync_wallets
+	pub fn minimal() -> Self {
+		Self {
+			single_threaded_runtime: true,
+			disable_listening: true,
+			disable_peer_reconnection: true,
+			disable_node_announcements: true,
+			disable_rgs_sync: true,
+			disable_pathfinding_scores_sync: true,
+			disable_liquidity_handler: true,
+		}
+	}
+}
+
+/// Runtime-adjustable sync intervals for background tasks.
+///
+/// These intervals can be changed at runtime via [`Node::update_sync_intervals`]
+/// to adjust resource usage based on application state (e.g., foreground vs background).
+///
+/// ### Defaults
+///
+/// | Parameter                              | Value (secs) |
+/// |----------------------------------------|--------------|
+/// | `peer_reconnection_interval_secs`      | 60           |
+/// | `rgs_sync_interval_secs`               | 3600         |
+/// | `pathfinding_scores_sync_interval_secs`| 3600         |
+/// | `node_announcement_interval_secs`      | 3600         |
+/// | `onchain_wallet_sync_interval_secs`    | 80           |
+/// | `lightning_wallet_sync_interval_secs`  | 30           |
+/// | `fee_rate_cache_update_interval_secs`  | 600          |
+///
+/// [`Node::update_sync_intervals`]: crate::Node::update_sync_intervals
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSyncIntervals {
+	/// Interval for peer reconnection attempts, in seconds.
+	pub peer_reconnection_interval_secs: u64,
+
+	/// Interval for RGS gossip sync updates, in seconds.
+	pub rgs_sync_interval_secs: u64,
+
+	/// Interval for external pathfinding scores sync, in seconds.
+	pub pathfinding_scores_sync_interval_secs: u64,
+
+	/// Interval for node announcement broadcasts, in seconds.
+	pub node_announcement_interval_secs: u64,
+
+	/// Interval for on-chain wallet sync, in seconds.
+	///
+	/// **Note:** A minimum of 10 seconds is enforced.
+	pub onchain_wallet_sync_interval_secs: u64,
+
+	/// Interval for Lightning wallet sync, in seconds.
+	///
+	/// **Note:** A minimum of 10 seconds is enforced.
+	pub lightning_wallet_sync_interval_secs: u64,
+
+	/// Interval for fee rate cache updates, in seconds.
+	///
+	/// **Note:** A minimum of 10 seconds is enforced.
+	pub fee_rate_cache_update_interval_secs: u64,
+}
+
+impl Default for RuntimeSyncIntervals {
+	fn default() -> Self {
+		Self {
+			peer_reconnection_interval_secs: DEFAULT_PEER_RECONNECTION_INTERVAL_SECS,
+			rgs_sync_interval_secs: DEFAULT_RGS_SYNC_INTERVAL_SECS,
+			pathfinding_scores_sync_interval_secs: DEFAULT_PATHFINDING_SCORES_SYNC_INTERVAL_SECS,
+			node_announcement_interval_secs: DEFAULT_NODE_ANN_BCAST_INTERVAL_SECS,
+			onchain_wallet_sync_interval_secs: DEFAULT_BDK_WALLET_SYNC_INTERVAL_SECS,
+			lightning_wallet_sync_interval_secs: DEFAULT_LDK_WALLET_SYNC_INTERVAL_SECS,
+			fee_rate_cache_update_interval_secs: DEFAULT_FEE_RATE_CACHE_UPDATE_INTERVAL_SECS,
+		}
+	}
+}
+
+impl RuntimeSyncIntervals {
+	/// Returns intervals optimized for battery saving in background operation.
+	///
+	/// This preset uses longer intervals to reduce CPU and network usage:
+	/// - Peer reconnection: 5 minutes (was 1 minute)
+	/// - RGS sync: 2 hours (was 1 hour)
+	/// - Pathfinding scores: 4 hours (was 1 hour)
+	/// - Node announcements: 2 hours (was 1 hour)
+	/// - On-chain wallet sync: 5 minutes (was 80 seconds)
+	/// - Lightning wallet sync: 2 minutes (was 30 seconds)
+	/// - Fee rate cache: 30 minutes (was 10 minutes)
+	pub fn battery_saving() -> Self {
+		Self {
+			peer_reconnection_interval_secs: 300,         // 5 minutes
+			rgs_sync_interval_secs: 7200,                 // 2 hours
+			pathfinding_scores_sync_interval_secs: 14400, // 4 hours
+			node_announcement_interval_secs: 7200,        // 2 hours
+			onchain_wallet_sync_interval_secs: 300,       // 5 minutes
+			lightning_wallet_sync_interval_secs: 120,     // 2 minutes
+			fee_rate_cache_update_interval_secs: 1800,    // 30 minutes
+		}
+	}
+}
+
+/// Returns a [`RuntimeSyncIntervals`] object with battery-saving presets.
+///
+/// See the documentation of [`RuntimeSyncIntervals::battery_saving`] for more information.
+///
+/// This is mostly meant for use in bindings, in Rust this is synonymous with
+/// [`RuntimeSyncIntervals::battery_saving()`].
+pub fn battery_saving_sync_intervals() -> RuntimeSyncIntervals {
+	RuntimeSyncIntervals::battery_saving()
 }
 
 #[cfg(test)]

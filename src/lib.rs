@@ -119,7 +119,7 @@ pub use builder::NodeBuilder as Builder;
 use chain::ChainSource;
 use config::{
 	default_user_config, may_announce_channel, AsyncPaymentsRole, ChannelConfig, Config,
-	NODE_ANN_BCAST_INTERVAL, PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
+	LightModeConfig, RuntimeSyncIntervals,
 };
 use connection::ConnectionManager;
 pub use error::Error as NodeError;
@@ -197,6 +197,8 @@ pub struct Node {
 	network_graph: Arc<Graph>,
 	gossip_source: Arc<GossipSource>,
 	pathfinding_scores_sync_url: Option<String>,
+	light_mode_config: Option<LightModeConfig>,
+	runtime_sync_intervals: Arc<RwLock<RuntimeSyncIntervals>>,
 	liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
 	kv_store: Arc<DynStore>,
 	logger: Arc<Logger>,
@@ -265,15 +267,19 @@ impl Node {
 				.await;
 		});
 
-		if self.gossip_source.is_rgs() {
+		let skip_rgs_sync =
+			self.light_mode_config.as_ref().map_or(false, |c| c.disable_rgs_sync);
+		if self.gossip_source.is_rgs() && !skip_rgs_sync {
 			let gossip_source = Arc::clone(&self.gossip_source);
 			let gossip_sync_store = Arc::clone(&self.kv_store);
 			let gossip_sync_logger = Arc::clone(&self.logger);
 			let gossip_node_metrics = Arc::clone(&self.node_metrics);
+			let gossip_sync_intervals = Arc::clone(&self.runtime_sync_intervals);
 			let mut stop_gossip_sync = self.stop_sender.subscribe();
 			self.runtime.spawn_cancellable_background_task(async move {
-				let mut interval = tokio::time::interval(RGS_SYNC_INTERVAL);
 				loop {
+					let interval_secs =
+						gossip_sync_intervals.read().unwrap().rgs_sync_interval_secs;
 					tokio::select! {
 						_ = stop_gossip_sync.changed() => {
 							log_debug!(
@@ -282,7 +288,7 @@ impl Node {
 							);
 							return;
 						}
-						_ = interval.tick() => {
+						_ = tokio::time::sleep(Duration::from_secs(interval_secs)) => {
 							let now = Instant::now();
 							match gossip_source.update_rgs_snapshot().await {
 								Ok(updated_timestamp) => {
@@ -314,145 +320,164 @@ impl Node {
 			});
 		}
 
+		let skip_pathfinding_scores_sync =
+			self.light_mode_config.as_ref().map_or(false, |c| c.disable_pathfinding_scores_sync);
 		if let Some(pathfinding_scores_sync_url) = self.pathfinding_scores_sync_url.as_ref() {
-			setup_background_pathfinding_scores_sync(
-				pathfinding_scores_sync_url.clone(),
-				Arc::clone(&self.scorer),
-				Arc::clone(&self.node_metrics),
-				Arc::clone(&self.kv_store),
-				Arc::clone(&self.logger),
-				Arc::clone(&self.runtime),
-				self.stop_sender.subscribe(),
-			);
+			if !skip_pathfinding_scores_sync {
+				setup_background_pathfinding_scores_sync(
+					pathfinding_scores_sync_url.clone(),
+					Arc::clone(&self.scorer),
+					Arc::clone(&self.node_metrics),
+					Arc::clone(&self.kv_store),
+					Arc::clone(&self.logger),
+					Arc::clone(&self.runtime),
+					Arc::clone(&self.runtime_sync_intervals),
+					self.stop_sender.subscribe(),
+				);
+			}
 		}
 
+		let skip_listening =
+			self.light_mode_config.as_ref().map_or(false, |c| c.disable_listening);
 		if let Some(listening_addresses) = &self.config.listening_addresses {
-			// Setup networking
-			let peer_manager_connection_handler = Arc::clone(&self.peer_manager);
-			let listening_logger = Arc::clone(&self.logger);
+			if skip_listening {
+				log_info!(self.logger, "Skipping network listeners in light mode.");
+			} else {
+				// Setup networking
+				let peer_manager_connection_handler = Arc::clone(&self.peer_manager);
+				let listening_logger = Arc::clone(&self.logger);
 
-			let mut bind_addrs = Vec::with_capacity(listening_addresses.len());
+				let mut bind_addrs = Vec::with_capacity(listening_addresses.len());
 
-			for listening_addr in listening_addresses {
-				let resolved_address = listening_addr.to_socket_addrs().map_err(|e| {
-					log_error!(
-						self.logger,
-						"Unable to resolve listening address: {:?}. Error details: {}",
-						listening_addr,
-						e,
-					);
-					Error::InvalidSocketAddress
-				})?;
+				for listening_addr in listening_addresses {
+					let resolved_address = listening_addr.to_socket_addrs().map_err(|e| {
+						log_error!(
+							self.logger,
+							"Unable to resolve listening address: {:?}. Error details: {}",
+							listening_addr,
+							e,
+						);
+						Error::InvalidSocketAddress
+					})?;
 
-				bind_addrs.extend(resolved_address);
-			}
-
-			let logger = Arc::clone(&listening_logger);
-			let listeners = self.runtime.block_on(async move {
-				let mut listeners = Vec::new();
-
-				// Try to bind to all addresses
-				for addr in &*bind_addrs {
-					match tokio::net::TcpListener::bind(addr).await {
-						Ok(listener) => {
-							log_trace!(logger, "Listener bound to {}", addr);
-							listeners.push(listener);
-						},
-						Err(e) => {
-							log_error!(
-								logger,
-								"Failed to bind to {}: {} - is something else already listening?",
-								addr,
-								e
-							);
-							return Err(Error::InvalidSocketAddress);
-						},
-					}
+					bind_addrs.extend(resolved_address);
 				}
 
-				Ok(listeners)
-			})?;
-
-			for listener in listeners {
 				let logger = Arc::clone(&listening_logger);
-				let peer_mgr = Arc::clone(&peer_manager_connection_handler);
-				let mut stop_listen = self.stop_sender.subscribe();
-				let runtime = Arc::clone(&self.runtime);
-				self.runtime.spawn_cancellable_background_task(async move {
-					loop {
-						tokio::select! {
-							_ = stop_listen.changed() => {
-								log_debug!(
+				let listeners = self.runtime.block_on(async move {
+					let mut listeners = Vec::new();
+
+					// Try to bind to all addresses
+					for addr in &*bind_addrs {
+						match tokio::net::TcpListener::bind(addr).await {
+							Ok(listener) => {
+								log_trace!(logger, "Listener bound to {}", addr);
+								listeners.push(listener);
+							},
+							Err(e) => {
+								log_error!(
 									logger,
-									"Stopping listening to inbound connections."
+									"Failed to bind to {}: {} - is something else already listening?",
+									addr,
+									e
 								);
-								break;
-							}
-							res = listener.accept() => {
-								let tcp_stream = res.unwrap().0;
-								let peer_mgr = Arc::clone(&peer_mgr);
-								runtime.spawn_cancellable_background_task(async move {
-									lightning_net_tokio::setup_inbound(
-										Arc::clone(&peer_mgr),
-										tcp_stream.into_std().unwrap(),
-										)
-										.await;
-								});
-							}
+								return Err(Error::InvalidSocketAddress);
+							},
 						}
 					}
-				});
+
+					Ok(listeners)
+				})?;
+
+				for listener in listeners {
+					let logger = Arc::clone(&listening_logger);
+					let peer_mgr = Arc::clone(&peer_manager_connection_handler);
+					let mut stop_listen = self.stop_sender.subscribe();
+					let runtime = Arc::clone(&self.runtime);
+					self.runtime.spawn_cancellable_background_task(async move {
+						loop {
+							tokio::select! {
+								_ = stop_listen.changed() => {
+									log_debug!(
+										logger,
+										"Stopping listening to inbound connections."
+									);
+									break;
+								}
+								res = listener.accept() => {
+									let tcp_stream = res.unwrap().0;
+									let peer_mgr = Arc::clone(&peer_mgr);
+									runtime.spawn_cancellable_background_task(async move {
+										lightning_net_tokio::setup_inbound(
+											Arc::clone(&peer_mgr),
+											tcp_stream.into_std().unwrap(),
+											)
+											.await;
+									});
+								}
+							}
+						}
+					});
+				}
 			}
 		}
 
 		// Regularly reconnect to persisted peers.
-		let connect_cm = Arc::clone(&self.connection_manager);
-		let connect_pm = Arc::clone(&self.peer_manager);
-		let connect_logger = Arc::clone(&self.logger);
-		let connect_peer_store = Arc::clone(&self.peer_store);
-		let mut stop_connect = self.stop_sender.subscribe();
-		self.runtime.spawn_cancellable_background_task(async move {
-			let mut interval = tokio::time::interval(PEER_RECONNECTION_INTERVAL);
-			interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-			loop {
-				tokio::select! {
-						_ = stop_connect.changed() => {
-							log_debug!(
-								connect_logger,
-								"Stopping reconnecting known peers."
-							);
-							return;
-						}
-						_ = interval.tick() => {
-							let pm_peers = connect_pm
-								.list_peers()
-								.iter()
-								.map(|peer| peer.counterparty_node_id)
-								.collect::<Vec<_>>();
-
-							for peer_info in connect_peer_store.list_peers().iter().filter(|info| !pm_peers.contains(&info.node_id)) {
-								let _ = connect_cm.do_connect_peer(
-									peer_info.node_id,
-									peer_info.address.clone(),
-									).await;
+		let skip_peer_reconnection =
+			self.light_mode_config.as_ref().map_or(false, |c| c.disable_peer_reconnection);
+		if !skip_peer_reconnection {
+			let connect_cm = Arc::clone(&self.connection_manager);
+			let connect_pm = Arc::clone(&self.peer_manager);
+			let connect_logger = Arc::clone(&self.logger);
+			let connect_peer_store = Arc::clone(&self.peer_store);
+			let connect_sync_intervals = Arc::clone(&self.runtime_sync_intervals);
+			let mut stop_connect = self.stop_sender.subscribe();
+			self.runtime.spawn_cancellable_background_task(async move {
+				loop {
+					let interval_secs =
+						connect_sync_intervals.read().unwrap().peer_reconnection_interval_secs;
+					tokio::select! {
+							_ = stop_connect.changed() => {
+								log_debug!(
+									connect_logger,
+									"Stopping reconnecting known peers."
+								);
+								return;
 							}
-						}
+							_ = tokio::time::sleep(Duration::from_secs(interval_secs)) => {
+								let pm_peers = connect_pm
+									.list_peers()
+									.iter()
+									.map(|peer| peer.counterparty_node_id)
+									.collect::<Vec<_>>();
+
+								for peer_info in connect_peer_store.list_peers().iter().filter(|info| !pm_peers.contains(&info.node_id)) {
+									let _ = connect_cm.do_connect_peer(
+										peer_info.node_id,
+										peer_info.address.clone(),
+										).await;
+								}
+							}
+					}
 				}
-			}
-		});
+			});
+		}
 
 		// Regularly broadcast node announcements.
-		let bcast_cm = Arc::clone(&self.channel_manager);
-		let bcast_pm = Arc::clone(&self.peer_manager);
-		let bcast_config = Arc::clone(&self.config);
-		let bcast_store = Arc::clone(&self.kv_store);
-		let bcast_logger = Arc::clone(&self.logger);
-		let bcast_node_metrics = Arc::clone(&self.node_metrics);
-		let mut stop_bcast = self.stop_sender.subscribe();
-		let node_alias = self.config.node_alias.clone();
-		if may_announce_channel(&self.config).is_ok() {
+		let skip_node_announcements =
+			self.light_mode_config.as_ref().map_or(false, |c| c.disable_node_announcements);
+		if may_announce_channel(&self.config).is_ok() && !skip_node_announcements {
+			let bcast_cm = Arc::clone(&self.channel_manager);
+			let bcast_pm = Arc::clone(&self.peer_manager);
+			let bcast_config = Arc::clone(&self.config);
+			let bcast_store = Arc::clone(&self.kv_store);
+			let bcast_logger = Arc::clone(&self.logger);
+			let bcast_node_metrics = Arc::clone(&self.node_metrics);
+			let bcast_sync_intervals = Arc::clone(&self.runtime_sync_intervals);
+			let mut stop_bcast = self.stop_sender.subscribe();
+			let node_alias = self.config.node_alias.clone();
 			self.runtime.spawn_cancellable_background_task(async move {
-				// We check every 30 secs whether our last broadcast is NODE_ANN_BCAST_INTERVAL away.
+				// We check every 30 secs whether our last broadcast interval has elapsed.
 				#[cfg(not(test))]
 				let mut interval = tokio::time::interval(Duration::from_secs(30));
 				#[cfg(test)]
@@ -467,10 +492,14 @@ impl Node {
 							return;
 						}
 						_ = interval.tick() => {
+							let node_ann_interval_secs =
+								bcast_sync_intervals.read().unwrap().node_announcement_interval_secs;
 							let skip_broadcast = match bcast_node_metrics.read().unwrap().latest_node_announcement_broadcast_timestamp {
 								Some(latest_bcast_time_secs) => {
 									// Skip if the time hasn't elapsed yet.
-									let next_bcast_unix_time = SystemTime::UNIX_EPOCH + Duration::from_secs(latest_bcast_time_secs) + NODE_ANN_BCAST_INTERVAL;
+									let next_bcast_unix_time = SystemTime::UNIX_EPOCH
+										+ Duration::from_secs(latest_bcast_time_secs)
+										+ Duration::from_secs(node_ann_interval_secs);
 									next_bcast_unix_time.elapsed().is_err()
 								}
 								None => {
@@ -623,24 +652,28 @@ impl Node {
 			});
 		});
 
+		let skip_liquidity_handler =
+			self.light_mode_config.as_ref().map_or(false, |c| c.disable_liquidity_handler);
 		if let Some(liquidity_source) = self.liquidity_source.as_ref() {
-			let mut stop_liquidity_handler = self.stop_sender.subscribe();
-			let liquidity_handler = Arc::clone(&liquidity_source);
-			let liquidity_logger = Arc::clone(&self.logger);
-			self.runtime.spawn_background_task(async move {
-				loop {
-					tokio::select! {
-						_ = stop_liquidity_handler.changed() => {
-							log_debug!(
-								liquidity_logger,
-								"Stopping processing liquidity events.",
-							);
-							return;
+			if !skip_liquidity_handler {
+				let mut stop_liquidity_handler = self.stop_sender.subscribe();
+				let liquidity_handler = Arc::clone(&liquidity_source);
+				let liquidity_logger = Arc::clone(&self.logger);
+				self.runtime.spawn_background_task(async move {
+					loop {
+						tokio::select! {
+							_ = stop_liquidity_handler.changed() => {
+								log_debug!(
+									liquidity_logger,
+									"Stopping processing liquidity events.",
+								);
+								return;
+							}
+							_ = liquidity_handler.handle_next_event() => {}
 						}
-						_ = liquidity_handler.handle_next_event() => {}
 					}
-				}
-			});
+				});
+			}
 		}
 
 		log_info!(self.logger, "Startup complete.");
@@ -1603,6 +1636,50 @@ impl Node {
 		} else {
 			Err(Error::ChannelConfigUpdateFailed)
 		}
+	}
+
+	/// Updates the intervals for background sync tasks at runtime.
+	///
+	/// This allows changing sync intervals while the node is running, which is useful
+	/// for mobile apps that want to reduce battery usage when in the background.
+	///
+	/// See [`RuntimeSyncIntervals`] for available interval settings and the
+	/// [`RuntimeSyncIntervals::battery_saving`] preset.
+	///
+	/// **Note:** Changes take effect on the next sync cycle. Currently running sync operations
+	/// will complete with their original interval.
+	///
+	/// **Note:** A minimum of 10 seconds is enforced for wallet sync intervals.
+	/// Values below this minimum will be silently raised to 10 seconds.
+	pub fn update_sync_intervals(&self, intervals: RuntimeSyncIntervals) {
+		// Update the shared RuntimeSyncIntervals for non-wallet tasks
+		*self.runtime_sync_intervals.write().unwrap() = intervals.clone();
+
+		// Also update chain source wallet sync intervals
+		let wallet_config = config::BackgroundSyncConfig {
+			onchain_wallet_sync_interval_secs: intervals.onchain_wallet_sync_interval_secs,
+			lightning_wallet_sync_interval_secs: intervals.lightning_wallet_sync_interval_secs,
+			fee_rate_cache_update_interval_secs: intervals.fee_rate_cache_update_interval_secs,
+		};
+		// Ignore errors - will fail if background syncing was disabled at build time
+		let _ = self.chain_source.set_background_sync_config(wallet_config);
+
+		log_info!(self.logger, "Updated runtime sync intervals.");
+	}
+
+	/// Returns the current sync intervals for background tasks.
+	///
+	/// See [`RuntimeSyncIntervals`] for the meaning of each interval.
+	pub fn current_sync_intervals(&self) -> RuntimeSyncIntervals {
+		self.runtime_sync_intervals.read().unwrap().clone()
+	}
+
+	/// Returns whether the node is running in light mode.
+	///
+	/// Light mode reduces resource usage by disabling optional background tasks.
+	/// See [`LightModeConfig`] for more information.
+	pub fn is_light_mode(&self) -> bool {
+		self.light_mode_config.is_some()
 	}
 
 	/// Retrieve the details of a specific payment with the given id.
