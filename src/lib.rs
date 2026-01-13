@@ -1651,17 +1651,33 @@ impl Node {
 	///
 	/// **Note:** A minimum of 10 seconds is enforced for wallet sync intervals.
 	/// Values below this minimum will be silently raised to 10 seconds.
+	///
+	/// **Note:** If `background_sync_config` was set to `None` at build time (e.g., via
+	/// [`EsploraSyncConfig`] or [`ElectrumSyncConfig`]), the wallet sync intervals
+	/// (`onchain_wallet_sync_interval_secs`, `lightning_wallet_sync_interval_secs`,
+	/// `fee_rate_cache_update_interval_secs`) cannot be updated at runtime. The other
+	/// intervals (peer reconnection, RGS, pathfinding scores, node announcements) will
+	/// still be updated. For iOS Notification Service Extensions where background sync
+	/// is disabled, use [`Node::sync_wallets`] for manual syncing instead.
+	///
+	/// [`EsploraSyncConfig`]: crate::config::EsploraSyncConfig
+	/// [`ElectrumSyncConfig`]: crate::config::ElectrumSyncConfig
 	pub fn update_sync_intervals(&self, intervals: RuntimeSyncIntervals) {
-		// Update the shared RuntimeSyncIntervals for non-wallet tasks
+		// Update the shared RuntimeSyncIntervals for non-wallet tasks (peer reconnection,
+		// RGS sync, pathfinding scores, node announcements). These always work regardless
+		// of whether background_sync_config was enabled at build time.
 		*self.runtime_sync_intervals.write().unwrap() = intervals.clone();
 
-		// Also update chain source wallet sync intervals
+		// Also update chain source wallet sync intervals (onchain, lightning, fee rate).
+		// This will silently fail if background_sync_config was set to None at build time,
+		// because the sync loop and watch channel were never created. In that case, the
+		// wallet sync intervals in RuntimeSyncIntervals are effectively ignored, and users
+		// should call sync_wallets() manually instead.
 		let wallet_config = config::BackgroundSyncConfig {
 			onchain_wallet_sync_interval_secs: intervals.onchain_wallet_sync_interval_secs,
 			lightning_wallet_sync_interval_secs: intervals.lightning_wallet_sync_interval_secs,
 			fee_rate_cache_update_interval_secs: intervals.fee_rate_cache_update_interval_secs,
 		};
-		// Ignore errors - will fail if background syncing was disabled at build time
 		let _ = self.chain_source.set_background_sync_config(wallet_config);
 
 		log_info!(self.logger, "Updated runtime sync intervals.");
