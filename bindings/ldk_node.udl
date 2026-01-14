@@ -409,6 +409,7 @@ enum NodeError {
     "NoSpendableOutputs",
     "CoinSelectionFailed",
 	"InvalidMnemonic",
+	"BackgroundSyncNotEnabled",
 };
 
 dictionary NodeStatus {
