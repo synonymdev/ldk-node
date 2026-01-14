@@ -461,6 +461,8 @@ def _uniffi_check_contract_api_version(lib):
         raise InternalError("UniFFI contract version mismatch: try cleaning and rebuilding your project")
 
 def _uniffi_check_api_checksums(lib):
+    if lib.uniffi_ldk_node_checksum_func_battery_saving_sync_intervals() != 25473:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_func_default_config() != 55381:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_func_derive_node_secret_from_mnemonic() != 15067:
@@ -627,6 +629,10 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_gossip_source_rgs() != 64312:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_builder_set_light_mode() != 13621:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_builder_set_light_mode_minimal() != 8340:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_liquidity_source_lsps1() != 51527:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_liquidity_source_lsps2() != 14430:
@@ -675,6 +681,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_connect() != 34120:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_node_current_sync_intervals() != 51918:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_disconnect() != 43538:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_event_handled() != 38712:
@@ -686,6 +694,8 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_ldk_node_checksum_method_node_get_address_balance() != 45284:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_node_is_light_mode() != 56992:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_list_balances() != 57528:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -738,6 +748,8 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_ldk_node_checksum_method_node_unified_qr_payment() != 9837:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_update_channel_config() != 37852:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_node_update_sync_intervals() != 6071:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_verify_signature() != 20486:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -1553,6 +1565,17 @@ _UniffiLib.uniffi_ldk_node_fn_method_builder_set_gossip_source_rgs.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_builder_set_gossip_source_rgs.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_light_mode.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_light_mode.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_light_mode_minimal.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_light_mode_minimal.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_builder_set_liquidity_source_lsps1.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -1761,6 +1784,11 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_connect.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_connect.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_node_current_sync_intervals.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_node_current_sync_intervals.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_node_disconnect.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -1797,6 +1825,11 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_get_transaction_details.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_get_transaction_details.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_node_is_light_mode.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_node_is_light_mode.restype = ctypes.c_int8
 _UniffiLib.uniffi_ldk_node_fn_method_node_list_balances.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -1949,6 +1982,12 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_update_channel_config.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_update_channel_config.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_node_update_sync_intervals.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_node_update_sync_intervals.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_node_verify_signature.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2318,6 +2357,10 @@ _UniffiLib.uniffi_ldk_node_fn_method_vssheaderprovider_get_headers.argtypes = (
     _UniffiRustBuffer,
 )
 _UniffiLib.uniffi_ldk_node_fn_method_vssheaderprovider_get_headers.restype = ctypes.c_uint64
+_UniffiLib.uniffi_ldk_node_fn_func_battery_saving_sync_intervals.argtypes = (
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_func_battery_saving_sync_intervals.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_func_default_config.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
@@ -2601,6 +2644,9 @@ _UniffiLib.ffi_ldk_node_rust_future_complete_void.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.ffi_ldk_node_rust_future_complete_void.restype = None
+_UniffiLib.uniffi_ldk_node_checksum_func_battery_saving_sync_intervals.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_func_battery_saving_sync_intervals.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_func_default_config.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_func_default_config.restype = ctypes.c_uint16
@@ -2850,6 +2896,12 @@ _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_gossip_source_p2p.restype
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_gossip_source_rgs.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_gossip_source_rgs.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_light_mode.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_light_mode.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_light_mode_minimal.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_light_mode_minimal.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_liquidity_source_lsps1.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_liquidity_source_lsps1.restype = ctypes.c_uint16
@@ -2922,6 +2974,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_config.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_connect.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_connect.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_node_current_sync_intervals.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_node_current_sync_intervals.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_disconnect.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_disconnect.restype = ctypes.c_uint16
@@ -2940,6 +2995,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_get_address_balance.restype = ct
 _UniffiLib.uniffi_ldk_node_checksum_method_node_get_transaction_details.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_get_transaction_details.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_node_is_light_mode.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_node_is_light_mode.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_list_balances.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_list_balances.restype = ctypes.c_uint16
@@ -3018,6 +3076,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_unified_qr_payment.restype = cty
 _UniffiLib.uniffi_ldk_node_checksum_method_node_update_channel_config.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_update_channel_config.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_node_update_sync_intervals.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_node_update_sync_intervals.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_verify_signature.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_verify_signature.restype = ctypes.c_uint16
@@ -4512,6 +4573,10 @@ class BuilderProtocol(typing.Protocol):
         raise NotImplementedError
     def set_gossip_source_rgs(self, rgs_server_url: "str"):
         raise NotImplementedError
+    def set_light_mode(self, config: "LightModeConfig"):
+        raise NotImplementedError
+    def set_light_mode_minimal(self, ):
+        raise NotImplementedError
     def set_liquidity_source_lsps1(self, node_id: "PublicKey",address: "SocketAddress",token: "typing.Optional[str]"):
         raise NotImplementedError
     def set_liquidity_source_lsps2(self, node_id: "PublicKey",address: "SocketAddress",token: "typing.Optional[str]"):
@@ -4819,6 +4884,25 @@ class Builder:
         
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_gossip_source_rgs,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(rgs_server_url))
+
+
+
+
+
+
+    def set_light_mode(self, config: "LightModeConfig") -> None:
+        _UniffiConverterTypeLightModeConfig.check_lower(config)
+        
+        _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_light_mode,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeLightModeConfig.lower(config))
+
+
+
+
+
+
+    def set_light_mode_minimal(self, ) -> None:
+        _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_light_mode_minimal,self._uniffi_clone_pointer(),)
 
 
 
@@ -5421,6 +5505,8 @@ class NodeProtocol(typing.Protocol):
         raise NotImplementedError
     def connect(self, node_id: "PublicKey",address: "SocketAddress",persist: "bool"):
         raise NotImplementedError
+    def current_sync_intervals(self, ):
+        raise NotImplementedError
     def disconnect(self, node_id: "PublicKey"):
         raise NotImplementedError
     def event_handled(self, ):
@@ -5432,6 +5518,8 @@ class NodeProtocol(typing.Protocol):
     def get_address_balance(self, address_str: "str"):
         raise NotImplementedError
     def get_transaction_details(self, txid: "Txid"):
+        raise NotImplementedError
+    def is_light_mode(self, ):
         raise NotImplementedError
     def list_balances(self, ):
         raise NotImplementedError
@@ -5484,6 +5572,8 @@ class NodeProtocol(typing.Protocol):
     def unified_qr_payment(self, ):
         raise NotImplementedError
     def update_channel_config(self, user_channel_id: "UserChannelId",counterparty_node_id: "PublicKey",channel_config: "ChannelConfig"):
+        raise NotImplementedError
+    def update_sync_intervals(self, intervals: "RuntimeSyncIntervals"):
         raise NotImplementedError
     def verify_signature(self, msg: "typing.List[int]",sig: "str",pkey: "PublicKey"):
         raise NotImplementedError
@@ -5583,6 +5673,15 @@ class Node:
 
 
 
+    def current_sync_intervals(self, ) -> "RuntimeSyncIntervals":
+        return _UniffiConverterTypeRuntimeSyncIntervals.lift(
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_current_sync_intervals,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
     def disconnect(self, node_id: "PublicKey") -> None:
         _UniffiConverterTypePublicKey.check_lower(node_id)
         
@@ -5646,6 +5745,15 @@ class Node:
         return _UniffiConverterOptionalTypeTransactionDetails.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_get_transaction_details,self._uniffi_clone_pointer(),
         _UniffiConverterTypeTxid.lower(txid))
+        )
+
+
+
+
+
+    def is_light_mode(self, ) -> "bool":
+        return _UniffiConverterBool.lift(
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_is_light_mode,self._uniffi_clone_pointer(),)
         )
 
 
@@ -5952,6 +6060,17 @@ class Node:
         _UniffiConverterTypeUserChannelId.lower(user_channel_id),
         _UniffiConverterTypePublicKey.lower(counterparty_node_id),
         _UniffiConverterTypeChannelConfig.lower(channel_config))
+
+
+
+
+
+
+    def update_sync_intervals(self, intervals: "RuntimeSyncIntervals") -> None:
+        _UniffiConverterTypeRuntimeSyncIntervals.check_lower(intervals)
+        
+        _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_update_sync_intervals,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeRuntimeSyncIntervals.lower(intervals))
 
 
 
@@ -7855,6 +7974,77 @@ class _UniffiConverterTypeEsploraSyncConfig(_UniffiConverterRustBuffer):
         _UniffiConverterOptionalTypeBackgroundSyncConfig.write(value.background_sync_config, buf)
 
 
+class LightModeConfig:
+    single_threaded_runtime: "bool"
+    disable_listening: "bool"
+    disable_peer_reconnection: "bool"
+    disable_node_announcements: "bool"
+    disable_rgs_sync: "bool"
+    disable_pathfinding_scores_sync: "bool"
+    disable_liquidity_handler: "bool"
+    def __init__(self, *, single_threaded_runtime: "bool", disable_listening: "bool", disable_peer_reconnection: "bool", disable_node_announcements: "bool", disable_rgs_sync: "bool", disable_pathfinding_scores_sync: "bool", disable_liquidity_handler: "bool"):
+        self.single_threaded_runtime = single_threaded_runtime
+        self.disable_listening = disable_listening
+        self.disable_peer_reconnection = disable_peer_reconnection
+        self.disable_node_announcements = disable_node_announcements
+        self.disable_rgs_sync = disable_rgs_sync
+        self.disable_pathfinding_scores_sync = disable_pathfinding_scores_sync
+        self.disable_liquidity_handler = disable_liquidity_handler
+
+    def __str__(self):
+        return "LightModeConfig(single_threaded_runtime={}, disable_listening={}, disable_peer_reconnection={}, disable_node_announcements={}, disable_rgs_sync={}, disable_pathfinding_scores_sync={}, disable_liquidity_handler={})".format(self.single_threaded_runtime, self.disable_listening, self.disable_peer_reconnection, self.disable_node_announcements, self.disable_rgs_sync, self.disable_pathfinding_scores_sync, self.disable_liquidity_handler)
+
+    def __eq__(self, other):
+        if self.single_threaded_runtime != other.single_threaded_runtime:
+            return False
+        if self.disable_listening != other.disable_listening:
+            return False
+        if self.disable_peer_reconnection != other.disable_peer_reconnection:
+            return False
+        if self.disable_node_announcements != other.disable_node_announcements:
+            return False
+        if self.disable_rgs_sync != other.disable_rgs_sync:
+            return False
+        if self.disable_pathfinding_scores_sync != other.disable_pathfinding_scores_sync:
+            return False
+        if self.disable_liquidity_handler != other.disable_liquidity_handler:
+            return False
+        return True
+
+class _UniffiConverterTypeLightModeConfig(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return LightModeConfig(
+            single_threaded_runtime=_UniffiConverterBool.read(buf),
+            disable_listening=_UniffiConverterBool.read(buf),
+            disable_peer_reconnection=_UniffiConverterBool.read(buf),
+            disable_node_announcements=_UniffiConverterBool.read(buf),
+            disable_rgs_sync=_UniffiConverterBool.read(buf),
+            disable_pathfinding_scores_sync=_UniffiConverterBool.read(buf),
+            disable_liquidity_handler=_UniffiConverterBool.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterBool.check_lower(value.single_threaded_runtime)
+        _UniffiConverterBool.check_lower(value.disable_listening)
+        _UniffiConverterBool.check_lower(value.disable_peer_reconnection)
+        _UniffiConverterBool.check_lower(value.disable_node_announcements)
+        _UniffiConverterBool.check_lower(value.disable_rgs_sync)
+        _UniffiConverterBool.check_lower(value.disable_pathfinding_scores_sync)
+        _UniffiConverterBool.check_lower(value.disable_liquidity_handler)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterBool.write(value.single_threaded_runtime, buf)
+        _UniffiConverterBool.write(value.disable_listening, buf)
+        _UniffiConverterBool.write(value.disable_peer_reconnection, buf)
+        _UniffiConverterBool.write(value.disable_node_announcements, buf)
+        _UniffiConverterBool.write(value.disable_rgs_sync, buf)
+        _UniffiConverterBool.write(value.disable_pathfinding_scores_sync, buf)
+        _UniffiConverterBool.write(value.disable_liquidity_handler, buf)
+
+
 class LogRecord:
     level: "LogLevel"
     args: "str"
@@ -8837,6 +9027,77 @@ class _UniffiConverterTypeRoutingFees(_UniffiConverterRustBuffer):
     def write(value, buf):
         _UniffiConverterUInt32.write(value.base_msat, buf)
         _UniffiConverterUInt32.write(value.proportional_millionths, buf)
+
+
+class RuntimeSyncIntervals:
+    peer_reconnection_interval_secs: "int"
+    rgs_sync_interval_secs: "int"
+    pathfinding_scores_sync_interval_secs: "int"
+    node_announcement_interval_secs: "int"
+    onchain_wallet_sync_interval_secs: "int"
+    lightning_wallet_sync_interval_secs: "int"
+    fee_rate_cache_update_interval_secs: "int"
+    def __init__(self, *, peer_reconnection_interval_secs: "int", rgs_sync_interval_secs: "int", pathfinding_scores_sync_interval_secs: "int", node_announcement_interval_secs: "int", onchain_wallet_sync_interval_secs: "int", lightning_wallet_sync_interval_secs: "int", fee_rate_cache_update_interval_secs: "int"):
+        self.peer_reconnection_interval_secs = peer_reconnection_interval_secs
+        self.rgs_sync_interval_secs = rgs_sync_interval_secs
+        self.pathfinding_scores_sync_interval_secs = pathfinding_scores_sync_interval_secs
+        self.node_announcement_interval_secs = node_announcement_interval_secs
+        self.onchain_wallet_sync_interval_secs = onchain_wallet_sync_interval_secs
+        self.lightning_wallet_sync_interval_secs = lightning_wallet_sync_interval_secs
+        self.fee_rate_cache_update_interval_secs = fee_rate_cache_update_interval_secs
+
+    def __str__(self):
+        return "RuntimeSyncIntervals(peer_reconnection_interval_secs={}, rgs_sync_interval_secs={}, pathfinding_scores_sync_interval_secs={}, node_announcement_interval_secs={}, onchain_wallet_sync_interval_secs={}, lightning_wallet_sync_interval_secs={}, fee_rate_cache_update_interval_secs={})".format(self.peer_reconnection_interval_secs, self.rgs_sync_interval_secs, self.pathfinding_scores_sync_interval_secs, self.node_announcement_interval_secs, self.onchain_wallet_sync_interval_secs, self.lightning_wallet_sync_interval_secs, self.fee_rate_cache_update_interval_secs)
+
+    def __eq__(self, other):
+        if self.peer_reconnection_interval_secs != other.peer_reconnection_interval_secs:
+            return False
+        if self.rgs_sync_interval_secs != other.rgs_sync_interval_secs:
+            return False
+        if self.pathfinding_scores_sync_interval_secs != other.pathfinding_scores_sync_interval_secs:
+            return False
+        if self.node_announcement_interval_secs != other.node_announcement_interval_secs:
+            return False
+        if self.onchain_wallet_sync_interval_secs != other.onchain_wallet_sync_interval_secs:
+            return False
+        if self.lightning_wallet_sync_interval_secs != other.lightning_wallet_sync_interval_secs:
+            return False
+        if self.fee_rate_cache_update_interval_secs != other.fee_rate_cache_update_interval_secs:
+            return False
+        return True
+
+class _UniffiConverterTypeRuntimeSyncIntervals(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return RuntimeSyncIntervals(
+            peer_reconnection_interval_secs=_UniffiConverterUInt64.read(buf),
+            rgs_sync_interval_secs=_UniffiConverterUInt64.read(buf),
+            pathfinding_scores_sync_interval_secs=_UniffiConverterUInt64.read(buf),
+            node_announcement_interval_secs=_UniffiConverterUInt64.read(buf),
+            onchain_wallet_sync_interval_secs=_UniffiConverterUInt64.read(buf),
+            lightning_wallet_sync_interval_secs=_UniffiConverterUInt64.read(buf),
+            fee_rate_cache_update_interval_secs=_UniffiConverterUInt64.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterUInt64.check_lower(value.peer_reconnection_interval_secs)
+        _UniffiConverterUInt64.check_lower(value.rgs_sync_interval_secs)
+        _UniffiConverterUInt64.check_lower(value.pathfinding_scores_sync_interval_secs)
+        _UniffiConverterUInt64.check_lower(value.node_announcement_interval_secs)
+        _UniffiConverterUInt64.check_lower(value.onchain_wallet_sync_interval_secs)
+        _UniffiConverterUInt64.check_lower(value.lightning_wallet_sync_interval_secs)
+        _UniffiConverterUInt64.check_lower(value.fee_rate_cache_update_interval_secs)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterUInt64.write(value.peer_reconnection_interval_secs, buf)
+        _UniffiConverterUInt64.write(value.rgs_sync_interval_secs, buf)
+        _UniffiConverterUInt64.write(value.pathfinding_scores_sync_interval_secs, buf)
+        _UniffiConverterUInt64.write(value.node_announcement_interval_secs, buf)
+        _UniffiConverterUInt64.write(value.onchain_wallet_sync_interval_secs, buf)
+        _UniffiConverterUInt64.write(value.lightning_wallet_sync_interval_secs, buf)
+        _UniffiConverterUInt64.write(value.fee_rate_cache_update_interval_secs, buf)
 
 
 class SpendableUtxo:
@@ -12012,6 +12273,11 @@ class NodeError:  # type: ignore
         def __repr__(self):
             return "NodeError.InvalidMnemonic({})".format(repr(str(self)))
     _UniffiTempNodeError.InvalidMnemonic = InvalidMnemonic # type: ignore
+    class BackgroundSyncNotEnabled(_UniffiTempNodeError):
+
+        def __repr__(self):
+            return "NodeError.BackgroundSyncNotEnabled({})".format(repr(str(self)))
+    _UniffiTempNodeError.BackgroundSyncNotEnabled = BackgroundSyncNotEnabled # type: ignore
 
 NodeError = _UniffiTempNodeError # type: ignore
 del _UniffiTempNodeError
@@ -12269,6 +12535,10 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             return NodeError.InvalidMnemonic(
                 _UniffiConverterString.read(buf),
             )
+        if variant == 63:
+            return NodeError.BackgroundSyncNotEnabled(
+                _UniffiConverterString.read(buf),
+            )
         raise InternalError("Raw enum value doesn't match any cases")
 
     @staticmethod
@@ -12397,6 +12667,8 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             return
         if isinstance(value, NodeError.InvalidMnemonic):
             return
+        if isinstance(value, NodeError.BackgroundSyncNotEnabled):
+            return
 
     @staticmethod
     def write(value, buf):
@@ -12524,6 +12796,8 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             buf.write_i32(61)
         if isinstance(value, NodeError.InvalidMnemonic):
             buf.write_i32(62)
+        if isinstance(value, NodeError.BackgroundSyncNotEnabled):
+            buf.write_i32(63)
 
 
 
@@ -15889,6 +16163,10 @@ async def _uniffi_rust_call_async(rust_future, ffi_poll, ffi_complete, ffi_free,
     finally:
         ffi_free(rust_future)
 
+def battery_saving_sync_intervals() -> "RuntimeSyncIntervals":
+    return _UniffiConverterTypeRuntimeSyncIntervals.lift(_uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_func_battery_saving_sync_intervals,))
+
+
 def default_config() -> "Config":
     return _UniffiConverterTypeConfig.lift(_uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_func_default_config,))
 
@@ -15950,6 +16228,7 @@ __all__ = [
     "CustomTlvRecord",
     "ElectrumSyncConfig",
     "EsploraSyncConfig",
+    "LightModeConfig",
     "LogRecord",
     "LspFeeLimits",
     "Lsps1Bolt11PaymentInfo",
@@ -15968,10 +16247,12 @@ __all__ = [
     "RouteHintHop",
     "RouteParametersConfig",
     "RoutingFees",
+    "RuntimeSyncIntervals",
     "SpendableUtxo",
     "TransactionDetails",
     "TxInput",
     "TxOutput",
+    "battery_saving_sync_intervals",
     "default_config",
     "derive_node_secret_from_mnemonic",
     "generate_entropy_mnemonic",

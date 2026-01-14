@@ -1492,6 +1492,18 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2024,6 +2036,15 @@ internal interface UniffiLib : Library {
         `rgsServerUrl`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_fn_method_builder_set_light_mode(
+        `ptr`: Pointer?,
+        `config`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_ldk_node_fn_method_builder_set_light_mode_minimal(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_method_builder_set_liquidity_source_lsps1(
         `ptr`: Pointer?,
         `nodeId`: RustBufferByValue,
@@ -2195,6 +2216,10 @@ internal interface UniffiLib : Library {
         `persist`: Byte,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_fn_method_node_current_sync_intervals(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_node_disconnect(
         `ptr`: Pointer?,
         `nodeId`: RustBufferByValue,
@@ -2225,6 +2250,10 @@ internal interface UniffiLib : Library {
         `txid`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_node_is_light_mode(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Byte
     fun uniffi_ldk_node_fn_method_node_list_balances(
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -2349,6 +2378,11 @@ internal interface UniffiLib : Library {
         `userChannelId`: RustBufferByValue,
         `counterpartyNodeId`: RustBufferByValue,
         `channelConfig`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_ldk_node_fn_method_node_update_sync_intervals(
+        `ptr`: Pointer?,
+        `intervals`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
     fun uniffi_ldk_node_fn_method_node_verify_signature(
@@ -2657,6 +2691,9 @@ internal interface UniffiLib : Library {
         `ptr`: Pointer?,
         `request`: RustBufferByValue,
     ): Long
+    fun uniffi_ldk_node_fn_func_battery_saving_sync_intervals(
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_func_default_config(
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
@@ -2881,6 +2918,8 @@ internal interface UniffiLib : Library {
         `handle`: Long,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_checksum_func_battery_saving_sync_intervals(
+    ): Short
     fun uniffi_ldk_node_checksum_func_default_config(
     ): Short
     fun uniffi_ldk_node_checksum_func_derive_node_secret_from_mnemonic(
@@ -3047,6 +3086,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_gossip_source_rgs(
     ): Short
+    fun uniffi_ldk_node_checksum_method_builder_set_light_mode(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_builder_set_light_mode_minimal(
+    ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_liquidity_source_lsps1(
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_liquidity_source_lsps2(
@@ -3095,6 +3138,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_node_connect(
     ): Short
+    fun uniffi_ldk_node_checksum_method_node_current_sync_intervals(
+    ): Short
     fun uniffi_ldk_node_checksum_method_node_disconnect(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_event_handled(
@@ -3106,6 +3151,8 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_node_get_address_balance(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_get_transaction_details(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_node_is_light_mode(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_list_balances(
     ): Short
@@ -3158,6 +3205,8 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_node_unified_qr_payment(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_update_channel_config(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_node_update_sync_intervals(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_verify_signature(
     ): Short
@@ -3274,6 +3323,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_ldk_node_checksum_func_battery_saving_sync_intervals() != 25473.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_func_default_config() != 55381.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -3523,6 +3575,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_builder_set_gossip_source_rgs() != 64312.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_builder_set_light_mode() != 13621.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_builder_set_light_mode_minimal() != 8340.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_builder_set_liquidity_source_lsps1() != 51527.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -3595,6 +3653,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_node_connect() != 34120.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_node_current_sync_intervals() != 51918.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_node_disconnect() != 43538.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -3611,6 +3672,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_node_is_light_mode() != 56992.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_list_balances() != 57528.toShort()) {
@@ -3689,6 +3753,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_update_channel_config() != 37852.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_node_update_sync_intervals() != 6071.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_verify_signature() != 20486.toShort()) {
@@ -5790,6 +5857,29 @@ open class Builder: Disposable, BuilderInterface {
         }
     }
 
+    override fun `setLightMode`(`config`: LightModeConfig) {
+        callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_set_light_mode(
+                    it,
+                    FfiConverterTypeLightModeConfig.lower(`config`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+    override fun `setLightModeMinimal`() {
+        callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_set_light_mode_minimal(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
     override fun `setLiquiditySourceLsps1`(`nodeId`: PublicKey, `address`: SocketAddress, `token`: kotlin.String?) {
         callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -6844,6 +6934,17 @@ open class Node: Disposable, NodeInterface {
         }
     }
 
+    override fun `currentSyncIntervals`(): RuntimeSyncIntervals {
+        return FfiConverterTypeRuntimeSyncIntervals.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_current_sync_intervals(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
     @Throws(NodeException::class)
     override fun `disconnect`(`nodeId`: PublicKey) {
         callWithPointer {
@@ -6915,6 +7016,17 @@ open class Node: Disposable, NodeInterface {
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_get_transaction_details(
                     it,
                     FfiConverterTypeTxid.lower(`txid`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    override fun `isLightMode`(): kotlin.Boolean {
+        return FfiConverterBoolean.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_is_light_mode(
+                    it,
                     uniffiRustCallStatus,
                 )
             }
@@ -7240,6 +7352,18 @@ open class Node: Disposable, NodeInterface {
                     FfiConverterTypeUserChannelId.lower(`userChannelId`),
                     FfiConverterTypePublicKey.lower(`counterpartyNodeId`),
                     FfiConverterTypeChannelConfig.lower(`channelConfig`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+    override fun `updateSyncIntervals`(`intervals`: RuntimeSyncIntervals) {
+        callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_update_sync_intervals(
+                    it,
+                    FfiConverterTypeRuntimeSyncIntervals.lower(`intervals`),
                     uniffiRustCallStatus,
                 )
             }
@@ -9370,6 +9494,43 @@ object FfiConverterTypeLSPS2ServiceConfig: FfiConverterRustBuffer<Lsps2ServiceCo
 
 
 
+object FfiConverterTypeLightModeConfig: FfiConverterRustBuffer<LightModeConfig> {
+    override fun read(buf: ByteBuffer): LightModeConfig {
+        return LightModeConfig(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LightModeConfig) = (
+            FfiConverterBoolean.allocationSize(value.`singleThreadedRuntime`) +
+            FfiConverterBoolean.allocationSize(value.`disableListening`) +
+            FfiConverterBoolean.allocationSize(value.`disablePeerReconnection`) +
+            FfiConverterBoolean.allocationSize(value.`disableNodeAnnouncements`) +
+            FfiConverterBoolean.allocationSize(value.`disableRgsSync`) +
+            FfiConverterBoolean.allocationSize(value.`disablePathfindingScoresSync`) +
+            FfiConverterBoolean.allocationSize(value.`disableLiquidityHandler`)
+    )
+
+    override fun write(value: LightModeConfig, buf: ByteBuffer) {
+        FfiConverterBoolean.write(value.`singleThreadedRuntime`, buf)
+        FfiConverterBoolean.write(value.`disableListening`, buf)
+        FfiConverterBoolean.write(value.`disablePeerReconnection`, buf)
+        FfiConverterBoolean.write(value.`disableNodeAnnouncements`, buf)
+        FfiConverterBoolean.write(value.`disableRgsSync`, buf)
+        FfiConverterBoolean.write(value.`disablePathfindingScoresSync`, buf)
+        FfiConverterBoolean.write(value.`disableLiquidityHandler`, buf)
+    }
+}
+
+
+
+
 object FfiConverterTypeLogRecord: FfiConverterRustBuffer<LogRecord> {
     override fun read(buf: ByteBuffer): LogRecord {
         return LogRecord(
@@ -9653,6 +9814,43 @@ object FfiConverterTypeRoutingFees: FfiConverterRustBuffer<RoutingFees> {
     override fun write(value: RoutingFees, buf: ByteBuffer) {
         FfiConverterUInt.write(value.`baseMsat`, buf)
         FfiConverterUInt.write(value.`proportionalMillionths`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypeRuntimeSyncIntervals: FfiConverterRustBuffer<RuntimeSyncIntervals> {
+    override fun read(buf: ByteBuffer): RuntimeSyncIntervals {
+        return RuntimeSyncIntervals(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RuntimeSyncIntervals) = (
+            FfiConverterULong.allocationSize(value.`peerReconnectionIntervalSecs`) +
+            FfiConverterULong.allocationSize(value.`rgsSyncIntervalSecs`) +
+            FfiConverterULong.allocationSize(value.`pathfindingScoresSyncIntervalSecs`) +
+            FfiConverterULong.allocationSize(value.`nodeAnnouncementIntervalSecs`) +
+            FfiConverterULong.allocationSize(value.`onchainWalletSyncIntervalSecs`) +
+            FfiConverterULong.allocationSize(value.`lightningWalletSyncIntervalSecs`) +
+            FfiConverterULong.allocationSize(value.`feeRateCacheUpdateIntervalSecs`)
+    )
+
+    override fun write(value: RuntimeSyncIntervals, buf: ByteBuffer) {
+        FfiConverterULong.write(value.`peerReconnectionIntervalSecs`, buf)
+        FfiConverterULong.write(value.`rgsSyncIntervalSecs`, buf)
+        FfiConverterULong.write(value.`pathfindingScoresSyncIntervalSecs`, buf)
+        FfiConverterULong.write(value.`nodeAnnouncementIntervalSecs`, buf)
+        FfiConverterULong.write(value.`onchainWalletSyncIntervalSecs`, buf)
+        FfiConverterULong.write(value.`lightningWalletSyncIntervalSecs`, buf)
+        FfiConverterULong.write(value.`feeRateCacheUpdateIntervalSecs`, buf)
     }
 }
 
@@ -11067,6 +11265,7 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
             60 -> NodeException.NoSpendableOutputs(FfiConverterString.read(buf))
             61 -> NodeException.CoinSelectionFailed(FfiConverterString.read(buf))
             62 -> NodeException.InvalidMnemonic(FfiConverterString.read(buf))
+            63 -> NodeException.BackgroundSyncNotEnabled(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -11323,6 +11522,10 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
             }
             is NodeException.InvalidMnemonic -> {
                 buf.putInt(62)
+                Unit
+            }
+            is NodeException.BackgroundSyncNotEnabled -> {
+                buf.putInt(63)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -13780,6 +13983,14 @@ typealias FfiConverterTypeUserChannelId = FfiConverterString
 
 
 
+
+fun `batterySavingSyncIntervals`(): RuntimeSyncIntervals {
+    return FfiConverterTypeRuntimeSyncIntervals.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.INSTANCE.uniffi_ldk_node_fn_func_battery_saving_sync_intervals(
+            uniffiRustCallStatus,
+        )
+    })
+}
 
 fun `defaultConfig`(): Config {
     return FfiConverterTypeConfig.lift(uniffiRustCall { uniffiRustCallStatus ->

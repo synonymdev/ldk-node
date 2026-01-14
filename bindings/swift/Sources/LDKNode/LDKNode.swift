@@ -1590,6 +1590,10 @@ public protocol BuilderProtocol: AnyObject {
 
     func setGossipSourceRgs(rgsServerUrl: String)
 
+    func setLightMode(config: LightModeConfig)
+
+    func setLightModeMinimal()
+
     func setLiquiditySourceLsps1(nodeId: PublicKey, address: SocketAddress, token: String?)
 
     func setLiquiditySourceLsps2(nodeId: PublicKey, address: SocketAddress, token: String?)
@@ -1803,6 +1807,17 @@ open class Builder:
     open func setGossipSourceRgs(rgsServerUrl: String) { try! rustCall {
         uniffi_ldk_node_fn_method_builder_set_gossip_source_rgs(self.uniffiClonePointer(),
                                                                 FfiConverterString.lower(rgsServerUrl), $0)
+    }
+    }
+
+    open func setLightMode(config: LightModeConfig) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_light_mode(self.uniffiClonePointer(),
+                                                         FfiConverterTypeLightModeConfig.lower(config), $0)
+    }
+    }
+
+    open func setLightModeMinimal() { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_light_mode_minimal(self.uniffiClonePointer(), $0)
     }
     }
 
@@ -2471,6 +2486,8 @@ public protocol NodeProtocol: AnyObject {
 
     func connect(nodeId: PublicKey, address: SocketAddress, persist: Bool) throws
 
+    func currentSyncIntervals() -> RuntimeSyncIntervals
+
     func disconnect(nodeId: PublicKey) throws
 
     func eventHandled() throws
@@ -2482,6 +2499,8 @@ public protocol NodeProtocol: AnyObject {
     func getAddressBalance(addressStr: String) throws -> UInt64
 
     func getTransactionDetails(txid: Txid) -> TransactionDetails?
+
+    func isLightMode() -> Bool
 
     func listBalances() -> BalanceDetails
 
@@ -2534,6 +2553,8 @@ public protocol NodeProtocol: AnyObject {
     func unifiedQrPayment() -> UnifiedQrPayment
 
     func updateChannelConfig(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, channelConfig: ChannelConfig) throws
+
+    func updateSyncIntervals(intervals: RuntimeSyncIntervals)
 
     func verifySignature(msg: [UInt8], sig: String, pkey: PublicKey) -> Bool
 
@@ -2628,6 +2649,12 @@ open class Node:
     }
     }
 
+    open func currentSyncIntervals() -> RuntimeSyncIntervals {
+        return try! FfiConverterTypeRuntimeSyncIntervals.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_node_current_sync_intervals(self.uniffiClonePointer(), $0)
+        })
+    }
+
     open func disconnect(nodeId: PublicKey) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
         uniffi_ldk_node_fn_method_node_disconnect(self.uniffiClonePointer(),
                                                   FfiConverterTypePublicKey.lower(nodeId), $0)
@@ -2664,6 +2691,12 @@ open class Node:
         return try! FfiConverterOptionTypeTransactionDetails.lift(try! rustCall {
             uniffi_ldk_node_fn_method_node_get_transaction_details(self.uniffiClonePointer(),
                                                                    FfiConverterTypeTxid.lower(txid), $0)
+        })
+    }
+
+    open func isLightMode() -> Bool {
+        return try! FfiConverterBool.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_node_is_light_mode(self.uniffiClonePointer(), $0)
         })
     }
 
@@ -2846,6 +2879,12 @@ open class Node:
                                                              FfiConverterTypeUserChannelId.lower(userChannelId),
                                                              FfiConverterTypePublicKey.lower(counterpartyNodeId),
                                                              FfiConverterTypeChannelConfig.lower(channelConfig), $0)
+    }
+    }
+
+    open func updateSyncIntervals(intervals: RuntimeSyncIntervals) { try! rustCall {
+        uniffi_ldk_node_fn_method_node_update_sync_intervals(self.uniffiClonePointer(),
+                                                             FfiConverterTypeRuntimeSyncIntervals.lower(intervals), $0)
     }
     }
 
@@ -5724,6 +5763,107 @@ public func FfiConverterTypeLSPS2ServiceConfig_lower(_ value: Lsps2ServiceConfig
     return FfiConverterTypeLSPS2ServiceConfig.lower(value)
 }
 
+public struct LightModeConfig {
+    public var singleThreadedRuntime: Bool
+    public var disableListening: Bool
+    public var disablePeerReconnection: Bool
+    public var disableNodeAnnouncements: Bool
+    public var disableRgsSync: Bool
+    public var disablePathfindingScoresSync: Bool
+    public var disableLiquidityHandler: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(singleThreadedRuntime: Bool, disableListening: Bool, disablePeerReconnection: Bool, disableNodeAnnouncements: Bool, disableRgsSync: Bool, disablePathfindingScoresSync: Bool, disableLiquidityHandler: Bool) {
+        self.singleThreadedRuntime = singleThreadedRuntime
+        self.disableListening = disableListening
+        self.disablePeerReconnection = disablePeerReconnection
+        self.disableNodeAnnouncements = disableNodeAnnouncements
+        self.disableRgsSync = disableRgsSync
+        self.disablePathfindingScoresSync = disablePathfindingScoresSync
+        self.disableLiquidityHandler = disableLiquidityHandler
+    }
+}
+
+extension LightModeConfig: Equatable, Hashable {
+    public static func == (lhs: LightModeConfig, rhs: LightModeConfig) -> Bool {
+        if lhs.singleThreadedRuntime != rhs.singleThreadedRuntime {
+            return false
+        }
+        if lhs.disableListening != rhs.disableListening {
+            return false
+        }
+        if lhs.disablePeerReconnection != rhs.disablePeerReconnection {
+            return false
+        }
+        if lhs.disableNodeAnnouncements != rhs.disableNodeAnnouncements {
+            return false
+        }
+        if lhs.disableRgsSync != rhs.disableRgsSync {
+            return false
+        }
+        if lhs.disablePathfindingScoresSync != rhs.disablePathfindingScoresSync {
+            return false
+        }
+        if lhs.disableLiquidityHandler != rhs.disableLiquidityHandler {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(singleThreadedRuntime)
+        hasher.combine(disableListening)
+        hasher.combine(disablePeerReconnection)
+        hasher.combine(disableNodeAnnouncements)
+        hasher.combine(disableRgsSync)
+        hasher.combine(disablePathfindingScoresSync)
+        hasher.combine(disableLiquidityHandler)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLightModeConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LightModeConfig {
+        return
+            try LightModeConfig(
+                singleThreadedRuntime: FfiConverterBool.read(from: &buf),
+                disableListening: FfiConverterBool.read(from: &buf),
+                disablePeerReconnection: FfiConverterBool.read(from: &buf),
+                disableNodeAnnouncements: FfiConverterBool.read(from: &buf),
+                disableRgsSync: FfiConverterBool.read(from: &buf),
+                disablePathfindingScoresSync: FfiConverterBool.read(from: &buf),
+                disableLiquidityHandler: FfiConverterBool.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: LightModeConfig, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.singleThreadedRuntime, into: &buf)
+        FfiConverterBool.write(value.disableListening, into: &buf)
+        FfiConverterBool.write(value.disablePeerReconnection, into: &buf)
+        FfiConverterBool.write(value.disableNodeAnnouncements, into: &buf)
+        FfiConverterBool.write(value.disableRgsSync, into: &buf)
+        FfiConverterBool.write(value.disablePathfindingScoresSync, into: &buf)
+        FfiConverterBool.write(value.disableLiquidityHandler, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLightModeConfig_lift(_ buf: RustBuffer) throws -> LightModeConfig {
+    return try FfiConverterTypeLightModeConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLightModeConfig_lower(_ value: LightModeConfig) -> RustBuffer {
+    return FfiConverterTypeLightModeConfig.lower(value)
+}
+
 public struct LogRecord {
     public var level: LogLevel
     public var args: String
@@ -6516,6 +6656,107 @@ public func FfiConverterTypeRoutingFees_lift(_ buf: RustBuffer) throws -> Routin
 #endif
 public func FfiConverterTypeRoutingFees_lower(_ value: RoutingFees) -> RustBuffer {
     return FfiConverterTypeRoutingFees.lower(value)
+}
+
+public struct RuntimeSyncIntervals {
+    public var peerReconnectionIntervalSecs: UInt64
+    public var rgsSyncIntervalSecs: UInt64
+    public var pathfindingScoresSyncIntervalSecs: UInt64
+    public var nodeAnnouncementIntervalSecs: UInt64
+    public var onchainWalletSyncIntervalSecs: UInt64
+    public var lightningWalletSyncIntervalSecs: UInt64
+    public var feeRateCacheUpdateIntervalSecs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(peerReconnectionIntervalSecs: UInt64, rgsSyncIntervalSecs: UInt64, pathfindingScoresSyncIntervalSecs: UInt64, nodeAnnouncementIntervalSecs: UInt64, onchainWalletSyncIntervalSecs: UInt64, lightningWalletSyncIntervalSecs: UInt64, feeRateCacheUpdateIntervalSecs: UInt64) {
+        self.peerReconnectionIntervalSecs = peerReconnectionIntervalSecs
+        self.rgsSyncIntervalSecs = rgsSyncIntervalSecs
+        self.pathfindingScoresSyncIntervalSecs = pathfindingScoresSyncIntervalSecs
+        self.nodeAnnouncementIntervalSecs = nodeAnnouncementIntervalSecs
+        self.onchainWalletSyncIntervalSecs = onchainWalletSyncIntervalSecs
+        self.lightningWalletSyncIntervalSecs = lightningWalletSyncIntervalSecs
+        self.feeRateCacheUpdateIntervalSecs = feeRateCacheUpdateIntervalSecs
+    }
+}
+
+extension RuntimeSyncIntervals: Equatable, Hashable {
+    public static func == (lhs: RuntimeSyncIntervals, rhs: RuntimeSyncIntervals) -> Bool {
+        if lhs.peerReconnectionIntervalSecs != rhs.peerReconnectionIntervalSecs {
+            return false
+        }
+        if lhs.rgsSyncIntervalSecs != rhs.rgsSyncIntervalSecs {
+            return false
+        }
+        if lhs.pathfindingScoresSyncIntervalSecs != rhs.pathfindingScoresSyncIntervalSecs {
+            return false
+        }
+        if lhs.nodeAnnouncementIntervalSecs != rhs.nodeAnnouncementIntervalSecs {
+            return false
+        }
+        if lhs.onchainWalletSyncIntervalSecs != rhs.onchainWalletSyncIntervalSecs {
+            return false
+        }
+        if lhs.lightningWalletSyncIntervalSecs != rhs.lightningWalletSyncIntervalSecs {
+            return false
+        }
+        if lhs.feeRateCacheUpdateIntervalSecs != rhs.feeRateCacheUpdateIntervalSecs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(peerReconnectionIntervalSecs)
+        hasher.combine(rgsSyncIntervalSecs)
+        hasher.combine(pathfindingScoresSyncIntervalSecs)
+        hasher.combine(nodeAnnouncementIntervalSecs)
+        hasher.combine(onchainWalletSyncIntervalSecs)
+        hasher.combine(lightningWalletSyncIntervalSecs)
+        hasher.combine(feeRateCacheUpdateIntervalSecs)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRuntimeSyncIntervals: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RuntimeSyncIntervals {
+        return
+            try RuntimeSyncIntervals(
+                peerReconnectionIntervalSecs: FfiConverterUInt64.read(from: &buf),
+                rgsSyncIntervalSecs: FfiConverterUInt64.read(from: &buf),
+                pathfindingScoresSyncIntervalSecs: FfiConverterUInt64.read(from: &buf),
+                nodeAnnouncementIntervalSecs: FfiConverterUInt64.read(from: &buf),
+                onchainWalletSyncIntervalSecs: FfiConverterUInt64.read(from: &buf),
+                lightningWalletSyncIntervalSecs: FfiConverterUInt64.read(from: &buf),
+                feeRateCacheUpdateIntervalSecs: FfiConverterUInt64.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: RuntimeSyncIntervals, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.peerReconnectionIntervalSecs, into: &buf)
+        FfiConverterUInt64.write(value.rgsSyncIntervalSecs, into: &buf)
+        FfiConverterUInt64.write(value.pathfindingScoresSyncIntervalSecs, into: &buf)
+        FfiConverterUInt64.write(value.nodeAnnouncementIntervalSecs, into: &buf)
+        FfiConverterUInt64.write(value.onchainWalletSyncIntervalSecs, into: &buf)
+        FfiConverterUInt64.write(value.lightningWalletSyncIntervalSecs, into: &buf)
+        FfiConverterUInt64.write(value.feeRateCacheUpdateIntervalSecs, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRuntimeSyncIntervals_lift(_ buf: RustBuffer) throws -> RuntimeSyncIntervals {
+    return try FfiConverterTypeRuntimeSyncIntervals.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRuntimeSyncIntervals_lower(_ value: RuntimeSyncIntervals) -> RustBuffer {
+    return FfiConverterTypeRuntimeSyncIntervals.lower(value)
 }
 
 public struct SpendableUtxo {
@@ -8192,6 +8433,8 @@ public enum NodeError {
     case CoinSelectionFailed(message: String)
 
     case InvalidMnemonic(message: String)
+
+    case BackgroundSyncNotEnabled(message: String)
 }
 
 #if swift(>=5.8)
@@ -8451,6 +8694,10 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
                 message: FfiConverterString.read(from: &buf)
             )
 
+        case 63: return try .BackgroundSyncNotEnabled(
+                message: FfiConverterString.read(from: &buf)
+            )
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -8581,6 +8828,8 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(61))
         case .InvalidMnemonic(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(62))
+        case .BackgroundSyncNotEnabled(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(63))
         }
     }
 }
@@ -11680,6 +11929,13 @@ private func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) 
     }
 }
 
+public func batterySavingSyncIntervals() -> RuntimeSyncIntervals {
+    return try! FfiConverterTypeRuntimeSyncIntervals.lift(try! rustCall {
+        uniffi_ldk_node_fn_func_battery_saving_sync_intervals($0
+        )
+    })
+}
+
 public func defaultConfig() -> Config {
     return try! FfiConverterTypeConfig.lift(try! rustCall {
         uniffi_ldk_node_fn_func_default_config($0
@@ -11719,6 +11975,9 @@ private var initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_ldk_node_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if uniffi_ldk_node_checksum_func_battery_saving_sync_intervals() != 25473 {
+        return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_func_default_config() != 55381 {
         return InitializationResult.apiChecksumMismatch
@@ -11969,6 +12228,12 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_builder_set_gossip_source_rgs() != 64312 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_builder_set_light_mode() != 13621 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_builder_set_light_mode_minimal() != 8340 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_builder_set_liquidity_source_lsps1() != 51527 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -12041,6 +12306,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_node_connect() != 34120 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_node_current_sync_intervals() != 51918 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_node_disconnect() != 43538 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -12057,6 +12325,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_node_is_light_mode() != 56992 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_list_balances() != 57528 {
@@ -12135,6 +12406,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_update_channel_config() != 37852 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_node_update_sync_intervals() != 6071 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_verify_signature() != 20486 {

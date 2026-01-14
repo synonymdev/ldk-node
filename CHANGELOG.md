@@ -1,3 +1,18 @@
+# 0.7.0-rc.7 (Synonym Fork)
+
+## Synonym Fork Additions
+- Added **Light Mode** build-time configuration for resource-constrained environments (iOS NSE, Android background):
+  - `Builder::set_light_mode_minimal()` - Ultra-minimal mode for iOS Notification Service Extension (~24MB memory limit)
+  - `single_threaded_runtime` flag - Saves ~10-15MB by using single-threaded Tokio runtime
+  - `disable_liquidity_handler` flag - Disables LSPS1/LSPS2 background processing
+  - Combined with existing flags (`disable_listening`, `disable_peer_reconnection`, `disable_rgs_sync`, etc.)
+- Added **Runtime Sync Intervals** (`RuntimeSyncIntervals`) to adjust background task intervals at runtime for battery saving:
+  - `Node::update_sync_intervals()` - Update intervals without restarting the node
+  - `battery_saving_sync_intervals()` - Convenience function with preset battery-saving values
+  - Configurable intervals for: peer reconnection, RGS sync, pathfinding scores, node announcements,
+    on-chain wallet sync, Lightning wallet sync, and fee rate cache updates
+- Documentation improvements for mobile developer usage (Android battery saving, iOS NSE integration)
+
 # 0.7.0-rc.6 (Synonym Fork)
 
 ## Synonym Fork Additions

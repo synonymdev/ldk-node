@@ -330,6 +330,10 @@ interface BuilderInterface {
     
     fun `setGossipSourceRgs`(`rgsServerUrl`: kotlin.String)
     
+    fun `setLightMode`(`config`: LightModeConfig)
+    
+    fun `setLightModeMinimal`()
+    
     fun `setLiquiditySourceLsps1`(`nodeId`: PublicKey, `address`: SocketAddress, `token`: kotlin.String?)
     
     fun `setLiquiditySourceLsps2`(`nodeId`: PublicKey, `address`: SocketAddress, `token`: kotlin.String?)
@@ -424,6 +428,8 @@ interface NodeInterface {
     @Throws(NodeException::class)
     fun `connect`(`nodeId`: PublicKey, `address`: SocketAddress, `persist`: kotlin.Boolean)
     
+    fun `currentSyncIntervals`(): RuntimeSyncIntervals
+    
     @Throws(NodeException::class)
     fun `disconnect`(`nodeId`: PublicKey)
     
@@ -440,6 +446,8 @@ interface NodeInterface {
     fun `getAddressBalance`(`addressStr`: kotlin.String): kotlin.ULong
     
     fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
+    
+    fun `isLightMode`(): kotlin.Boolean
     
     fun `listBalances`(): BalanceDetails
     
@@ -501,6 +509,8 @@ interface NodeInterface {
     
     @Throws(NodeException::class)
     fun `updateChannelConfig`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `channelConfig`: ChannelConfig)
+    
+    fun `updateSyncIntervals`(`intervals`: RuntimeSyncIntervals)
     
     fun `verifySignature`(`msg`: List<kotlin.UByte>, `sig`: kotlin.String, `pkey`: PublicKey): kotlin.Boolean
     
@@ -977,6 +987,21 @@ data class Lsps2ServiceConfig (
 
 
 @kotlinx.serialization.Serializable
+data class LightModeConfig (
+    val `singleThreadedRuntime`: kotlin.Boolean, 
+    val `disableListening`: kotlin.Boolean, 
+    val `disablePeerReconnection`: kotlin.Boolean, 
+    val `disableNodeAnnouncements`: kotlin.Boolean, 
+    val `disableRgsSync`: kotlin.Boolean, 
+    val `disablePathfindingScoresSync`: kotlin.Boolean, 
+    val `disableLiquidityHandler`: kotlin.Boolean
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
 data class LogRecord (
     val `level`: LogLevel, 
     val `args`: kotlin.String, 
@@ -1093,6 +1118,21 @@ data class RouteParametersConfig (
 data class RoutingFees (
     val `baseMsat`: kotlin.UInt, 
     val `proportionalMillionths`: kotlin.UInt
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class RuntimeSyncIntervals (
+    val `peerReconnectionIntervalSecs`: kotlin.ULong, 
+    val `rgsSyncIntervalSecs`: kotlin.ULong, 
+    val `pathfindingScoresSyncIntervalSecs`: kotlin.ULong, 
+    val `nodeAnnouncementIntervalSecs`: kotlin.ULong, 
+    val `onchainWalletSyncIntervalSecs`: kotlin.ULong, 
+    val `lightningWalletSyncIntervalSecs`: kotlin.ULong, 
+    val `feeRateCacheUpdateIntervalSecs`: kotlin.ULong
 ) {
     companion object
 }
@@ -1782,6 +1822,8 @@ sealed class NodeException(message: String): kotlin.Exception(message) {
     class CoinSelectionFailed(message: String) : NodeException(message)
     
     class InvalidMnemonic(message: String) : NodeException(message)
+    
+    class BackgroundSyncNotEnabled(message: String) : NodeException(message)
     
 }
 
