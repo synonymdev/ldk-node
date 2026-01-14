@@ -1,21 +1,20 @@
 # 0.7.0-rc.7 (Synonym Fork)
 
 ## Synonym Fork Additions
-- Added **Light Mode** build-time configuration for resource-constrained environments (iOS NSE, Android background):
+- Added light mode build-time configuration for resource-constrained environments (iOS NSE, Android background):
   - `Builder::set_light_mode_minimal()` - Ultra-minimal mode for iOS Notification Service Extension (~24MB memory limit)
   - `single_threaded_runtime` flag - Saves ~10-15MB by using single-threaded Tokio runtime
   - `disable_liquidity_handler` flag - Disables LSPS1/LSPS2 background processing
   - Combined with existing flags (`disable_listening`, `disable_peer_reconnection`, `disable_rgs_sync`, etc.)
-- Added **Runtime Sync Intervals** (`RuntimeSyncIntervals`) to adjust background task intervals at runtime for battery saving:
+- Added Runtime Sync Intervals (`RuntimeSyncIntervals`) to adjust background task intervals at runtime for battery saving:
   - `Node::update_sync_intervals()` - Update intervals without restarting the node
   - `battery_saving_sync_intervals()` - Convenience function with preset battery-saving values
   - Configurable intervals for: peer reconnection, RGS sync, pathfinding scores, node announcements,
     on-chain wallet sync, Lightning wallet sync, and fee rate cache updates
-- Documentation improvements for mobile developer usage (Android battery saving, iOS NSE integration)
-
-# 0.7.0-rc.6 (Synonym Fork)
-
-## Synonym Fork Additions
+- Added `derive_node_secret_from_mnemonic()` utility function to derive the node's secret key from a
+  BIP39 mnemonic, matching LDK's KeysManager derivation path (`m/0'`). This enables backup authentication
+  and key verification before the node starts, using the same derivation that a running Node instance
+  would use internally.
 - Added reactive event system for wallet monitoring without polling:
   - **Onchain Transaction Events** (fully implemented):
     - `OnchainTransactionReceived`: Emitted when a new unconfirmed transaction is
@@ -70,10 +69,6 @@
   channel data from external LDK implementations (e.g., react-native-ldk). The channel manager and
   monitor data is written to the configured storage during build, before channel monitors are read.
   Storage keys for monitors are derived from the funding outpoint.
-- Added `derive_node_secret_from_mnemonic()` utility function to derive the node's secret key from a
-  BIP39 mnemonic, matching LDK's KeysManager derivation path (m/0'). This enables backup authentication
-  and key verification before the node starts, using the same derivation that a running Node instance
-  would use internally.
 
 # 0.7.0 - Dec. 3, 2025
 This seventh minor release introduces numerous new features, bug fixes, and API improvements. In particular, it adds support for channel Splicing, Async Payments, as well as sourcing chain data from a Bitcoin Core REST backend.
@@ -496,4 +491,3 @@ integrated LDK and BDK-based wallets.
 
 **Note:** This release is still considered experimental, should not be run in
 production, and no compatibility guarantees are given until the release of 0.1.
-
