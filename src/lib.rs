@@ -102,6 +102,7 @@ mod tx_broadcaster;
 mod types;
 mod wallet;
 
+use std::collections::HashMap;
 use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
@@ -113,9 +114,9 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Amount};
 #[cfg(feature = "uniffi")]
 pub use builder::ArcedNodeBuilder as Builder;
-pub use builder::{BuildError, ChannelDataMigration};
 #[cfg(not(feature = "uniffi"))]
 pub use builder::NodeBuilder as Builder;
+pub use builder::{BuildError, ChannelDataMigration};
 use chain::ChainSource;
 use config::{
 	default_user_config, may_announce_channel, AsyncPaymentsRole, ChannelConfig, Config,
@@ -131,8 +132,9 @@ use fee_estimator::{ConfirmationTarget, FeeEstimator, OnchainFeeEstimator};
 use ffi::*;
 use gossip::GossipSource;
 use graph::NetworkGraph;
-pub use io::utils::{derive_node_secret_from_mnemonic, generate_entropy_mnemonic};
 use io::utils::write_node_metrics;
+pub use io::utils::{derive_node_secret_from_mnemonic, generate_entropy_mnemonic};
+use lightning::chain::channelmonitor::Balance as LdkBalance;
 use lightning::chain::BestBlock;
 use lightning::events::bump_transaction::{Input, Wallet as LdkWallet};
 use lightning::impl_writeable_tlv_based;
@@ -141,6 +143,7 @@ use lightning::ln::channel_state::{ChannelDetails as LdkChannelDetails, ChannelS
 use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::funding::SpliceContribution;
 use lightning::ln::msgs::SocketAddress;
+use lightning::ln::types::ChannelId;
 use lightning::routing::gossip::NodeAlias;
 use lightning::util::persist::KVStoreSync;
 use lightning_background_processor::process_events_async;
@@ -1047,7 +1050,37 @@ impl Node {
 
 	/// Retrieve a list of known channels.
 	pub fn list_channels(&self) -> Vec<ChannelDetails> {
-		self.channel_manager.list_channels().into_iter().map(|c| c.into()).collect()
+		// Build channel_id -> claimable_on_close_sats map from monitors
+		let mut claimable_map: HashMap<ChannelId, u64> = HashMap::new();
+
+		for channel_id in self.chain_monitor.list_monitors() {
+			if let Ok(monitor) = self.chain_monitor.get_monitor(channel_id) {
+				for balance in monitor.get_claimable_balances() {
+					if let LdkBalance::ClaimableOnChannelClose {
+						balance_candidates,
+						confirmed_balance_candidate_index,
+						..
+					} = &balance
+					{
+						if let Some(confirmed) =
+							balance_candidates.get(*confirmed_balance_candidate_index)
+						{
+							*claimable_map.entry(channel_id).or_insert(0) +=
+								confirmed.amount_satoshis;
+						}
+					}
+				}
+			}
+		}
+
+		self.channel_manager
+			.list_channels()
+			.into_iter()
+			.map(|c| {
+				let balance = claimable_map.get(&c.channel_id).copied();
+				ChannelDetails::from_ldk_with_balance(c, balance)
+			})
+			.collect()
 	}
 
 	/// Connect to a node on the peer-to-peer network.
