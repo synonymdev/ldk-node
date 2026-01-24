@@ -1,3 +1,4 @@
 jdk: openjdk17
-before_install:
-  - cd bindings/kotlin/ldk-node-android
+install:
+  - cd bindings/kotlin/ldk-node-android && ./gradlew publishToMavenLocal
+  - cd bindings/kotlin/ldk-node-jvm && ./gradlew publishToMavenLocal
