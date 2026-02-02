@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 
 use bitcoin::{Address, Txid};
 
-use crate::config::Config;
+use crate::config::{AddressType, Config};
 use crate::error::Error;
 use crate::fee_estimator::ConfirmationTarget;
 use crate::logger::{log_info, LdkLogger, Logger};
@@ -61,6 +61,25 @@ impl OnchainPayment {
 	pub fn new_address(&self) -> Result<Address, Error> {
 		let funding_address = self.wallet.get_new_address()?;
 		log_info!(self.logger, "Generated new funding address: {}", funding_address);
+		Ok(funding_address)
+	}
+
+	/// Retrieve a new on-chain address for a specific address type.
+	///
+	/// The address type must be configured as the primary address type or included in
+	/// `address_types_to_monitor` when building the node.
+	pub fn new_address_for_type(&self, address_type: AddressType) -> Result<Address, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+
+		let funding_address = self.wallet.get_new_address_for_type(address_type)?;
+		log_info!(
+			self.logger,
+			"Generated new funding address for {:?}: {}",
+			address_type,
+			funding_address
+		);
 		Ok(funding_address)
 	}
 
@@ -133,7 +152,7 @@ impl OnchainPayment {
 			fee_rate,
 			algorithm,
 			&drain_script,
-			&self.channel_manager,
+			Some(&self.channel_manager),
 		)?;
 
 		// Convert selected outpoints back to SpendableUtxo by direct filtering

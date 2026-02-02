@@ -637,6 +637,15 @@ impl BitcoindChainSource {
 			}
 		}
 	}
+
+	/// Fetches a transaction by its txid from the Bitcoind server.
+	/// Returns `None` if the transaction is not found.
+	pub(super) async fn get_transaction(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
+		self.api_client.get_raw_transaction(txid).await.map_err(|e| {
+			log_error!(self.logger, "Failed to fetch transaction {} from Bitcoind: {}", txid, e);
+			Error::WalletOperationFailed
+		})
+	}
 }
 
 pub enum BitcoindClient {

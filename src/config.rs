@@ -99,6 +99,74 @@ pub const WALLET_KEYS_SEED_LEN: usize = 64;
 // The timeout after which we abort a external scores sync operation.
 pub(crate) const EXTERNAL_PATHFINDING_SCORES_SYNC_TIMEOUT_SECS: u64 = 5;
 
+/// Supported Bitcoin address types for the on-chain wallet.
+///
+/// This determines what type of addresses will be generated for receiving funds and change outputs.
+/// Note that Lightning channel operations (funding, shutdown scripts) always require witness addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AddressType {
+	/// Legacy addresses (P2PKH) - BIP 44
+	/// Example: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+	Legacy,
+	/// Nested SegWit addresses (P2SH-wrapped P2WPKH) - BIP 49
+	/// Example: 3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy
+	NestedSegwit,
+	/// Native SegWit addresses (P2WPKH) - BIP 84
+	/// Example: bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4
+	NativeSegwit,
+	/// Taproot addresses (P2TR) - BIP 86
+	/// Example: bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297
+	Taproot,
+}
+
+impl Default for AddressType {
+	fn default() -> Self {
+		AddressType::NativeSegwit
+	}
+}
+
+impl lightning::util::ser::Writeable for AddressType {
+	fn write<W: lightning::util::ser::Writer>(
+		&self, writer: &mut W,
+	) -> Result<(), bitcoin::io::Error> {
+		match self {
+			AddressType::Legacy => 0u8.write(writer),
+			AddressType::NestedSegwit => 1u8.write(writer),
+			AddressType::NativeSegwit => 2u8.write(writer),
+			AddressType::Taproot => 3u8.write(writer),
+		}
+	}
+}
+
+impl lightning::util::ser::Readable for AddressType {
+	fn read<R: bitcoin::io::Read>(
+		reader: &mut R,
+	) -> Result<Self, lightning::ln::msgs::DecodeError> {
+		let discriminant: u8 = lightning::util::ser::Readable::read(reader)?;
+		match discriminant {
+			0 => Ok(AddressType::Legacy),
+			1 => Ok(AddressType::NestedSegwit),
+			2 => Ok(AddressType::NativeSegwit),
+			3 => Ok(AddressType::Taproot),
+			_ => Err(lightning::ln::msgs::DecodeError::InvalidValue),
+		}
+	}
+}
+
+impl Config {
+	/// Returns the additional address types to monitor, excluding the primary address type.
+	///
+	/// This filters `address_types_to_monitor` to remove any duplicates of the primary `address_type`,
+	/// since those would be redundant to monitor separately.
+	pub fn additional_address_types(&self) -> Vec<AddressType> {
+		self.address_types_to_monitor
+			.iter()
+			.copied()
+			.filter(|&at| at != self.address_type)
+			.collect()
+	}
+}
+
 #[derive(Debug, Clone)]
 /// Represents the configuration of an [`Node`] instance.
 ///
@@ -197,6 +265,31 @@ pub struct Config {
 	///
 	/// [`BalanceDetails::spendable_onchain_balance_sats`]: crate::BalanceDetails::spendable_onchain_balance_sats
 	pub include_untrusted_pending_in_spendable: bool,
+	/// The address type to use for the on-chain wallet (receiving funds and change addresses).
+	///
+	/// This determines what type of addresses will be generated:
+	/// - `Legacy` (P2PKH): BIP 44 - older format, higher fees
+	/// - `NestedSegwit` (P2SH-wrapped P2WPKH): BIP 49 - compatible with older wallets
+	/// - `NativeSegwit` (P2WPKH): BIP 84 - default, lower fees, modern standard
+	/// - `Taproot` (P2TR): BIP 86 - newest format, lowest fees, best privacy
+	///
+	/// **Note:** Lightning channel operations (funding transactions and shutdown scripts) always
+	/// require witness addresses and will use native segwit regardless of this setting.
+	///
+	/// Default is `NativeSegwit`.
+	pub address_type: AddressType,
+	/// Additional address types to monitor for existing funds.
+	///
+	/// This allows tracking funds in multiple address types simultaneously. For example, if you
+	/// previously used Legacy addresses but now want to use Native Segwit for new addresses, you
+	/// can add `Legacy` here to continue monitoring your old Legacy addresses.
+	///
+	/// The `address_type` field determines what type of addresses will be generated for new
+	/// receiving and change addresses, while `address_types_to_monitor` determines which additional
+	/// address types should be scanned for existing funds.
+	///
+	/// Default is empty (only the primary `address_type` is monitored).
+	pub address_types_to_monitor: Vec<AddressType>,
 }
 
 impl Default for Config {
@@ -212,6 +305,8 @@ impl Default for Config {
 			route_parameters: None,
 			node_alias: None,
 			include_untrusted_pending_in_spendable: false,
+			address_type: AddressType::default(),
+			address_types_to_monitor: Vec::new(),
 		}
 	}
 }
