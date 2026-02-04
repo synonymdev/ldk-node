@@ -13,6 +13,26 @@ use lightning::sign::SpendableOutputDescriptor;
 use lightning::util::sweep::{OutputSpendStatus, TrackedSpendableOutput};
 use lightning_types::payment::{PaymentHash, PaymentPreimage};
 
+/// Balance details for a specific address type wallet.
+///
+/// Returned by [`Node::get_balance_for_address_type`].
+///
+/// [`Node::get_balance_for_address_type`]: crate::Node::get_balance_for_address_type
+#[derive(Debug, Clone)]
+pub struct AddressTypeBalance {
+	/// The total balance of the wallet for this address type.
+	pub total_sats: u64,
+	/// The currently spendable balance of the wallet for this address type.
+	///
+	/// Note: This does not account for anchor channel reserves. Use
+	/// [`BalanceDetails::total_anchor_channels_reserve_sats`] from [`Node::list_balances`]
+	/// to get the aggregate reserve that applies across all wallets.
+	///
+	/// [`BalanceDetails::total_anchor_channels_reserve_sats`]: BalanceDetails::total_anchor_channels_reserve_sats
+	/// [`Node::list_balances`]: crate::Node::list_balances
+	pub spendable_sats: u64,
+}
+
 /// Details of the known available balances returned by [`Node::list_balances`].
 ///
 /// [`Node::list_balances`]: crate::Node::list_balances

@@ -14,6 +14,7 @@ use bdk_wallet::event::WalletEvent;
 use bitcoin::{FeeRate, Network, Script, Transaction, Txid};
 use esplora_client::AsyncClient as EsploraAsyncClient;
 use lightning::chain::{Confirm, Filter, WatchedOutput};
+use lightning::log_warn;
 use lightning::util::ser::Writeable;
 use lightning_transaction_sync::EsploraSyncClient;
 
@@ -116,87 +117,35 @@ impl EsploraChainSource {
 		let incremental_sync =
 			self.node_metrics.read().unwrap().latest_onchain_wallet_sync_timestamp.is_some();
 
-		macro_rules! get_and_apply_wallet_update {
-			($sync_future: expr) => {{
-				let now = Instant::now();
-				match $sync_future.await {
-					Ok(res) => match res {
-						Ok(update) => match onchain_wallet.apply_update(update) {
-							Ok(wallet_events) => {
-								log_info!(
-									self.logger,
-									"{} of on-chain wallet finished in {}ms.",
-									if incremental_sync { "Incremental sync" } else { "Sync" },
-									now.elapsed().as_millis()
-								);
-								let unix_time_secs_opt = SystemTime::now()
-									.duration_since(UNIX_EPOCH)
-									.ok()
-									.map(|d| d.as_secs());
-									{
-										let mut locked_node_metrics = self.node_metrics.write().unwrap();
-										locked_node_metrics.latest_onchain_wallet_sync_timestamp = unix_time_secs_opt;
-										write_node_metrics(
-											&*locked_node_metrics,
-											Arc::clone(&self.kv_store),
-											Arc::clone(&self.logger)
-										)?;
-									}
-									Ok(wallet_events)
-							},
-							Err(e) => Err(e),
-						},
-						Err(e) => match *e {
-							esplora_client::Error::Reqwest(he) => {
-								if let Some(status_code) = he.status() {
-									log_error!(
-										self.logger,
-										"{} of on-chain wallet failed due to HTTP {} error: {}",
-										if incremental_sync { "Incremental sync" } else { "Sync" },
-										status_code,
-										he,
-									);
-								} else {
-									log_error!(
-										self.logger,
-										"{} of on-chain wallet failed due to HTTP error: {}",
-										if incremental_sync { "Incremental sync" } else { "Sync" },
-										he,
-									);
-								}
-								Err(Error::WalletOperationFailed)
-							},
-							_ => {
-								log_error!(
-									self.logger,
-									"{} of on-chain wallet failed due to Esplora error: {}",
-									if incremental_sync { "Incremental sync" } else { "Sync" },
-									e
-								);
-								Err(Error::WalletOperationFailed)
-							},
-						},
-					},
-					Err(e) => {
-						log_error!(
-							self.logger,
-							"{} of on-chain wallet timed out: {}",
-							if incremental_sync { "Incremental sync" } else { "Sync" },
-							e
-						);
-						Err(Error::WalletOperationTimeout)
-					},
-				}
-			}}
-		}
-
-		if incremental_sync {
+		let primary_events = if incremental_sync {
 			let sync_request = onchain_wallet.get_incremental_sync_request();
 			let wallet_sync_timeout_fut = tokio::time::timeout(
 				Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
 				self.esplora_client.sync(sync_request, BDK_CLIENT_CONCURRENCY),
 			);
-			get_and_apply_wallet_update!(wallet_sync_timeout_fut)
+			match wallet_sync_timeout_fut.await {
+				Ok(Ok(update)) => match onchain_wallet.apply_update(update) {
+					Ok(events) => {
+						log_info!(
+							self.logger,
+							"Incremental sync of primary wallet finished successfully"
+						);
+						events
+					},
+					Err(e) => {
+						log_error!(self.logger, "Failed to apply update to primary wallet: {}", e);
+						Vec::new()
+					},
+				},
+				Ok(Err(e)) => {
+					log_error!(self.logger, "Failed to sync primary wallet: {}", e);
+					Vec::new()
+				},
+				Err(_) => {
+					log_info!(self.logger, "Primary wallet sync timed out after {} seconds. Continuing with monitored wallets...", BDK_WALLET_SYNC_TIMEOUT_SECS);
+					Vec::new()
+				},
+			}
 		} else {
 			let full_scan_request = onchain_wallet.get_full_scan_request();
 			let wallet_sync_timeout_fut = tokio::time::timeout(
@@ -207,8 +156,147 @@ impl EsploraChainSource {
 					BDK_CLIENT_CONCURRENCY,
 				),
 			);
-			get_and_apply_wallet_update!(wallet_sync_timeout_fut)
+			match wallet_sync_timeout_fut.await {
+				Ok(Ok(update)) => match onchain_wallet.apply_update(update) {
+					Ok(events) => {
+						log_info!(self.logger, "Full scan of primary wallet finished successfully");
+						events
+					},
+					Err(e) => {
+						log_error!(self.logger, "Failed to apply update to primary wallet: {}", e);
+						Vec::new()
+					},
+				},
+				Ok(Err(e)) => {
+					log_error!(self.logger, "Failed to sync primary wallet: {}", e);
+					Vec::new()
+				},
+				Err(_) => {
+					log_info!(self.logger, "Primary wallet sync timed out after {} seconds. Continuing with monitored wallets...", BDK_WALLET_SYNC_TIMEOUT_SECS);
+					Vec::new()
+				},
+			}
+		};
+
+		// Sync additional monitored wallets in parallel
+		let mut all_events = primary_events;
+
+		let sync_requests: Vec<_> = self
+			.config
+			.additional_address_types()
+			.into_iter()
+			.filter_map(|address_type| {
+				let do_incremental = self
+					.node_metrics
+					.read()
+					.unwrap()
+					.get_wallet_sync_timestamp(address_type)
+					.is_some();
+				match onchain_wallet.get_wallet_sync_request(address_type) {
+					Ok((full_scan_req, incremental_req)) => {
+						Some((address_type, full_scan_req, incremental_req, do_incremental))
+					},
+					Err(e) => {
+						log_info!(
+							self.logger,
+							"Skipping sync for wallet {:?}: {}",
+							address_type,
+							e
+						);
+						None
+					},
+				}
+			})
+			.collect();
+
+		let mut join_set = tokio::task::JoinSet::new();
+		for (address_type, full_scan_req, incremental_req, do_incremental) in sync_requests {
+			let client = self.esplora_client.clone();
+			join_set.spawn(async move {
+				let result = if do_incremental {
+					tokio::time::timeout(
+						Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
+						client.sync(incremental_req, BDK_CLIENT_CONCURRENCY),
+					)
+					.await
+					.map(|r| r.map(|u| bdk_wallet::Update::from(u)))
+				} else {
+					tokio::time::timeout(
+						Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
+						client.full_scan(
+							full_scan_req,
+							BDK_CLIENT_STOP_GAP,
+							BDK_CLIENT_CONCURRENCY,
+						),
+					)
+					.await
+					.map(|r| r.map(|u| bdk_wallet::Update::from(u)))
+				};
+				(address_type, result)
+			});
 		}
+
+		while let Some(join_result) = join_set.join_next().await {
+			let (address_type, result) = match join_result {
+				Ok(r) => r,
+				Err(e) => {
+					log_warn!(self.logger, "Wallet sync task panicked: {}", e);
+					continue;
+				},
+			};
+
+			let wallet_events = match result {
+				Ok(Ok(update)) => {
+					let events = onchain_wallet
+						.apply_update_to_wallet(address_type, update)
+						.unwrap_or_else(|e| {
+							log_warn!(
+								self.logger,
+								"Failed to apply update to wallet {:?}: {}",
+								address_type,
+								e
+							);
+							Vec::new()
+						});
+					let unix_time_secs_opt =
+						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
+					if let Some(ts) = unix_time_secs_opt {
+						self.node_metrics
+							.write()
+							.unwrap()
+							.set_wallet_sync_timestamp(address_type, ts);
+					}
+					events
+				},
+				Ok(Err(e)) => {
+					log_warn!(self.logger, "Failed to sync wallet {:?}: {}", address_type, e);
+					Vec::new()
+				},
+				Err(_) => {
+					log_warn!(self.logger, "Sync timeout for wallet {:?}", address_type);
+					Vec::new()
+				},
+			};
+
+			all_events.extend(wallet_events);
+		}
+
+		{
+			let locked_node_metrics = self.node_metrics.read().unwrap();
+			if let Err(e) = write_node_metrics(
+				&locked_node_metrics,
+				Arc::clone(&self.kv_store),
+				Arc::clone(&self.logger),
+			) {
+				log_error!(self.logger, "Failed to persist node metrics: {}", e);
+			}
+		}
+
+		if let Err(e) = onchain_wallet.update_payment_store_for_all_transactions() {
+			log_info!(self.logger, "Failed to update payment store after wallet syncs: {}", e);
+		}
+
+		Ok(all_events)
 	}
 
 	pub(super) async fn sync_lightning_wallet(
@@ -240,6 +328,13 @@ impl EsploraChainSource {
 		&self, channel_manager: Arc<ChannelManager>, chain_monitor: Arc<ChainMonitor>,
 		output_sweeper: Arc<Sweeper>,
 	) -> Result<(), Error> {
+		log_info!(
+			self.logger,
+			"Starting Lightning wallet sync (timeout: {} seconds)...",
+			LDK_WALLET_SYNC_TIMEOUT_SECS
+		);
+		let sync_start = Instant::now();
+
 		let sync_cman = Arc::clone(&channel_manager);
 		let sync_cmon = Arc::clone(&chain_monitor);
 		let sync_sweeper = Arc::clone(&output_sweeper);
@@ -249,17 +344,21 @@ impl EsploraChainSource {
 			&*sync_sweeper as &(dyn Confirm + Sync + Send),
 		];
 
-		let timeout_fut = tokio::time::timeout(
-			Duration::from_secs(LDK_WALLET_SYNC_TIMEOUT_SECS),
-			self.tx_sync.sync(confirmables),
+		log_info!(
+			self.logger,
+			"Calling tx_sync.sync() with {} confirmables...",
+			confirmables.len()
 		);
+		let sync_fut = self.tx_sync.sync(confirmables);
+		let timeout_fut =
+			tokio::time::timeout(Duration::from_secs(LDK_WALLET_SYNC_TIMEOUT_SECS), sync_fut);
 		let now = Instant::now();
 		match timeout_fut.await {
 			Ok(res) => match res {
 				Ok(()) => {
 					log_info!(
 						self.logger,
-						"Sync of Lightning wallet finished in {}ms.",
+						"Sync of Lightning wallet finished successfully in {}ms.",
 						now.elapsed().as_millis()
 					);
 
@@ -286,12 +385,43 @@ impl EsploraChainSource {
 					Ok(())
 				},
 				Err(e) => {
-					log_error!(self.logger, "Sync of Lightning wallet failed: {}", e);
-					Err(e.into())
+					let elapsed = sync_start.elapsed();
+					let error_string = format!("{}", e);
+					log_error!(
+						self.logger,
+						"Sync of Lightning wallet failed after {:.2} seconds. Error: {}",
+						elapsed.as_secs_f64(),
+						error_string
+					);
+					// Check if this is actually a timeout error from the underlying sync
+					// If so, return TxSyncTimeout instead of TxSyncFailed
+					if error_string.to_lowercase().contains("timeout")
+						|| error_string.to_lowercase().contains("timed out")
+						|| error_string.contains("Elapsed")
+					{
+						log_error!(self.logger, "Underlying sync error appears to be a timeout (error message contains 'timeout'), returning TxSyncTimeout");
+						Err(Error::TxSyncTimeout)
+					} else {
+						log_error!(
+							self.logger,
+							"Underlying sync error is NOT a timeout, returning TxSyncFailed"
+						);
+						Err(e.into())
+					}
 				},
 			},
 			Err(e) => {
-				log_error!(self.logger, "Lightning wallet sync timed out: {}", e);
+				let elapsed = sync_start.elapsed();
+				// This is a tokio::time::timeout timeout - the future ran for the full duration
+				// The error 'e' here is tokio::time::error::Elapsed
+				log_error!(
+					self.logger,
+					"Lightning wallet sync timed out after {:.2} seconds (timeout was {} seconds). This is a tokio::time::timeout timeout (the future ran for the full {} seconds). Error: {}",
+					elapsed.as_secs_f64(),
+					LDK_WALLET_SYNC_TIMEOUT_SECS,
+					LDK_WALLET_SYNC_TIMEOUT_SECS,
+					e
+				);
 				Err(Error::TxSyncTimeout)
 			},
 		}
@@ -466,6 +596,19 @@ impl EsploraChainSource {
 				Some(balance.max(0) as u64)
 			},
 			Err(_) => None,
+		}
+	}
+
+	/// Fetches a transaction by its txid from the Esplora server.
+	/// Returns `None` if the transaction is not found.
+	pub(super) async fn get_transaction(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
+		match self.esplora_client.get_tx(txid).await {
+			Ok(Some(tx)) => Ok(Some(tx)),
+			Ok(None) => Ok(None),
+			Err(e) => {
+				log_error!(self.logger, "Failed to fetch transaction {} from Esplora: {}", txid, e);
+				Err(Error::WalletOperationFailed)
+			},
 		}
 	}
 }

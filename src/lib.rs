@@ -110,7 +110,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub use balance::{BalanceDetails, LightningBalance, PendingSweepBalance};
+pub use balance::{AddressTypeBalance, BalanceDetails, LightningBalance, PendingSweepBalance};
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Amount};
 #[cfg(feature = "uniffi")]
@@ -121,8 +121,9 @@ pub use builder::{BuildError, ChannelDataMigration};
 use chain::ChainSource;
 pub use config::{battery_saving_sync_intervals, RuntimeSyncIntervals};
 use config::{
-	default_user_config, may_announce_channel, AsyncPaymentsRole, BackgroundSyncConfig,
-	ChannelConfig, Config, NODE_ANN_BCAST_INTERVAL, PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
+	default_user_config, may_announce_channel, AddressType, AsyncPaymentsRole,
+	BackgroundSyncConfig, ChannelConfig, Config, NODE_ANN_BCAST_INTERVAL,
+	PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
 };
 use connection::ConnectionManager;
 pub use error::Error as NodeError;
@@ -1749,6 +1750,31 @@ impl Node {
 		}
 	}
 
+	/// Retrieves the on-chain balance for a specific address type.
+	///
+	/// Returns an error if the address type is not loaded (i.e., not the primary type
+	/// and not in `address_types_to_monitor`).
+	///
+	/// Note: The returned `spendable_sats` does not account for anchor channel reserves.
+	/// Use [`list_balances`] to get the aggregate balance with reserves applied.
+	///
+	/// [`list_balances`]: Self::list_balances
+	pub fn get_balance_for_address_type(
+		&self, address_type: AddressType,
+	) -> Result<AddressTypeBalance, Error> {
+		let (total_sats, spendable_sats) =
+			self.wallet.get_balance_for_address_type(address_type)?;
+		Ok(AddressTypeBalance { total_sats, spendable_sats })
+	}
+
+	/// Returns all address types currently loaded and monitored by the wallet.
+	///
+	/// This includes the primary address type and all types specified in
+	/// `address_types_to_monitor` during configuration.
+	pub fn list_monitored_address_types(&self) -> Vec<AddressType> {
+		self.wallet.get_loaded_address_types()
+	}
+
 	/// Retrieves all payments that match the given predicate.
 	///
 	/// For example, you could retrieve all stored outbound payments as follows:
@@ -1924,6 +1950,7 @@ pub(crate) struct NodeMetrics {
 	last_known_spendable_onchain_balance_sats: Option<u64>,
 	last_known_total_onchain_balance_sats: Option<u64>,
 	last_known_total_lightning_balance_sats: Option<u64>,
+	monitored_wallet_sync_timestamps: Vec<(AddressType, u64)>,
 }
 
 impl Default for NodeMetrics {
@@ -1939,7 +1966,31 @@ impl Default for NodeMetrics {
 			last_known_spendable_onchain_balance_sats: None,
 			last_known_total_onchain_balance_sats: None,
 			last_known_total_lightning_balance_sats: None,
+			monitored_wallet_sync_timestamps: Vec::new(),
 		}
+	}
+}
+
+impl NodeMetrics {
+	pub(crate) fn get_wallet_sync_timestamp(&self, address_type: AddressType) -> Option<u64> {
+		self.monitored_wallet_sync_timestamps
+			.iter()
+			.find(|(at, _)| *at == address_type)
+			.map(|(_, ts)| *ts)
+	}
+
+	pub(crate) fn set_wallet_sync_timestamp(&mut self, address_type: AddressType, timestamp: u64) {
+		if let Some(entry) =
+			self.monitored_wallet_sync_timestamps.iter_mut().find(|(at, _)| *at == address_type)
+		{
+			entry.1 = timestamp;
+		} else {
+			self.monitored_wallet_sync_timestamps.push((address_type, timestamp));
+		}
+	}
+
+	pub(crate) fn retain_wallet_sync_timestamps(&mut self, address_types: &[AddressType]) {
+		self.monitored_wallet_sync_timestamps.retain(|(at, _)| address_types.contains(at));
 	}
 }
 
@@ -1954,6 +2005,7 @@ impl_writeable_tlv_based!(NodeMetrics, {
 	(12, last_known_spendable_onchain_balance_sats, option),
 	(14, last_known_total_onchain_balance_sats, option),
 	(16, last_known_total_lightning_balance_sats, option),
+	(18, monitored_wallet_sync_timestamps, optional_vec),
 });
 
 // Check if balances have changed and emit BalanceChanged event if so.

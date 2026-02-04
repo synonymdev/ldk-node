@@ -21,6 +21,7 @@ use electrum_client::{
 	Batch, Client as ElectrumClient, ConfigBuilder as ElectrumConfigBuilder, ElectrumApi,
 };
 use lightning::chain::{Confirm, Filter, WatchedOutput};
+use lightning::log_warn;
 use lightning::util::ser::Writeable;
 use lightning_transaction_sync::ElectrumSyncClient;
 
@@ -172,24 +173,148 @@ impl ElectrumChainSource {
 
 		let cached_txs = onchain_wallet.get_cached_txs();
 
-		let res = if incremental_sync {
+		let primary_events = if incremental_sync {
 			let incremental_sync_request = onchain_wallet.get_incremental_sync_request();
 			let incremental_sync_fut = electrum_client
-				.get_incremental_sync_wallet_update(incremental_sync_request, cached_txs);
+				.get_incremental_sync_wallet_update(incremental_sync_request, cached_txs.clone());
 
 			let now = Instant::now();
 			let update_res = incremental_sync_fut.await.map(|u| u.into());
-			apply_wallet_update(update_res, now)
+			match apply_wallet_update(update_res, now) {
+				Ok(events) => events,
+				Err(Error::WalletOperationTimeout) => {
+					log_info!(self.logger, "Primary wallet sync timed out after {} seconds. Continuing with monitored wallets...", BDK_WALLET_SYNC_TIMEOUT_SECS);
+					Vec::new()
+				},
+				Err(e) => {
+					log_error!(self.logger, "Failed to sync primary wallet: {}", e);
+					Vec::new()
+				},
+			}
 		} else {
 			let full_scan_request = onchain_wallet.get_full_scan_request();
 			let full_scan_fut =
-				electrum_client.get_full_scan_wallet_update(full_scan_request, cached_txs);
+				electrum_client.get_full_scan_wallet_update(full_scan_request, cached_txs.clone());
 			let now = Instant::now();
 			let update_res = full_scan_fut.await.map(|u| u.into());
-			apply_wallet_update(update_res, now)
+			match apply_wallet_update(update_res, now) {
+				Ok(events) => events,
+				Err(Error::WalletOperationTimeout) => {
+					log_info!(self.logger, "Primary wallet sync timed out after {} seconds. Continuing with monitored wallets...", BDK_WALLET_SYNC_TIMEOUT_SECS);
+					Vec::new()
+				},
+				Err(e) => {
+					log_error!(self.logger, "Failed to sync primary wallet: {}", e);
+					Vec::new()
+				},
+			}
 		};
 
-		res
+		// Sync additional monitored wallets in parallel
+		let mut all_events = primary_events;
+
+		let sync_requests: Vec<_> = self
+			.config
+			.additional_address_types()
+			.into_iter()
+			.filter_map(|address_type| {
+				let do_incremental = self
+					.node_metrics
+					.read()
+					.unwrap()
+					.get_wallet_sync_timestamp(address_type)
+					.is_some();
+				match onchain_wallet.get_wallet_sync_request(address_type) {
+					Ok((full_scan_req, incremental_req)) => {
+						Some((address_type, full_scan_req, incremental_req, do_incremental))
+					},
+					Err(e) => {
+						log_info!(
+							self.logger,
+							"Skipping sync for wallet {:?}: {}",
+							address_type,
+							e
+						);
+						None
+					},
+				}
+			})
+			.collect();
+
+		let mut join_set = tokio::task::JoinSet::new();
+		for (address_type, full_scan_req, incremental_req, do_incremental) in sync_requests {
+			let client = Arc::clone(&electrum_client);
+			let txs = cached_txs.clone();
+			join_set.spawn(async move {
+				let result: Result<BdkUpdate, Error> = if do_incremental {
+					client
+						.get_incremental_sync_wallet_update(incremental_req, txs)
+						.await
+						.map(|u| u.into())
+				} else {
+					client.get_full_scan_wallet_update(full_scan_req, txs).await.map(|u| u.into())
+				};
+				(address_type, result)
+			});
+		}
+
+		while let Some(join_result) = join_set.join_next().await {
+			let (address_type, result) = match join_result {
+				Ok(r) => r,
+				Err(e) => {
+					log_warn!(self.logger, "Wallet sync task panicked: {}", e);
+					continue;
+				},
+			};
+
+			let wallet_events = match result {
+				Ok(update) => {
+					let events = onchain_wallet
+						.apply_update_to_wallet(address_type, update)
+						.unwrap_or_else(|e| {
+							log_warn!(
+								self.logger,
+								"Failed to apply update to wallet {:?}: {}",
+								address_type,
+								e
+							);
+							Vec::new()
+						});
+					let unix_time_secs_opt =
+						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
+					if let Some(ts) = unix_time_secs_opt {
+						self.node_metrics
+							.write()
+							.unwrap()
+							.set_wallet_sync_timestamp(address_type, ts);
+					}
+					events
+				},
+				Err(e) => {
+					log_warn!(self.logger, "Failed to sync wallet {:?}: {}", address_type, e);
+					Vec::new()
+				},
+			};
+
+			all_events.extend(wallet_events);
+		}
+
+		{
+			let locked_node_metrics = self.node_metrics.read().unwrap();
+			if let Err(e) = write_node_metrics(
+				&locked_node_metrics,
+				Arc::clone(&self.kv_store),
+				Arc::clone(&self.logger),
+			) {
+				log_error!(self.logger, "Failed to persist node metrics: {}", e);
+			}
+		}
+
+		if let Err(e) = onchain_wallet.update_payment_store_for_all_transactions() {
+			log_info!(self.logger, "Failed to update payment store after wallet syncs: {}", e);
+		}
+
+		Ok(all_events)
 	}
 
 	pub(crate) async fn sync_lightning_wallet(
@@ -326,6 +451,20 @@ impl ElectrumChainSource {
 				return None;
 			};
 		electrum_client.get_address_balance(address).await
+	}
+
+	/// Fetches a transaction by its txid from the Electrum server.
+	/// Returns `None` if the transaction is not found.
+	pub(super) async fn get_transaction(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
+		let electrum_client: Arc<ElectrumRuntimeClient> =
+			if let Some(client) = self.electrum_runtime_status.read().unwrap().client().as_ref() {
+				Arc::clone(client)
+			} else {
+				log_error!(self.logger, "Electrum client not available");
+				return Err(Error::ConnectionFailed);
+			};
+
+		electrum_client.get_transaction(txid).await
 	}
 }
 
@@ -470,6 +609,45 @@ impl ElectrumRuntimeClient {
 				Some(confirmed + unconfirmed)
 			},
 			_ => None,
+		}
+	}
+
+	/// Fetches a transaction by its txid from the Electrum server.
+	/// Returns `None` if the transaction is not found.
+	pub(crate) async fn get_transaction(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
+		use electrum_client::ElectrumApi;
+
+		let electrum_client = Arc::clone(&self.electrum_client);
+		let txid_clone = *txid;
+		let tx_result = self
+			.runtime
+			.spawn_blocking(move || {
+				electrum_client
+					.transaction_get(&txid_clone)
+					.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)))
+			})
+			.await;
+
+		match tx_result {
+			Ok(Ok(tx)) => Ok(Some(tx)),
+			Ok(Err(e)) => {
+				log_error!(
+					self.logger,
+					"Failed to fetch transaction {} from Electrum: {}",
+					txid,
+					e
+				);
+				Err(Error::WalletOperationFailed)
+			},
+			Err(e) => {
+				log_error!(
+					self.logger,
+					"Failed to fetch transaction {} from Electrum: {}",
+					txid,
+					e
+				);
+				Err(Error::WalletOperationFailed)
+			},
 		}
 	}
 
