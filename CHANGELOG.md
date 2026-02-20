@@ -10,6 +10,12 @@
 
 ## Synonym Fork Additions
 
+- Added runtime APIs for dynamic address type management:
+  - `Node::add_address_type_to_monitor()` and `add_address_type_to_monitor_with_mnemonic()` to add an address type to the monitored set
+  - `Node::remove_address_type_from_monitor()` to unload an address type (persisted state retained for re-add)
+  - `Node::set_primary_address_type()` and `set_primary_address_type_with_mnemonic()` to change the primary; previous primary is demoted to monitored
+  - New errors: `AddressTypeAlreadyMonitored`, `AddressTypeIsPrimary`, `AddressTypeNotMonitored`, `InvalidSeedBytes`
+  - Not persisted across restarts; re-apply on each start or set in `Config` for persistence
 - Added multi-address type wallet support with a new `bdk-wallet-aggregate` crate:
   - `AddressType` enum: `Legacy`, `NestedSegwit`, `NativeSegwit`, `Taproot`
   - `NodeBuilder::set_address_type()` to configure the primary wallet address type
