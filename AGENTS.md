@@ -205,8 +205,8 @@ RUSTFLAGS="--cfg no_download" cargo build && ./scripts/uniffi_bindgen_generate.s
 ## Version Bumping Checklist
 When bumping the version, ALWAYS update ALL of these files:
 1. `Cargo.toml` - main crate version
-2. `bindings/kotlin/ldk-node-android/gradle.properties` - Android libraryVersion
-3. `bindings/kotlin/ldk-node-jvm/gradle.properties` - JVM libraryVersion
+2. `bindings/kotlin/ldk-node-android/gradle.properties` - Android version
+3. `bindings/kotlin/ldk-node-jvm/gradle.properties` - JVM version
 4. `bindings/python/pyproject.toml` - Python version
 5. `Package.swift` - Swift tag (and checksum after building)
 6. `CHANGELOG.md` - Add release notes section at top
