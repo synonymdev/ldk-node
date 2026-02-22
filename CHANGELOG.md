@@ -1,4 +1,4 @@
-# 0.7.0-rc.25 (Synonym Fork)
+# 0.7.0-rc.27 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -7,6 +7,9 @@
   confirmed, causing `get_merkle` to fail for 0-conf channel funding transactions.
 - Fixed duplicate payment events (`PaymentReceived`, `PaymentSuccessful`, `PaymentFailed`) being
   emitted when LDK replays events after node restart.
+- Switched from forked rust-lightning (`ovitrif/rust-lightning#0.2-electrum-fix`) back to official
+  upstream crates.io releases. The Electrum sync fix (PR #4341) is now in upstream
+  `lightning-transaction-sync` v0.2.1. Also picks up `lightning` v0.2.2 fixes.
 
 ## Synonym Fork Additions
 
