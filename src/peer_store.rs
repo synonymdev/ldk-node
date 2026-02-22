@@ -205,7 +205,7 @@ mod tests {
 	}
 
 	#[test]
-	fn peer_address_updated_on_readd() {
+	fn peer_address_updated_on_re_add() {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		let logger = Arc::new(TestLogger::new());
 		let peer_store = PeerStore::new(Arc::clone(&store), Arc::clone(&logger));
