@@ -54,12 +54,16 @@ fi
 # Sync version from Cargo.toml
 echo "Syncing version from Cargo.toml..."
 CARGO_VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/' | head -1)
-sed -i.bak "s/^libraryVersion=.*/libraryVersion=$CARGO_VERSION/" "$JVM_LIB_DIR/gradle.properties"
+sed -i.bak "s/^version=.*/version=$CARGO_VERSION/" "$JVM_LIB_DIR/gradle.properties"
 rm -f "$JVM_LIB_DIR/gradle.properties.bak"
 echo "JVM version synced: $CARGO_VERSION"
 
 # Verify JVM library build (skip tests - they require bitcoind)
 echo "Testing JVM library build..."
 $JVM_LIB_DIR/gradlew --project-dir "$JVM_LIB_DIR" clean build -x test || exit 1
+
+# Verify JVM library publish task graph
+echo "Verifying JVM library publish task graph..."
+$JVM_LIB_DIR/gradlew --project-dir "$JVM_LIB_DIR" clean publish --dry-run || exit 1
 
 echo "JVM build process completed successfully!"
