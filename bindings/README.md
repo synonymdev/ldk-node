@@ -11,7 +11,7 @@ RUSTFLAGS="--cfg no_download" cargo build && ./scripts/uniffi_bindgen_generate.s
 Detailed instructions for publishing a new version of the bindings.
 
 1. Update `Cargo.toml`
-2. Update `libraryVersion` in:
+2. Update `version` in:
    - `bindings/kotlin/ldk-node-android/gradle.properties`
    - `bindings/kotlin/ldk-node-jvm/gradle.properties`
 3. Run the above command to build all bindings

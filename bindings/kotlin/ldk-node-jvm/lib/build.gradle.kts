@@ -17,11 +17,7 @@ plugins {
     id("org.jlleitschuh.gradle.ktlint") version "11.6.1"
 }
 
-// library version is defined in gradle.properties
-val libraryVersion: String by project
-
-group = "org.lightningdevkit"
-version = libraryVersion
+// group and version are read from gradle.properties automatically
 
 repositories {
     // Use Maven Central for resolving dependencies.
@@ -92,41 +88,41 @@ afterEvaluate {
     publishing {
         publications {
             create<MavenPublication>("maven") {
-                groupId = "org.lightningdevkit"
+                groupId = providers.gradleProperty("group").orNull ?: "com.synonym"
                 artifactId = "ldk-node-jvm"
-                version = libraryVersion
+                version = providers.gradleProperty("version").orNull ?: "0.0.0"
 
                 from(components["java"])
                 pom {
                     name.set("ldk-node-jvm")
-                    description.set(
-                        "LDK Node, a ready-to-go Lightning node library built using LDK and BDK."
-                    )
-                    url.set("https://lightningdevkit.org")
+                    description.set("LDK Node JVM bindings (Synonym fork).")
+                    url.set("https://github.com/synonymdev/ldk-node")
                     licenses {
                         license {
-                            name.set("APACHE 2.0")
-                            url.set("https://github.com/lightningdevkit/ldk-node/blob/main/LICENSE-APACHE")
-                        }
-                        license {
                             name.set("MIT")
-                            url.set("https://github.com/lightningdevkit/ldk-node/blob/main/LICENSE-MIT")
+                            url.set("https://github.com/synonymdev/ldk-node/blob/main/LICENSE-MIT")
                         }
                     }
                     developers {
-                        developers {
-                            developer {
-                                id.set("tnull")
-                                name.set("Elias Rohrer")
-                                email.set("dev@tnull.de")
-                            }
+                        developer {
+                            id.set("synonymdev")
+                            name.set("Synonym")
+                            email.set("noreply@synonym.to")
                         }
                     }
-                    scm {
-                        connection.set("scm:git:github.com/lightningdevkit/ldk-node.git")
-                        developerConnection.set("scm:git:ssh://github.com/lightningdevkit/ldk-node.git")
-                        url.set("https://github.com/lightningdevkit/ldk-node/tree/main")
-                    }
+                }
+            }
+        }
+        repositories {
+            maven {
+                val repo = System.getenv("GITHUB_REPO")
+                    ?: providers.gradleProperty("gpr.repo").orNull
+                    ?: "synonymdev/ldk-node"
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/$repo")
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR") ?: providers.gradleProperty("gpr.user").orNull
+                    password = System.getenv("GITHUB_TOKEN") ?: providers.gradleProperty("gpr.key").orNull
                 }
             }
         }
