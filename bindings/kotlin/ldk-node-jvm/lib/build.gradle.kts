@@ -17,8 +17,7 @@ plugins {
     id("org.jlleitschuh.gradle.ktlint") version "11.6.1"
 }
 
-group = "org.lightningdevkit"
-// version is read from gradle.properties automatically
+// group and version are read from gradle.properties automatically
 
 repositories {
     // Use Maven Central for resolving dependencies.
@@ -89,7 +88,7 @@ afterEvaluate {
     publishing {
         publications {
             create<MavenPublication>("maven") {
-                groupId = "org.lightningdevkit"
+                groupId = providers.gradleProperty("group").orNull ?: "com.synonym"
                 artifactId = "ldk-node-jvm"
                 version = providers.gradleProperty("version").orNull ?: "0.0.0"
 
