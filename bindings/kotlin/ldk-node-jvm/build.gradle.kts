@@ -10,4 +10,4 @@ buildscript {
 plugins {
 }
 
-// version is defined in gradle.properties
+// group and version are defined in gradle.properties
