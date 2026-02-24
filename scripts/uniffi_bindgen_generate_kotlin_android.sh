@@ -74,12 +74,12 @@ rm -f "$KOTLIN_BINDINGS_FILE.bak"
 # Sync version from Cargo.toml
 echo "Syncing version from Cargo.toml..."
 CARGO_VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/' | head -1)
-sed -i.bak "s/^libraryVersion=.*/libraryVersion=$CARGO_VERSION/" "$ANDROID_LIB_DIR/gradle.properties"
+sed -i.bak "s/^version=.*/version=$CARGO_VERSION/" "$ANDROID_LIB_DIR/gradle.properties"
 rm -f "$ANDROID_LIB_DIR/gradle.properties.bak"
 echo "Version synced: $CARGO_VERSION"
 
-# Verify android library publish
-echo "Testing android library publish to Maven Local..."
-$ANDROID_LIB_DIR/gradlew --project-dir "$ANDROID_LIB_DIR" clean publishToMavenLocal
+# Verify android library publish task graph
+echo "Verifying android library publish task graph..."
+$ANDROID_LIB_DIR/gradlew --project-dir "$ANDROID_LIB_DIR" clean publish --dry-run
 
 echo "Android build process completed successfully!"

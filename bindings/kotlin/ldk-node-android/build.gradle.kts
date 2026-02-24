@@ -13,8 +13,4 @@ plugins {
     kotlin("plugin.serialization") version "2.2.0" apply false
 }
 
-// library version is defined in gradle.properties
-val libraryVersion: String by project
-
-group = "org.lightningdevkit"
-version = libraryVersion
+// group and version are defined in gradle.properties
