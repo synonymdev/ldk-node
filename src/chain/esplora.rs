@@ -115,159 +115,156 @@ impl EsploraChainSource {
 	async fn sync_onchain_wallet_inner(
 		&self, onchain_wallet: Arc<Wallet>,
 	) -> Result<Vec<WalletEvent>, Error> {
-		// If this is our first sync, do a full scan with the configured gap limit.
-		// Otherwise just do an incremental sync.
-		let incremental_sync =
+		let primary_incremental =
 			self.node_metrics.read().unwrap().latest_onchain_wallet_sync_timestamp.is_some();
-
-		macro_rules! get_and_apply_wallet_update {
-			($sync_future: expr) => {{
-				let now = Instant::now();
-				match $sync_future.await {
-					Ok(res) => match res {
-						Ok(update) => match onchain_wallet.apply_update(update) {
-							Ok(wallet_events) => {
-								log_info!(
-									self.logger,
-									"{} of on-chain wallet finished in {}ms.",
-									if incremental_sync { "Incremental sync" } else { "Sync" },
-									now.elapsed().as_millis()
-								);
-								let unix_time_secs_opt = SystemTime::now()
-									.duration_since(UNIX_EPOCH)
-									.ok()
-									.map(|d| d.as_secs());
-									{
-										let mut locked_node_metrics = self.node_metrics.write().unwrap();
-										locked_node_metrics.latest_onchain_wallet_sync_timestamp = unix_time_secs_opt;
-										write_node_metrics(
-											&*locked_node_metrics,
-											Arc::clone(&self.kv_store),
-											Arc::clone(&self.logger)
-										)?;
-									}
-									Ok(wallet_events)
-							},
-							Err(e) => Err(e),
-						},
-						Err(e) => match *e {
-							esplora_client::Error::Reqwest(he) => {
-								if let Some(status_code) = he.status() {
-									log_error!(
-										self.logger,
-										"{} of on-chain wallet failed due to HTTP {} error: {}",
-										if incremental_sync { "Incremental sync" } else { "Sync" },
-										status_code,
-										he,
-									);
-								} else {
-									log_error!(
-										self.logger,
-										"{} of on-chain wallet failed due to HTTP error: {}",
-										if incremental_sync { "Incremental sync" } else { "Sync" },
-										he,
-									);
-								}
-								Err(Error::WalletOperationFailed)
-							},
-							_ => {
-								log_error!(
-									self.logger,
-									"{} of on-chain wallet failed due to Esplora error: {}",
-									if incremental_sync { "Incremental sync" } else { "Sync" },
-									e
-								);
-								Err(Error::WalletOperationFailed)
-							},
-						},
-					},
-					Err(e) => {
-						log_error!(
-							self.logger,
-							"{} of on-chain wallet timed out: {}",
-							if incremental_sync { "Incremental sync" } else { "Sync" },
-							e
-						);
-						Err(Error::WalletOperationTimeout)
-					},
-				}
-			}}
-		}
-
-		let primary_result = if incremental_sync {
-			let sync_request = onchain_wallet.get_incremental_sync_request();
-			let wallet_sync_timeout_fut = tokio::time::timeout(
-				Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
-				self.esplora_client.sync(sync_request, BDK_CLIENT_CONCURRENCY),
-			);
-			get_and_apply_wallet_update!(wallet_sync_timeout_fut)
-		} else {
-			let full_scan_request = onchain_wallet.get_full_scan_request();
-			let wallet_sync_timeout_fut = tokio::time::timeout(
-				Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
-				self.esplora_client.full_scan(
-					full_scan_request,
-					BDK_CLIENT_STOP_GAP,
-					BDK_CLIENT_CONCURRENCY,
-				),
-			);
-			get_and_apply_wallet_update!(wallet_sync_timeout_fut)
-		};
-
-		let (mut all_events, primary_error) = match primary_result {
-			Ok(events) => (events, None),
-			Err(e) => (Vec::new(), Some(e)),
-		};
 
 		let additional_types =
 			self.address_type_runtime_config.read().unwrap().additional_address_types();
-		let sync_requests = super::collect_additional_sync_requests(
+		let additional_sync_requests = super::collect_additional_sync_requests(
 			&additional_types,
 			&onchain_wallet,
 			&self.node_metrics,
 			&self.logger,
 		);
 
-		let mut join_set = tokio::task::JoinSet::new();
-		for (address_type, full_scan_req, incremental_req, do_incremental) in sync_requests {
-			let client = self.esplora_client.clone();
-			join_set.spawn(async move {
-				let result = if do_incremental {
-					tokio::time::timeout(
+		let primary_request: super::WalletSyncRequest = if primary_incremental {
+			super::WalletSyncRequest::Incremental(onchain_wallet.get_incremental_sync_request())
+		} else {
+			super::WalletSyncRequest::FullScan(onchain_wallet.get_full_scan_request())
+		};
+
+		// Primary wallet is identified by address_type = None in the JoinSet results.
+		let now = Instant::now();
+		type EsploraSyncResult = (
+			Option<crate::config::AddressType>,
+			Result<
+				Result<bdk_wallet::Update, Box<esplora_client::Error>>,
+				tokio::time::error::Elapsed,
+			>,
+		);
+		let mut join_set: tokio::task::JoinSet<EsploraSyncResult> = tokio::task::JoinSet::new();
+
+		let client = self.esplora_client.clone();
+		match primary_request {
+			super::WalletSyncRequest::Incremental(req) => {
+				join_set.spawn(async move {
+					let result = tokio::time::timeout(
 						Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
-						client.sync(incremental_req, BDK_CLIENT_CONCURRENCY),
+						client.sync(req, BDK_CLIENT_CONCURRENCY),
 					)
 					.await
-					.map(|r| r.map(|u| bdk_wallet::Update::from(u)))
-				} else {
-					tokio::time::timeout(
+					.map(|r| r.map(|u| bdk_wallet::Update::from(u)));
+					(None, result)
+				});
+			},
+			super::WalletSyncRequest::FullScan(req) => {
+				join_set.spawn(async move {
+					let result = tokio::time::timeout(
 						Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
-						client.full_scan(
-							full_scan_req,
-							BDK_CLIENT_STOP_GAP,
-							BDK_CLIENT_CONCURRENCY,
-						),
+						client.full_scan(req, BDK_CLIENT_STOP_GAP, BDK_CLIENT_CONCURRENCY),
 					)
 					.await
-					.map(|r| r.map(|u| bdk_wallet::Update::from(u)))
-				};
-				(address_type, result)
-			});
+					.map(|r| r.map(|u| bdk_wallet::Update::from(u)));
+					(None, result)
+				});
+			},
 		}
 
-		let mut sync_results = Vec::new();
+		for (address_type, sync_req) in additional_sync_requests {
+			let client = self.esplora_client.clone();
+			match sync_req {
+				super::WalletSyncRequest::Incremental(req) => {
+					join_set.spawn(async move {
+						let result = tokio::time::timeout(
+							Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
+							client.sync(req, BDK_CLIENT_CONCURRENCY),
+						)
+						.await
+						.map(|r| r.map(|u| bdk_wallet::Update::from(u)));
+						(Some(address_type), result)
+					});
+				},
+				super::WalletSyncRequest::FullScan(req) => {
+					join_set.spawn(async move {
+						let result = tokio::time::timeout(
+							Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
+							client.full_scan(req, BDK_CLIENT_STOP_GAP, BDK_CLIENT_CONCURRENCY),
+						)
+						.await
+						.map(|r| r.map(|u| bdk_wallet::Update::from(u)));
+						(Some(address_type), result)
+					});
+				},
+			}
+		}
+
+		let mut primary_update: Option<bdk_wallet::Update> = None;
+		let mut primary_error: Option<Error> = None;
+		let mut additional_results = Vec::new();
+
 		while let Some(join_result) = join_set.join_next().await {
 			match join_result {
-				Ok((address_type, Ok(Ok(update)))) => {
-					sync_results.push((address_type, Some(update)));
+				Ok((None, Ok(Ok(update)))) => {
+					primary_update = Some(update);
 				},
-				Ok((address_type, Ok(Err(e)))) => {
+				Ok((None, Ok(Err(e)))) => {
+					match *e {
+						esplora_client::Error::Reqwest(ref he) => {
+							if let Some(status_code) = he.status() {
+								log_error!(
+									self.logger,
+									"{} of primary on-chain wallet failed due to HTTP {} error: {}",
+									if primary_incremental {
+										"Incremental sync"
+									} else {
+										"Full sync"
+									},
+									status_code,
+									he,
+								);
+							} else {
+								log_error!(
+									self.logger,
+									"{} of primary on-chain wallet failed due to HTTP error: {}",
+									if primary_incremental {
+										"Incremental sync"
+									} else {
+										"Full sync"
+									},
+									he,
+								);
+							}
+						},
+						_ => {
+							log_error!(
+								self.logger,
+								"{} of primary on-chain wallet failed due to Esplora error: {}",
+								if primary_incremental { "Incremental sync" } else { "Full sync" },
+								e
+							);
+						},
+					}
+					primary_error = Some(Error::WalletOperationFailed);
+				},
+				Ok((None, Err(e))) => {
+					log_error!(
+						self.logger,
+						"{} of primary on-chain wallet timed out: {}",
+						if primary_incremental { "Incremental sync" } else { "Full sync" },
+						e
+					);
+					primary_error = Some(Error::WalletOperationTimeout);
+				},
+				Ok((Some(address_type), Ok(Ok(update)))) => {
+					additional_results.push((address_type, Some(update)));
+				},
+				Ok((Some(address_type), Ok(Err(e)))) => {
 					log_warn!(self.logger, "Failed to sync wallet {:?}: {}", address_type, e);
-					sync_results.push((address_type, None));
+					additional_results.push((address_type, None));
 				},
-				Ok((address_type, Err(_))) => {
+				Ok((Some(address_type), Err(_))) => {
 					log_warn!(self.logger, "Sync timeout for wallet {:?}", address_type);
-					sync_results.push((address_type, None));
+					additional_results.push((address_type, None));
 				},
 				Err(e) => {
 					log_warn!(self.logger, "Wallet sync task panicked: {}", e);
@@ -275,13 +272,58 @@ impl EsploraChainSource {
 			};
 		}
 
-		all_events.extend(super::apply_additional_sync_results(
-			sync_results,
+		let mut all_events = Vec::new();
+
+		if primary_update.is_none() && primary_error.is_none() {
+			log_error!(self.logger, "Primary wallet sync task failed unexpectedly");
+			primary_error = Some(Error::WalletOperationFailed);
+		}
+
+		if let Some(update) = primary_update {
+			match onchain_wallet.apply_update(update) {
+				Ok(wallet_events) => {
+					log_info!(
+						self.logger,
+						"{} of primary on-chain wallet finished in {}ms.",
+						if primary_incremental { "Incremental sync" } else { "Full sync" },
+						now.elapsed().as_millis()
+					);
+					let unix_time_secs_opt =
+						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
+					self.node_metrics.write().unwrap().latest_onchain_wallet_sync_timestamp =
+						unix_time_secs_opt;
+					all_events.extend(wallet_events);
+				},
+				Err(e) => {
+					primary_error = Some(e);
+				},
+			}
+		}
+
+		let (additional_events, any_additional_applied) = super::apply_additional_sync_results(
+			additional_results,
 			&onchain_wallet,
 			&self.node_metrics,
-			&self.kv_store,
 			&self.logger,
-		));
+		);
+		all_events.extend(additional_events);
+
+		let any_updates_applied = primary_error.is_none() || any_additional_applied;
+
+		if any_updates_applied {
+			if let Err(e) = onchain_wallet.update_payment_store_for_all_transactions() {
+				log_error!(self.logger, "Failed to update payment store after wallet syncs: {}", e);
+			}
+
+			let locked_node_metrics = self.node_metrics.read().unwrap();
+			if let Err(e) = write_node_metrics(
+				&*locked_node_metrics,
+				Arc::clone(&self.kv_store),
+				Arc::clone(&self.logger),
+			) {
+				log_error!(self.logger, "Failed to persist node metrics: {}", e);
+			}
+		}
 
 		if let Some(e) = primary_error {
 			return Err(e);

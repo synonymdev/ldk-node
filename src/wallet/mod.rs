@@ -159,13 +159,16 @@ impl Wallet {
 		self.inner.lock().unwrap().start_sync_with_revealed_spks().build()
 	}
 
-	pub(crate) fn get_wallet_sync_request(
+	pub(crate) fn get_wallet_full_scan_request(
 		&self, address_type: AddressType,
-	) -> Result<
-		(FullScanRequest<KeychainKind>, SyncRequest<(KeychainKind, u32)>),
-		bdk_wallet_aggregate::Error,
-	> {
-		self.inner.lock().unwrap().wallet_sync_request(&address_type)
+	) -> Result<FullScanRequest<KeychainKind>, bdk_wallet_aggregate::Error> {
+		self.inner.lock().unwrap().wallet_full_scan_request(&address_type)
+	}
+
+	pub(crate) fn get_wallet_incremental_sync_request(
+		&self, address_type: AddressType,
+	) -> Result<SyncRequest<(KeychainKind, u32)>, bdk_wallet_aggregate::Error> {
+		self.inner.lock().unwrap().wallet_incremental_sync_request(&address_type)
 	}
 
 	pub(crate) fn get_cached_txs(&self) -> Vec<Arc<Transaction>> {
@@ -348,19 +351,14 @@ impl Wallet {
 		Ok(())
 	}
 
+	/// Callers are responsible for calling `update_payment_store_for_all_transactions`
+	/// after all updates have been applied.
 	pub(crate) fn apply_update(
 		&self, update: impl Into<Update>,
 	) -> Result<Vec<WalletEvent>, Error> {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		match locked_wallet.apply_update(update) {
-			Ok((events, _txids)) => {
-				self.update_payment_store(&locked_wallet).map_err(|e| {
-					log_error!(self.logger, "Failed to update payment store: {}", e);
-					Error::PersistenceFailed
-				})?;
-
-				Ok(events)
-			},
+			Ok((events, _txids)) => Ok(events),
 			Err(e) => {
 				log_error!(self.logger, "Sync failed due to chain connection error: {}", e);
 				Err(Error::WalletOperationFailed)
@@ -368,18 +366,14 @@ impl Wallet {
 		}
 	}
 
+	/// Callers are responsible for calling `update_payment_store_for_all_transactions`
+	/// after all updates have been applied.
 	pub(crate) fn apply_update_for_address_type(
 		&self, address_type: AddressType, update: impl Into<Update>,
 	) -> Result<Vec<WalletEvent>, Error> {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		match locked_wallet.apply_update_to_wallet(address_type, update) {
-			Ok((events, _txids)) => {
-				self.update_payment_store(&locked_wallet).map_err(|e| {
-					log_error!(self.logger, "Failed to update payment store: {}", e);
-					Error::PersistenceFailed
-				})?;
-				Ok(events)
-			},
+			Ok((events, _txids)) => Ok(events),
 			Err(e) => {
 				log_error!(
 					self.logger,

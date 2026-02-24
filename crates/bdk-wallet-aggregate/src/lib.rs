@@ -496,15 +496,20 @@ where
 
 	// ─── Sync ───────────────────────────────────────────────────────────
 
-	/// Build sync requests for a specific wallet.
-	#[allow(clippy::type_complexity)]
-	pub fn wallet_sync_request(
+	/// Build a full scan request for a specific wallet.
+	pub fn wallet_full_scan_request(
 		&self, key: &K,
-	) -> Result<(FullScanRequest<KeychainKind>, SyncRequest<(KeychainKind, u32)>), Error> {
+	) -> Result<FullScanRequest<KeychainKind>, Error> {
 		let wallet = self.wallets.get(key).ok_or(Error::WalletNotFound)?;
-		let full_scan = wallet.start_full_scan().build();
-		let incremental_sync = wallet.start_sync_with_revealed_spks().build();
-		Ok((full_scan, incremental_sync))
+		Ok(wallet.start_full_scan().build())
+	}
+
+	/// Build an incremental sync request for a specific wallet.
+	pub fn wallet_incremental_sync_request(
+		&self, key: &K,
+	) -> Result<SyncRequest<(KeychainKind, u32)>, Error> {
+		let wallet = self.wallets.get(key).ok_or(Error::WalletNotFound)?;
+		Ok(wallet.start_sync_with_revealed_spks().build())
 	}
 
 	/// Apply a chain update to the primary wallet.
