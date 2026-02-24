@@ -38,6 +38,11 @@ use crate::runtime::Runtime;
 use crate::types::{Broadcaster, ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::{check_and_emit_balance_update, Error, NodeMetrics};
 
+pub(super) enum WalletSyncRequest {
+	FullScan(FullScanRequest<KeychainKind>),
+	Incremental(SyncRequest<(KeychainKind, u32)>),
+}
+
 pub(crate) enum WalletSyncStatus {
 	Completed,
 	InProgress { subscribers: tokio::sync::broadcast::Sender<Result<(), Error>> },
@@ -169,17 +174,24 @@ fn get_transaction_details(
 pub(super) fn collect_additional_sync_requests(
 	additional_types: &[AddressType], onchain_wallet: &Wallet,
 	node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
-) -> Vec<(AddressType, FullScanRequest<KeychainKind>, SyncRequest<(KeychainKind, u32)>, bool)> {
+) -> Vec<(AddressType, WalletSyncRequest)> {
 	additional_types
 		.iter()
 		.copied()
 		.filter_map(|address_type| {
 			let do_incremental =
 				node_metrics.read().unwrap().get_wallet_sync_timestamp(address_type).is_some();
-			match onchain_wallet.get_wallet_sync_request(address_type) {
-				Ok((full_scan_req, incremental_req)) => {
-					Some((address_type, full_scan_req, incremental_req, do_incremental))
-				},
+			let request = if do_incremental {
+				onchain_wallet
+					.get_wallet_incremental_sync_request(address_type)
+					.map(WalletSyncRequest::Incremental)
+			} else {
+				onchain_wallet
+					.get_wallet_full_scan_request(address_type)
+					.map(WalletSyncRequest::FullScan)
+			};
+			match request {
+				Ok(req) => Some((address_type, req)),
 				Err(e) => {
 					log_info!(logger, "Skipping sync for wallet {:?}: {}", address_type, e);
 					None
@@ -189,41 +201,34 @@ pub(super) fn collect_additional_sync_requests(
 		.collect()
 }
 
+/// Returns `(events, any_applied)` where `any_applied` is true if at least one
+/// additional wallet update was successfully applied.
 pub(super) fn apply_additional_sync_results(
 	results: Vec<(AddressType, Option<BdkUpdate>)>, onchain_wallet: &Wallet,
-	node_metrics: &Arc<RwLock<NodeMetrics>>, kv_store: &Arc<DynStore>, logger: &Arc<Logger>,
-) -> Vec<BdkWalletEvent> {
+	node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
+) -> (Vec<BdkWalletEvent>, bool) {
 	let mut events = Vec::new();
+	let mut any_applied = false;
 	for (address_type, update_opt) in results {
 		if let Some(update) = update_opt {
-			let wallet_events = onchain_wallet
-				.apply_update_for_address_type(address_type, update)
-				.unwrap_or_else(|e| {
+			match onchain_wallet.apply_update_for_address_type(address_type, update) {
+				Ok(wallet_events) => {
+					any_applied = true;
+					if let Some(ts) =
+						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+					{
+						node_metrics.write().unwrap().set_wallet_sync_timestamp(address_type, ts);
+					}
+					events.extend(wallet_events);
+				},
+				Err(e) => {
 					log_warn!(logger, "Failed to apply update to wallet {:?}: {}", address_type, e);
-					Vec::new()
-				});
-			if let Some(ts) = SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
-			{
-				node_metrics.write().unwrap().set_wallet_sync_timestamp(address_type, ts);
+				},
 			}
-			events.extend(wallet_events);
 		}
 	}
 
-	{
-		let locked_node_metrics = node_metrics.read().unwrap();
-		if let Err(e) =
-			write_node_metrics(&locked_node_metrics, Arc::clone(kv_store), Arc::clone(logger))
-		{
-			log_error!(logger, "Failed to persist node metrics: {}", e);
-		}
-	}
-
-	if let Err(e) = onchain_wallet.update_payment_store_for_all_transactions() {
-		log_info!(logger, "Failed to update payment store after wallet syncs: {}", e);
-	}
-
-	events
+	(events, any_applied)
 }
 
 // Process BDK wallet events and emit corresponding ldk-node events via the event queue.
