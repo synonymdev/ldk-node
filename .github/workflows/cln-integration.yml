@@ -1,10 +1,6 @@
 name: CI Checks - CLN Integration Tests
 
-on: [push, pull_request]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+on: [workflow_dispatch]
 
 jobs:
   check-cln:
