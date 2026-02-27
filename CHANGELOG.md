@@ -1,7 +1,12 @@
-# 0.7.0-rc.25 (Synonym Fork)
+# 0.7.0-rc.27 (Synonym Fork)
 
 ## Bug Fixes
 
+- Fixed `PeerStore::add_peer` silently ignoring address updates for existing peers. When a peer's
+  IP address changes (e.g., LSP node migration), `add_peer` now upserts the socket address and
+  re-persists, instead of returning early. This fixes the issue where ldk-node's reconnection loop
+  would indefinitely use a stale cached IP after an LSP node IP change.
+  (See [upstream issue #700](https://github.com/lightningdevkit/ldk-node/issues/700))
 - Backported upstream Electrum sync fix (PR #4341): Skip unconfirmed `get_history` entries in
   `ElectrumSyncClient`. Previously, mempool entries (height=0 or -1) were incorrectly treated as
   confirmed, causing `get_merkle` to fail for 0-conf channel funding transactions.
