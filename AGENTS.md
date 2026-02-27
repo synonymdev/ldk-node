@@ -199,9 +199,9 @@ If anything is missing or cannot be verified, you must fix it before declaring s
 - NEVER run binding generation scripts yourself - always ask the user to run them (they are long-running and resource-intensive)
 
 ## Bindings Generation Command
-To regenerate ALL bindings (Swift, Kotlin, Python), use this command:
+To regenerate ALL bindings (Swift, Kotlin, Python), run from the repo root:
 ```sh
-RUSTFLAGS="--cfg no_download" cargo build && ./scripts/uniffi_bindgen_generate.sh && ./scripts/swift_create_xcframework_archive.sh && sh scripts/uniffi_bindgen_generate_kotlin.sh && sh scripts/uniffi_bindgen_generate_kotlin_android.sh
+./bindgen.sh
 ```
 
 ## Version Bumping Checklist
