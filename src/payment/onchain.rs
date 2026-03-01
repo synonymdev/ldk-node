@@ -171,11 +171,12 @@ impl OnchainPayment {
 	/// The calculation respects any on-chain reserve requirements and validates that sufficient
 	/// funds are available, just like [`send_to_address`].
 	///
-	/// **Special handling for maximum amounts:** If the specified amount would result in
-	/// insufficient funds due to fees, but is within the spendable balance, this method will
-	/// automatically calculate the fee for sending all available funds while retaining the
-	/// anchor channel reserve. This allows users to calculate fees when trying to send
-	/// their maximum spendable balance.
+	/// **Note on maximum amounts:** For calculating the fee when sending the entire spendable
+	/// balance, prefer [`calculate_send_all_fee`] which is purpose-built for that use case.
+	/// This method includes a best-effort fallback for near-max amounts, but it may not
+	/// trigger in all cases depending on the underlying wallet error.
+	///
+	/// [`calculate_send_all_fee`]: Self::calculate_send_all_fee
 	///
 	/// # Arguments
 	///
@@ -247,6 +248,63 @@ impl OnchainPayment {
 		result
 	}
 
+	/// Calculates the total fee for sending all available on-chain funds without
+	/// actually broadcasting.
+	///
+	/// This is the fee-calculation counterpart of [`send_all_to_address`]. Use it to
+	/// show the user how much a drain / send-all transaction would cost before they
+	/// confirm.
+	///
+	/// When `retain_reserves` is `true`, the calculation accounts for the on-chain anchor
+	/// channel reserve (see [`BalanceDetails::total_anchor_channels_reserve_sats`]), sending only
+	/// the spendable portion. When `false`, the calculation covers draining the entire wallet
+	/// balance, which may be dangerous if you have open anchor channels whose counterparty you
+	/// don't trust to spend the anchor output after closure.
+	///
+	/// # Arguments
+	///
+	/// * `address` - The destination Bitcoin address
+	/// * `retain_reserves` - If `true`, retains the anchor channel reserve; if `false`, drains everything
+	/// * `fee_rate` - Optional fee rate to use (if `None`, will estimate based on current network conditions)
+	///
+	/// # Returns
+	///
+	/// The total fee in satoshis that would be paid for this transaction.
+	///
+	/// # Errors
+	///
+	/// * [`Error::NotRunning`] - If the node is not running
+	/// * [`Error::InvalidAddress`] - If the address is invalid
+	/// * [`Error::InsufficientFunds`] - If there are insufficient funds
+	/// * [`Error::WalletOperationFailed`] - If fee calculation fails
+	///
+	/// [`send_all_to_address`]: Self::send_all_to_address
+	/// [`BalanceDetails::total_anchor_channels_reserve_sats`]: crate::BalanceDetails::total_anchor_channels_reserve_sats
+	pub fn calculate_send_all_fee(
+		&self, address: &bitcoin::Address, retain_reserves: bool, fee_rate: Option<FeeRate>,
+	) -> Result<u64, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+
+		let send_amount = if retain_reserves {
+			let cur_anchor_reserve_sats =
+				crate::total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
+			OnchainSendAmount::AllRetainingReserve { cur_anchor_reserve_sats }
+		} else {
+			OnchainSendAmount::AllDrainingReserve
+		};
+
+		let fee_rate_opt = maybe_map_fee_rate_opt!(fee_rate);
+		self.wallet.calculate_transaction_fee(
+			address,
+			send_amount,
+			fee_rate_opt,
+			None,
+			&self.channel_manager,
+		)
+	}
+
 	/// Send an on-chain payment to the given address.
 	///
 	/// This will respect any on-chain reserve we need to keep, i.e., won't allow to cut into
@@ -284,6 +342,8 @@ impl OnchainPayment {
 	/// This is useful if you have closed all channels and want to migrate funds to another
 	/// on-chain wallet.
 	///
+	/// To preview the fee before broadcasting, use [`calculate_send_all_fee`].
+	///
 	/// Please note that if `retain_reserves` is set to `false` this will **not** retain any on-chain reserves, which might be potentially
 	/// dangerous if you have open Anchor channels for which you can't trust the counterparty to
 	/// spend the Anchor output after channel closure. If `retain_reserves` is set to `true`, this
@@ -293,6 +353,7 @@ impl OnchainPayment {
 	/// If `fee_rate` is set it will be used on the resulting transaction. Otherwise a reasonable
 	/// we'll retrieve an estimate from the configured chain source.
 	///
+	/// [`calculate_send_all_fee`]: Self::calculate_send_all_fee
 	/// [`BalanceDetails::spendable_onchain_balance_sats`]: crate::balance::BalanceDetails::spendable_onchain_balance_sats
 	pub fn send_all_to_address(
 		&self, address: &bitcoin::Address, retain_reserves: bool, fee_rate: Option<FeeRate>,

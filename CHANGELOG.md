@@ -18,6 +18,8 @@
 
 ## Synonym Fork Additions
 
+- Added `OnchainPayment::calculate_send_all_fee()` to preview the fee for a drain / send-all
+  transaction before broadcasting (fee-calculation counterpart of `send_all_to_address`)
 - Added runtime APIs for dynamic address type management:
   - `Node::add_address_type_to_monitor()` and `add_address_type_to_monitor_with_mnemonic()` to add an address type to the monitored set
   - `Node::remove_address_type_from_monitor()` to unload an address type (persisted state retained for re-add)

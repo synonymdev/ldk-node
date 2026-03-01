@@ -797,6 +797,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate() != 32879:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_send_all_fee() != 16052:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144:
@@ -2189,6 +2191,14 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_cpfp_fee_rate.argt
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_cpfp_fee_rate.restype = ctypes.c_void_p
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_send_all_fee.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_int8,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_send_all_fee.restype = ctypes.c_uint64
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_total_fee.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -3211,6 +3221,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf.restyp
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_send_all_fee.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_send_all_fee.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee.restype = ctypes.c_uint16
@@ -6563,6 +6576,8 @@ class OnchainPaymentProtocol(typing.Protocol):
         raise NotImplementedError
     def calculate_cpfp_fee_rate(self, parent_txid: "Txid",urgent: "bool"):
         raise NotImplementedError
+    def calculate_send_all_fee(self, address: "Address",retain_reserves: "bool",fee_rate: "typing.Optional[FeeRate]"):
+        raise NotImplementedError
     def calculate_total_fee(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]"):
         raise NotImplementedError
     def list_spendable_outputs(self, ):
@@ -6646,6 +6661,24 @@ class OnchainPayment:
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_cpfp_fee_rate,self._uniffi_clone_pointer(),
         _UniffiConverterTypeTxid.lower(parent_txid),
         _UniffiConverterBool.lower(urgent))
+        )
+
+
+
+
+
+    def calculate_send_all_fee(self, address: "Address",retain_reserves: "bool",fee_rate: "typing.Optional[FeeRate]") -> "int":
+        _UniffiConverterTypeAddress.check_lower(address)
+        
+        _UniffiConverterBool.check_lower(retain_reserves)
+        
+        _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
+        
+        return _UniffiConverterUInt64.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_send_all_fee,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddress.lower(address),
+        _UniffiConverterBool.lower(retain_reserves),
+        _UniffiConverterOptionalTypeFeeRate.lower(fee_rate))
         )
 
 
