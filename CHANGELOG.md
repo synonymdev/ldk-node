@@ -1,7 +1,13 @@
-# 0.7.0-rc.28 (Synonym Fork)
+# 0.7.0-rc.29 (Synonym Fork)
 
 ## Bug Fixes
 
+- Bumped `FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS` and `TX_BROADCAST_TIMEOUT_SECS` from 5s to 15s.
+  The 5s node-level timeout fires before Electrum can complete a request (10s timeout), causing
+  `FeerateEstimationUpdateTimeout` on node start.
+- Fixed external scores sync using `spawn_background_processor_task` (reserved for the single
+  LDK background processor), which caused a `debug_assert` panic. Switched to
+  `spawn_cancellable_background_task`.
 - Fixed `PeerStore::add_peer` silently ignoring address updates for existing peers. When a peer's
   IP address changes (e.g., LSP node migration), `add_peer` now upserts the socket address and
   re-persists, instead of returning early. This fixes the issue where ldk-node's reconnection loop
