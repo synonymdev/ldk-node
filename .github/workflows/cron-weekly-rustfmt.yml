@@ -5,9 +5,7 @@ permissions:
   pull-requests: write
 
 on:
-  schedule:
-    - cron: "0 0 * * 0" # runs weekly on Sunday at 00:00
-  workflow_dispatch: # allows manual triggering
+  workflow_dispatch: # manual only — cron schedule removed to avoid automated PRs
 jobs:
   format:
     name: Nightly rustfmt
