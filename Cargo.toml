@@ -4,7 +4,7 @@ exclude = ["bindings/uniffi-bindgen"]
 
 [package]
 name = "ldk-node"
-version = "0.7.0-rc.29"
+version = "0.7.0-rc.31"
 authors = ["Elias Rohrer <dev@tnull.de>"]
 homepage = "https://lightningdevkit.org/"
 license = "MIT OR Apache-2.0"
@@ -28,6 +28,7 @@ opt-level = 'z'     # Optimize for size.
 lto = true          # Enable Link Time Optimization
 codegen-units = 1   # Reduce number of codegen units to increase optimizations.
 panic = 'abort'     # Abort on panic
+debug = "line-tables-only" # dSYM/debug symbols for iOS/Android crash symbolication
 
 [features]
 default = []
