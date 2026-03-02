@@ -585,6 +585,9 @@ interface OnchainPaymentInterface {
     fun `calculateCpfpFeeRate`(`parentTxid`: Txid, `urgent`: kotlin.Boolean): FeeRate
     
     @Throws(NodeException::class)
+    fun `calculateSendAllFee`(`address`: Address, `retainReserves`: kotlin.Boolean, `feeRate`: FeeRate?): kotlin.ULong
+    
+    @Throws(NodeException::class)
     fun `calculateTotalFee`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): kotlin.ULong
     
     @Throws(NodeException::class)

@@ -317,6 +317,8 @@ interface OnchainPayment {
     FeeRate calculate_cpfp_fee_rate([ByRef]Txid parent_txid, boolean urgent);
     [Throws=NodeError]
     u64 calculate_total_fee([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate, sequence<SpendableUtxo>? utxos_to_spend);
+    [Throws=NodeError]
+    u64 calculate_send_all_fee([ByRef]Address address, boolean retain_reserves, FeeRate? fee_rate);
 };
 
 enum CoinSelectionAlgorithm {

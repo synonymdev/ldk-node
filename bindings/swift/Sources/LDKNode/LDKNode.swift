@@ -3247,6 +3247,8 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func calculateCpfpFeeRate(parentTxid: Txid, urgent: Bool) throws -> FeeRate
 
+    func calculateSendAllFee(address: Address, retainReserves: Bool, feeRate: FeeRate?) throws -> UInt64
+
     func calculateTotalFee(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> UInt64
 
     func listSpendableOutputs() throws -> [SpendableUtxo]
@@ -3333,6 +3335,15 @@ open class OnchainPayment:
             uniffi_ldk_node_fn_method_onchainpayment_calculate_cpfp_fee_rate(self.uniffiClonePointer(),
                                                                              FfiConverterTypeTxid.lower(parentTxid),
                                                                              FfiConverterBool.lower(urgent), $0)
+        })
+    }
+
+    open func calculateSendAllFee(address: Address, retainReserves: Bool, feeRate: FeeRate?) throws -> UInt64 {
+        return try FfiConverterUInt64.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_calculate_send_all_fee(self.uniffiClonePointer(),
+                                                                            FfiConverterTypeAddress.lower(address),
+                                                                            FfiConverterBool.lower(retainReserves),
+                                                                            FfiConverterOptionTypeFeeRate.lower(feeRate), $0)
         })
     }
 
@@ -12616,6 +12627,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate() != 32879 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_calculate_send_all_fee() != 16052 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218 {

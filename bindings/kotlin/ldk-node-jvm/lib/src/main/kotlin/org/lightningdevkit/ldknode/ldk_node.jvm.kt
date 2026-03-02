@@ -1516,6 +1516,8 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2552,6 +2554,13 @@ internal interface UniffiLib : Library {
         `urgent`: Byte,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Pointer?
+    fun uniffi_ldk_node_fn_method_onchainpayment_calculate_send_all_fee(
+        `ptr`: Pointer?,
+        `address`: RustBufferByValue,
+        `retainReserves`: Byte,
+        `feeRate`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long
     fun uniffi_ldk_node_fn_method_onchainpayment_calculate_total_fee(
         `ptr`: Pointer?,
         `address`: RustBufferByValue,
@@ -3308,6 +3317,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_calculate_send_all_fee(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs(
@@ -3893,6 +3904,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate() != 32879.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_send_all_fee() != 16052.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218.toShort()) {
@@ -8036,6 +8050,21 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
                     uniffiRustCallStatus,
                 )
             }!!
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `calculateSendAllFee`(`address`: Address, `retainReserves`: kotlin.Boolean, `feeRate`: FeeRate?): kotlin.ULong {
+        return FfiConverterULong.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_calculate_send_all_fee(
+                    it,
+                    FfiConverterTypeAddress.lower(`address`),
+                    FfiConverterBoolean.lower(`retainReserves`),
+                    FfiConverterOptionalTypeFeeRate.lower(`feeRate`),
+                    uniffiRustCallStatus,
+                )
+            }
         })
     }
 

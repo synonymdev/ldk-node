@@ -596,6 +596,24 @@ async fn onchain_send_all_retains_reserve() {
 		..=premine_amount_sat)
 		.contains(&node_b.list_balances().spendable_onchain_balance_sats));
 
+	// With an open anchor channel, retain_reserves=true vs false should produce different fees
+	// because retain=true excludes the reserve from the send amount (smaller tx output, same
+	// inputs) while retain=false drains everything.
+	let fee_retain = node_b
+		.onchain_payment()
+		.calculate_send_all_fee(&addr_a, true, None)
+		.expect("fee with retain should succeed");
+	let fee_drain = node_b
+		.onchain_payment()
+		.calculate_send_all_fee(&addr_a, false, None)
+		.expect("fee with drain should succeed");
+	assert!(fee_retain > 0);
+	assert!(fee_drain > 0);
+	// Drain sends a larger output (includes reserve), so its fee may differ.
+	// Both must be less than the total balance.
+	assert!(fee_retain < node_b.list_balances().total_onchain_balance_sats);
+	assert!(fee_drain < node_b.list_balances().total_onchain_balance_sats);
+
 	// Send all over again, this time ensuring the reserve is accounted for
 	let txid = node_b.onchain_payment().send_all_to_address(&addr_a, true, None).unwrap();
 
@@ -611,6 +629,126 @@ async fn onchain_send_all_retains_reserve() {
 	assert!(((premine_amount_sat - reserve_amount_sat - onchain_fee_buffer_sat)
 		..=premine_amount_sat)
 		.contains(&node_a.list_balances().spendable_onchain_balance_sats));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn calculate_send_all_fee_matches_actual() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let (node_a, node_b) = setup_two_nodes(&chain_source, false, true, false);
+
+	let addr_a = node_a.onchain_payment().new_address().unwrap();
+	let addr_b = node_b.onchain_payment().new_address().unwrap();
+
+	let premine_amount_sat = 1_000_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr_a.clone()],
+		Amount::from_sat(premine_amount_sat),
+	)
+	.await;
+	node_a.sync_wallets().unwrap();
+
+	// No channels open: retain_reserves=true should still work (reserve is 0).
+	let estimated_fee = node_a
+		.onchain_payment()
+		.calculate_send_all_fee(&addr_b, true, None)
+		.expect("fee estimation should succeed");
+	assert!(estimated_fee > 0, "fee must be positive");
+	assert!(estimated_fee < premine_amount_sat, "fee must be less than balance");
+
+	// Drain with retain_reserves=false should give the same result when no channels exist.
+	let estimated_fee_drain = node_a
+		.onchain_payment()
+		.calculate_send_all_fee(&addr_b, false, None)
+		.expect("drain fee estimation should succeed");
+	assert_eq!(estimated_fee, estimated_fee_drain);
+
+	// Custom fee rate should produce a different (but still valid) estimate.
+	let custom_fee_rate = bitcoin::FeeRate::from_sat_per_kwu(500);
+	let estimated_fee_custom = node_a
+		.onchain_payment()
+		.calculate_send_all_fee(&addr_b, true, Some(custom_fee_rate))
+		.expect("custom fee rate estimation should succeed");
+	assert!(estimated_fee_custom > 0);
+
+	// Actually send and compare the real fee with the estimate (using default fee rate).
+	let txid = node_a.onchain_payment().send_all_to_address(&addr_b, true, None).unwrap();
+	wait_for_tx(&electrsd.client, txid).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+
+	let received = node_b.list_balances().spendable_onchain_balance_sats;
+	let actual_fee = premine_amount_sat - received;
+	assert_eq!(estimated_fee, actual_fee, "estimated fee should match the actual fee paid");
+
+	// After draining, node_a has zero balance — fee estimation should fail.
+	assert!(node_a.onchain_payment().calculate_send_all_fee(&addr_b, true, None).is_err());
+
+	// Verify wrong-network address returns an error (testnet address on regtest).
+	let wrong_net_addr: Address<bitcoin::address::NetworkUnchecked> =
+		"tb1q0d40e5rta4fty63z64gztf8c3v20cvet6v2jdh".parse().expect("parse unchecked");
+	let wrong_net_addr = wrong_net_addr.assume_checked();
+	assert_eq!(
+		Err(NodeError::InvalidAddress),
+		node_b.onchain_payment().calculate_send_all_fee(&wrong_net_addr, true, None)
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn calculate_total_fee_estimation() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let (node_a, node_b) = setup_two_nodes(&chain_source, false, true, false);
+
+	let addr_a = node_a.onchain_payment().new_address().unwrap();
+	let addr_b = node_b.onchain_payment().new_address().unwrap();
+
+	let premine_amount_sat = 1_000_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr_a.clone()],
+		Amount::from_sat(premine_amount_sat),
+	)
+	.await;
+	node_a.sync_wallets().unwrap();
+
+	let send_amount = 100_000;
+	let fee = node_a
+		.onchain_payment()
+		.calculate_total_fee(&addr_b, send_amount, None, None)
+		.expect("fee calculation should succeed");
+	assert!(fee > 0, "fee must be positive");
+	assert!(fee < send_amount, "fee should be less than the send amount");
+
+	// Send and verify the actual fee matches.
+	let txid = node_a.onchain_payment().send_to_address(&addr_b, send_amount, None, None).unwrap();
+	wait_for_tx(&electrsd.client, txid).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+
+	let node_a_balance = node_a.list_balances().spendable_onchain_balance_sats;
+	let actual_fee = premine_amount_sat - send_amount - node_a_balance;
+	assert_eq!(fee, actual_fee, "estimated fee should match the actual fee paid");
+
+	// When the amount exceeds spendable balance, we should get an error.
+	let spendable = node_a.list_balances().spendable_onchain_balance_sats;
+	assert!(node_a
+		.onchain_payment()
+		.calculate_total_fee(&addr_b, spendable + 1, None, None)
+		.is_err());
+
+	// For max-amount sends, use calculate_send_all_fee instead of calculate_total_fee.
+	let send_all_fee = node_a
+		.onchain_payment()
+		.calculate_send_all_fee(&addr_b, true, None)
+		.expect("send_all fee should work for max-amount");
+	assert!(send_all_fee > 0);
+	assert!(send_all_fee < spendable);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
