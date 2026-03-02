@@ -1,4 +1,4 @@
-name: Nightly rustfmt
+name: Rustfmt (manual)
 
 permissions:
   contents: write
@@ -8,7 +8,7 @@ on:
   workflow_dispatch: # manual only — cron schedule removed to avoid automated PRs
 jobs:
   format:
-    name: Nightly rustfmt
+    name: Rustfmt (manual)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
