@@ -414,6 +414,19 @@ where
 		Ok(())
 	}
 
+	/// Cancel a dry-run transaction on the primary wallet without persisting.
+	///
+	/// Unmarks change addresses that were marked "used" by `finish()`, so
+	/// the next `finish()` reuses them instead of revealing new ones. The
+	/// reveal itself is left in the staged changeset and persists harmlessly.
+	///
+	/// Only targets the primary wallet. All current build paths use the primary.
+	pub fn cancel_dry_run_tx(&mut self, tx: &Transaction) {
+		let primary =
+			self.wallets.get_mut(&self.primary).expect("Primary wallet must always exist");
+		primary.cancel_tx(tx);
+	}
+
 	// ─── Fee Calculation ────────────────────────────────────────────────
 
 	/// Calculate the fee of a PSBT by summing input values and subtracting
@@ -1344,5 +1357,279 @@ where
 	/// Check if an output belongs to any wallet.
 	pub fn is_mine(&self, script_pubkey: ScriptBuf) -> bool {
 		self.wallets.values().any(|w| w.is_mine(script_pubkey.clone()))
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use bdk_wallet::template::Bip84;
+	use bdk_wallet::{ChangeSet, KeychainKind, PersistedWallet, Wallet, WalletPersister};
+	use bitcoin::bip32::Xpriv;
+	use bitcoin::{Amount, FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid};
+
+	use super::*;
+
+	struct NoopPersister;
+
+	impl WalletPersister for NoopPersister {
+		type Error = std::convert::Infallible;
+
+		fn initialize(_: &mut Self) -> Result<ChangeSet, Self::Error> {
+			Ok(ChangeSet::default())
+		}
+
+		fn persist(_: &mut Self, _: &ChangeSet) -> Result<(), Self::Error> {
+			Ok(())
+		}
+	}
+
+	fn test_xprv() -> Xpriv {
+		Xpriv::new_master(Network::Regtest, &[0x42; 32]).unwrap()
+	}
+
+	fn create_funded_wallet(
+		persister: &mut NoopPersister, amount: Amount,
+	) -> PersistedWallet<NoopPersister> {
+		let xprv = test_xprv();
+		let mut wallet = PersistedWallet::create(
+			persister,
+			Wallet::create(
+				Bip84(xprv, KeychainKind::External),
+				Bip84(xprv, KeychainKind::Internal),
+			)
+			.network(Network::Regtest),
+		)
+		.unwrap();
+
+		let addr = wallet.reveal_next_address(KeychainKind::External);
+		let funding_tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
+			input: vec![TxIn {
+				previous_output: OutPoint { txid: Txid::from_byte_array([0x01; 32]), vout: 0 },
+				..Default::default()
+			}],
+			output: vec![TxOut { value: amount, script_pubkey: addr.address.script_pubkey() }],
+		};
+		wallet.apply_unconfirmed_txs([(funding_tx, 0)]);
+		wallet
+	}
+
+	fn recipient_script() -> ScriptBuf {
+		ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_byte_array([0xab; 20]))
+	}
+
+	/// Demonstrates the bug: without cancel_tx, each finish() call
+	/// cumulatively advances the internal (change) derivation index.
+	#[test]
+	fn test_finish_without_cancel_leaks_change_index() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+
+		let recipient = recipient_script();
+		let fee_rate = FeeRate::from_sat_per_vb(2).unwrap();
+
+		let initial_idx = wallet.derivation_index(KeychainKind::Internal);
+
+		// First dry-run finish(), no cancel
+		let mut b1 = wallet.build_tx();
+		b1.add_recipient(recipient.clone(), Amount::from_sat(30_000)).fee_rate(fee_rate);
+		let _psbt1 = b1.finish().unwrap();
+		let after_first = wallet.derivation_index(KeychainKind::Internal);
+
+		// Second dry-run finish(), no cancel
+		let mut b2 = wallet.build_tx();
+		b2.add_recipient(recipient.clone(), Amount::from_sat(30_000)).fee_rate(fee_rate);
+		let _psbt2 = b2.finish().unwrap();
+		let after_second = wallet.derivation_index(KeychainKind::Internal);
+
+		// Third dry-run finish(), no cancel
+		let mut b3 = wallet.build_tx();
+		b3.add_recipient(recipient.clone(), Amount::from_sat(30_000)).fee_rate(fee_rate);
+		let _psbt3 = b3.finish().unwrap();
+		let after_third = wallet.derivation_index(KeychainKind::Internal);
+
+		assert!(
+			after_first > initial_idx || (initial_idx.is_none() && after_first.is_some()),
+			"First finish() should advance the internal index"
+		);
+		assert!(
+			after_second > after_first,
+			"Second finish() without cancel should advance further: {:?} > {:?}",
+			after_second,
+			after_first,
+		);
+		assert!(
+			after_third > after_second,
+			"Third finish() without cancel should advance further: {:?} > {:?}",
+			after_third,
+			after_second,
+		);
+	}
+
+	/// Demonstrates the fix: cancel_dry_run_tx unmarks the change address,
+	/// so subsequent finish() calls reuse the same index.
+	#[test]
+	fn test_cancel_dry_run_prevents_cumulative_index_leak() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let recipient = recipient_script();
+		let fee_rate = FeeRate::from_sat_per_vb(2).unwrap();
+
+		let initial_idx = agg.derivation_index(KeychainKind::Internal);
+
+		// Dry-run 1: finish + cancel
+		let psbt1 = {
+			let w = agg.primary_wallet_mut();
+			let mut b = w.build_tx();
+			b.add_recipient(recipient.clone(), Amount::from_sat(30_000)).fee_rate(fee_rate);
+			b.finish().unwrap()
+		};
+		agg.cancel_dry_run_tx(&psbt1.unsigned_tx);
+		let after_first = agg.derivation_index(KeychainKind::Internal);
+
+		assert!(
+			after_first > initial_idx || (initial_idx.is_none() && after_first.is_some()),
+			"First finish() should reveal an internal address"
+		);
+
+		// Dry-run 2: finish + cancel
+		let psbt2 = {
+			let w = agg.primary_wallet_mut();
+			let mut b = w.build_tx();
+			b.add_recipient(recipient.clone(), Amount::from_sat(30_000)).fee_rate(fee_rate);
+			b.finish().unwrap()
+		};
+		agg.cancel_dry_run_tx(&psbt2.unsigned_tx);
+		let after_second = agg.derivation_index(KeychainKind::Internal);
+
+		assert_eq!(
+			after_first, after_second,
+			"cancel_dry_run_tx should prevent cumulative index advance"
+		);
+
+		// Dry-runs 3-5: confirm stability
+		for i in 3..=5 {
+			let psbt = {
+				let w = agg.primary_wallet_mut();
+				let mut b = w.build_tx();
+				b.add_recipient(recipient.clone(), Amount::from_sat(30_000)).fee_rate(fee_rate);
+				b.finish().unwrap()
+			};
+			agg.cancel_dry_run_tx(&psbt.unsigned_tx);
+			let idx = agg.derivation_index(KeychainKind::Internal);
+			assert_eq!(after_first, idx, "Dry-run {} should still reuse the same index", i);
+		}
+	}
+
+	/// Verifies that cancel_dry_run_tx prevents index leak even when an
+	/// intermediate operation fails between finish() and the cancel.
+	#[test]
+	fn test_cancel_after_failed_intermediate_prevents_leak() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let recipient = recipient_script();
+		let fee_rate = FeeRate::from_sat_per_vb(2).unwrap();
+
+		// Baseline
+		let initial_idx = agg.derivation_index(KeychainKind::Internal);
+
+		// Simulate finish() + failed intermediate + unconditional cancel.
+		for _ in 0..5 {
+			let psbt = {
+				let w = agg.primary_wallet_mut();
+				let mut b = w.build_tx();
+				b.add_recipient(recipient.clone(), Amount::from_sat(30_000)).fee_rate(fee_rate);
+				b.finish().unwrap()
+			};
+
+			// Simulate an intermediate operation that fails.
+			let _simulated_failure: Result<u64, &str> = Err("simulated fee calculation failure");
+
+			// Cancel regardless of failure.
+			agg.cancel_dry_run_tx(&psbt.unsigned_tx);
+		}
+
+		let final_idx = agg.derivation_index(KeychainKind::Internal);
+
+		assert!(
+			final_idx > initial_idx || (initial_idx.is_none() && final_idx.is_some()),
+			"Index should be revealed at least once"
+		);
+
+		// One more dry-run + cancel should not change it.
+		let psbt = {
+			let w = agg.primary_wallet_mut();
+			let mut b = w.build_tx();
+			b.add_recipient(recipient.clone(), Amount::from_sat(30_000)).fee_rate(fee_rate);
+			b.finish().unwrap()
+		};
+		agg.cancel_dry_run_tx(&psbt.unsigned_tx);
+		assert_eq!(
+			final_idx,
+			agg.derivation_index(KeychainKind::Internal),
+			"Sixth dry-run should still reuse the same index"
+		);
+	}
+
+	/// After a cancelled dry-run, the next real finish() reuses the same
+	/// change address. Verifies the fix doesn't break real transactions.
+	#[test]
+	fn test_dry_run_cancel_then_real_tx_reuses_change_address() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(200_000));
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let recipient = recipient_script();
+		let fee_rate = FeeRate::from_sat_per_vb(2).unwrap();
+
+		// Dry-run + cancel
+		let dry_psbt = {
+			let w = agg.primary_wallet_mut();
+			let mut b = w.build_tx();
+			b.add_recipient(recipient.clone(), Amount::from_sat(50_000)).fee_rate(fee_rate);
+			b.finish().unwrap()
+		};
+		let dry_run_change_script: Option<ScriptBuf> = dry_psbt
+			.unsigned_tx
+			.output
+			.iter()
+			.find(|o| agg.is_mine(o.script_pubkey.clone()))
+			.map(|o| o.script_pubkey.clone());
+		agg.cancel_dry_run_tx(&dry_psbt.unsigned_tx);
+
+		let idx_after_dry = agg.derivation_index(KeychainKind::Internal);
+
+		// Real tx (no cancel — this would be signed and broadcast)
+		let real_psbt = {
+			let w = agg.primary_wallet_mut();
+			let mut b = w.build_tx();
+			b.add_recipient(recipient.clone(), Amount::from_sat(50_000)).fee_rate(fee_rate);
+			b.finish().unwrap()
+		};
+		let real_change_script: Option<ScriptBuf> = real_psbt
+			.unsigned_tx
+			.output
+			.iter()
+			.find(|o| agg.is_mine(o.script_pubkey.clone()))
+			.map(|o| o.script_pubkey.clone());
+
+		let idx_after_real = agg.derivation_index(KeychainKind::Internal);
+
+		assert_eq!(
+			idx_after_dry, idx_after_real,
+			"Real tx should not advance index beyond what dry-run already revealed"
+		);
+		if let (Some(dry_change), Some(real_change)) = (&dry_run_change_script, &real_change_script)
+		{
+			assert_eq!(
+				dry_change, real_change,
+				"Real tx should reuse the same change address as the cancelled dry-run"
+			);
+		}
 	}
 }
