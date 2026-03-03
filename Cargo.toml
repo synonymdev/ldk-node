@@ -29,6 +29,7 @@ lto = true          # Enable Link Time Optimization
 codegen-units = 1   # Reduce number of codegen units to increase optimizations.
 panic = 'abort'     # Abort on panic
 debug = "line-tables-only" # dSYM/debug symbols for iOS/Android crash symbolication
+split-debuginfo = "packed" # Single .dSYM bundle (macOS) / embedded DWARF (Linux)
 
 [features]
 default = []
