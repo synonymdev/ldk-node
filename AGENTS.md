@@ -237,11 +237,15 @@ When bumping the version, ALWAYS update ALL of these files:
   shasum -a 256 bindings/swift/LDKNodeFFI.xcframework.zip
   # Compare output with the checksum value in Package.swift - they MUST match
   ```
-- Create GitHub release with same name as the tag, upload `LDKNodeFFI.xcframework.zip`
+- Create GitHub release as **published** (not draft) and **set as latest release**, with
+  same name as the tag, upload `LDKNodeFFI.xcframework.zip`
 - **Release notes = DELTA only.** Describe only what changed since the previous release
   (e.g., rc.31 notes list only changes since rc.30). Do NOT paste the full cumulative
   CHANGELOG section — that covers all rc versions combined. Write concise notes covering
   the PR's changes: bug fixes, features, optimizations, and binding/version updates.
+- Release notes are for **consumers of the bindings** — cover only Rust code changes,
+  FFI changes, and binding updates. Do NOT include internal CI, documentation, or
+  workflow changes.
 - **ALWAYS add release link at the end of PR description** (use `gh pr edit` to update the body):
   ```
   ### Release
