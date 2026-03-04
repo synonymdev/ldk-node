@@ -1,4 +1,4 @@
-# 0.7.0-rc.32 (Synonym Fork)
+# 0.7.0-rc.31 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -29,8 +29,6 @@
 
 ## Synonym Fork Additions
 
-- Enabled line-table debug info in `release-smaller` profile for iOS dSYM generation
-  and Android crash symbolication
 - Added `OnchainPayment::calculate_send_all_fee()` to preview the fee for a drain / send-all
   transaction before broadcasting (fee-calculation counterpart of `send_all_to_address`)
 - Added runtime APIs for dynamic address type management:
