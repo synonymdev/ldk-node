@@ -54,18 +54,11 @@ cargo clippy --fix
 
 ### Language Bindings
 ```bash
-# Generate Kotlin bindings
-./scripts/uniffi_bindgen_generate_kotlin.sh
-
-# Generate Android bindings
-./scripts/uniffi_bindgen_generate_kotlin_android.sh
-
-# Generate Python bindings
-./scripts/uniffi_bindgen_generate_python.sh
-
-# Generate Swift bindings
-./scripts/uniffi_bindgen_generate_swift.sh
+# Generate ALL bindings (Swift, Kotlin, Python) + xcframework archive
+./bindgen.sh
 ```
+Individual scripts live under `scripts/` but should NOT be run directly —
+`bindgen.sh` installs shared tooling once and sets the correct build profile.
 
 ## Architecture
 
@@ -226,14 +219,18 @@ When bumping the version, ALWAYS update ALL of these files:
 
 ## CHANGELOG
 - The Synonym fork maintains a SINGLE section at the top: `# X.X.X (Synonym Fork)`
+- This section is **cumulative** — it contains ALL changes across ALL rc versions for this fork
 - When bumping version, update the version in the existing heading (don't create new sections)
 - All Synonym fork additions go under ONE `## Synonym Fork Additions` subsection
 - New additions should be added at the TOP of the Synonym Fork Additions list
 - Do NOT create separate sections for each rc version
-- Use the CHANGELOG content as the GitHub release notes body
+- **GitHub release notes are NOT the full CHANGELOG** — see PR Release Workflow below
 
 ## PR Release Workflow
 - For PRs that bump version, ALWAYS create a release on the PR branch BEFORE merge
+- **CRITICAL: Commit and push ALL changes to the branch BEFORE tagging.** The tag must
+  point to a commit that contains every change included in the release (CHANGELOG, version
+  bumps, bindings, etc.). Never tag uncommitted or unpushed work.
 - Tag the last commit on the PR branch with the version from Cargo.toml (e.g., `v0.7.0-rc.6`)
 - **CRITICAL: Before uploading `LDKNodeFFI.xcframework.zip`, ALWAYS verify the checksum matches `Package.swift`:**
   ```bash
@@ -241,6 +238,10 @@ When bumping the version, ALWAYS update ALL of these files:
   # Compare output with the checksum value in Package.swift - they MUST match
   ```
 - Create GitHub release with same name as the tag, upload `LDKNodeFFI.xcframework.zip`
+- **Release notes = DELTA only.** Describe only what changed since the previous release
+  (e.g., rc.31 notes list only changes since rc.30). Do NOT paste the full cumulative
+  CHANGELOG section — that covers all rc versions combined. Write concise notes covering
+  the PR's changes: bug fixes, features, optimizations, and binding/version updates.
 - **ALWAYS add release link at the end of PR description** (use `gh pr edit` to update the body):
   ```
   ### Release
