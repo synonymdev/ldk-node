@@ -1075,7 +1075,12 @@ impl Wallet {
 					}
 				};
 
-				let base_fee = primary.calculate_fee(&tmp_tx).map_err(|e| {
+				let fee_result = primary.calculate_fee(&tmp_tx);
+
+				// Cancel the temp tx to free up the change address.
+				primary.cancel_tx(&tmp_tx);
+
+				let base_fee = fee_result.map_err(|e| {
 					log_error!(
 						self.logger,
 						"Failed to calculate fee of temporary transaction: {}",
@@ -1083,9 +1088,6 @@ impl Wallet {
 					);
 					e
 				})?;
-
-				// 'cancel' the transaction to free up any used change addresses
-				primary.cancel_tx(&tmp_tx);
 
 				// Adjust the fee estimate for non-primary inputs that will be
 				// added to the actual tx (the temp tx only used primary UTXOs).
@@ -1184,21 +1186,26 @@ impl Wallet {
 		};
 
 		// Check the reserve requirements (again) and return an error if they aren't met.
+		// Cancel the PSBT before each early return to free up the change address.
 		match send_amount {
 			OnchainSendAmount::ExactRetainingReserve { amount_sats, cur_anchor_reserve_sats } => {
 				let spendable_amount_sats = self
 					.get_balances_inner(&aggregate_balance, cur_anchor_reserve_sats)
 					.map(|(_, s)| s)
 					.unwrap_or(0);
-				let tx_fee_sats =
-					locked_wallet.calculate_fee_with_fallback(&psbt).map_err(|e| {
+				let fee_result = locked_wallet.calculate_fee_with_fallback(&psbt);
+				let tx_fee_sats = match fee_result {
+					Ok(fee) => fee,
+					Err(e) => {
 						log_error!(
 							self.logger,
 							"Failed to calculate fee of candidate transaction: {}",
 							e
 						);
-						Error::WalletOperationFailed
-					})?;
+						locked_wallet.cancel_dry_run_tx(&psbt.unsigned_tx);
+						return Err(Error::WalletOperationFailed);
+					},
+				};
 				if spendable_amount_sats < amount_sats.saturating_add(tx_fee_sats) {
 					log_error!(self.logger,
 						"Unable to send payment due to insufficient funds. Available: {}sats, Required: {}sats + {}sats fee",
@@ -1206,6 +1213,7 @@ impl Wallet {
 						amount_sats,
 						tx_fee_sats,
 					);
+					locked_wallet.cancel_dry_run_tx(&psbt.unsigned_tx);
 					return Err(Error::InsufficientFunds);
 				}
 			},
@@ -1221,6 +1229,7 @@ impl Wallet {
 						spendable_amount_sats,
 						drain_amount,
 					);
+					locked_wallet.cancel_dry_run_tx(&psbt.unsigned_tx);
 					return Err(Error::InsufficientFunds);
 				}
 			},
@@ -1241,7 +1250,7 @@ impl Wallet {
 		let fee_rate =
 			fee_rate.unwrap_or_else(|| self.fee_estimator.estimate_fee_rate(confirmation_target));
 
-		let (psbt, locked_wallet) = self.build_transaction_psbt(
+		let (psbt, mut locked_wallet) = self.build_transaction_psbt(
 			address,
 			send_amount,
 			fee_rate,
@@ -1249,7 +1258,12 @@ impl Wallet {
 			channel_manager,
 		)?;
 
-		let calculated_fee = locked_wallet.calculate_fee_with_fallback(&psbt).map_err(|e| {
+		let fee_result = locked_wallet.calculate_fee_with_fallback(&psbt);
+
+		// Cancel the dry-run PSBT to free up the change address.
+		locked_wallet.cancel_dry_run_tx(&psbt.unsigned_tx);
+
+		let calculated_fee = fee_result.map_err(|e| {
 			log_error!(self.logger, "Failed to calculate transaction fee: {}", e);
 			Error::WalletOperationFailed
 		})?;
@@ -1388,11 +1402,11 @@ impl Wallet {
 		tx_builder.fee_rate(fee_rate);
 		tx_builder.exclude_unconfirmed();
 
-		tx_builder
-			.finish()
-			.map_err(|e| {
-				log_error!(self.logger, "Failed to select confirmed UTXOs: {}", e);
-			})?
+		let psbt = tx_builder.finish().map_err(|e| {
+			log_error!(self.logger, "Failed to select confirmed UTXOs: {}", e);
+		})?;
+
+		let result = psbt
 			.unsigned_tx
 			.input
 			.iter()
@@ -1403,7 +1417,12 @@ impl Wallet {
 					.map(|tx_details| tx_details.tx.deref().clone())
 					.map(|prevtx| FundingTxInput::new_p2wpkh(prevtx, txin.previous_output.vout))
 			})
-			.collect::<Result<Vec<_>, ()>>()
+			.collect::<Result<Vec<_>, ()>>();
+
+		// Cancel the dry-run PSBT to free up the change address.
+		locked_wallet.cancel_dry_run_tx(&psbt.unsigned_tx);
+
+		result
 	}
 
 	fn list_confirmed_utxos_inner(&self) -> Result<Vec<Utxo>, ()> {
