@@ -63,6 +63,11 @@ cargo ndk \
     -t x86_64 \
     build --profile release-smaller --features uniffi || exit 1
 
+# Clean up exported flags so they don't leak into subsequent scripts
+# (e.g. the -z linker flags are Linux-only and break macOS builds)
+unset RUSTFLAGS
+unset CFLAGS
+
 # Generate Kotlin bindings
 echo "Generating Kotlin bindings..."
 $UNIFFI_BINDGEN_BIN bindings/ldk_node.udl --lib-file $TARGET_DIR/aarch64-linux-android/release-smaller/libldk_node.so --config uniffi-android.toml -o "$ANDROID_LIB_DIR/lib/src" || exit 1
