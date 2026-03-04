@@ -5,32 +5,34 @@ TARGET_DIR="target"
 PROJECT_DIR="ldk-node-jvm"
 JVM_LIB_DIR="$BINDINGS_DIR/$PROJECT_DIR"
 
-# Install gobley-uniffi-bindgen from fork with patched version
-echo "Installing gobley-uniffi-bindgen fork..."
-cargo install --git https://github.com/ovitrif/gobley.git --branch fix-v0.2.0 gobley-uniffi-bindgen --force
+# Install gobley-uniffi-bindgen from fork (skip if orchestrator already installed it)
+if [ -z "${BINDGEN_GOBLEY_INSTALLED:-}" ]; then
+	echo "Installing gobley-uniffi-bindgen fork..."
+	cargo install --git https://github.com/ovitrif/gobley.git --branch fix-v0.2.0 gobley-uniffi-bindgen --force
+fi
 UNIFFI_BINDGEN_BIN="gobley-uniffi-bindgen"
 
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 	echo "Building for Linux x86_64..."
 	rustup target add x86_64-unknown-linux-gnu || exit 1
-	cargo build --release --target x86_64-unknown-linux-gnu --features uniffi || exit 1
-	DYNAMIC_LIB_PATH="$TARGET_DIR/x86_64-unknown-linux-gnu/release/libldk_node.so"
+	cargo build --profile release-smaller --target x86_64-unknown-linux-gnu --features uniffi || exit 1
+	DYNAMIC_LIB_PATH="$TARGET_DIR/x86_64-unknown-linux-gnu/release-smaller/libldk_node.so"
 	RES_DIR="$JVM_LIB_DIR/lib/src/main/resources/linux-x86-64/"
 	mkdir -p $RES_DIR || exit 1
 	cp $DYNAMIC_LIB_PATH $RES_DIR || exit 1
 else
 	echo "Building for macOS x86_64..."
 	rustup target add x86_64-apple-darwin || exit 1
-	cargo build --release --target x86_64-apple-darwin --features uniffi || exit 1
-	DYNAMIC_LIB_PATH="$TARGET_DIR/x86_64-apple-darwin/release/libldk_node.dylib"
+	cargo build --profile release-smaller --target x86_64-apple-darwin --features uniffi || exit 1
+	DYNAMIC_LIB_PATH="$TARGET_DIR/x86_64-apple-darwin/release-smaller/libldk_node.dylib"
 	RES_DIR="$JVM_LIB_DIR/lib/src/main/resources/darwin-x86-64/"
 	mkdir -p $RES_DIR || exit 1
 	cp $DYNAMIC_LIB_PATH $RES_DIR || exit 1
 
 	echo "Building for macOS aarch64..."
 	rustup target add aarch64-apple-darwin || exit 1
-	cargo build --release --target aarch64-apple-darwin --features uniffi || exit 1
-	DYNAMIC_LIB_PATH_ARM="$TARGET_DIR/aarch64-apple-darwin/release/libldk_node.dylib"
+	cargo build --profile release-smaller --target aarch64-apple-darwin --features uniffi || exit 1
+	DYNAMIC_LIB_PATH_ARM="$TARGET_DIR/aarch64-apple-darwin/release-smaller/libldk_node.dylib"
 	RES_DIR="$JVM_LIB_DIR/lib/src/main/resources/darwin-aarch64/"
 	mkdir -p $RES_DIR || exit 1
 	cp $DYNAMIC_LIB_PATH_ARM $RES_DIR || exit 1
