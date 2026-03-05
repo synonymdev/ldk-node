@@ -4,9 +4,6 @@ set -eox pipefail
 BINDINGS_DIR="./bindings/swift"
 UNIFFI_BINDGEN_BIN="cargo run --manifest-path bindings/uniffi-bindgen/Cargo.toml"
 
-cargo build --release || exit 1
-$UNIFFI_BINDGEN_BIN generate bindings/ldk_node.udl --language swift -o "$BINDINGS_DIR" || exit 1
-
 mkdir -p $BINDINGS_DIR
 
 # Install rust target toolchains

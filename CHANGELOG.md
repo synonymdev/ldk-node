@@ -1,7 +1,12 @@
-# 0.7.0-rc.29 (Synonym Fork)
+# 0.7.0-rc.32 (Synonym Fork)
 
 ## Bug Fixes
 
+- Fixed cumulative change-address derivation index leak during fee estimation and dry-run
+  transaction builds. BDK's `TxBuilder::finish()` advances the internal (change) keychain index
+  each time it's called; repeated fee estimations would burn through change addresses without
+  broadcasting any transaction. All dry-run and error-after-`finish()` paths now cancel the PSBT
+  to unmark the change address for reuse.
 - Bumped `FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS` and `TX_BROADCAST_TIMEOUT_SECS` from 5s to 15s.
   The 5s node-level timeout fires before Electrum can complete a request (10s timeout), causing
   `FeerateEstimationUpdateTimeout` on node start.

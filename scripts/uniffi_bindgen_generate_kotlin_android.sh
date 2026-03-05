@@ -5,9 +5,11 @@ TARGET_DIR="target"
 PROJECT_DIR="ldk-node-android"
 ANDROID_LIB_DIR="$BINDINGS_DIR/$PROJECT_DIR"
 
-# Install gobley-uniffi-bindgen from fork with patched version
-echo "Installing gobley-uniffi-bindgen fork..."
-cargo install --git https://github.com/ovitrif/gobley.git --branch fix-v0.2.0 gobley-uniffi-bindgen --force
+# Install gobley-uniffi-bindgen from fork (skip if orchestrator already installed it)
+if [ -z "${BINDGEN_GOBLEY_INSTALLED:-}" ]; then
+	echo "Installing gobley-uniffi-bindgen fork..."
+	cargo install --git https://github.com/ovitrif/gobley.git --branch fix-v0.2.0 gobley-uniffi-bindgen --force
+fi
 UNIFFI_BINDGEN_BIN="gobley-uniffi-bindgen"
 
 export_variable_if_not_present() {
@@ -60,6 +62,11 @@ cargo ndk \
     -t arm64-v8a \
     -t x86_64 \
     build --profile release-smaller --features uniffi || exit 1
+
+# Clean up exported flags so they don't leak into subsequent scripts
+# (e.g. the -z linker flags are Linux-only and break macOS builds)
+unset RUSTFLAGS
+unset CFLAGS
 
 # Generate Kotlin bindings
 echo "Generating Kotlin bindings..."

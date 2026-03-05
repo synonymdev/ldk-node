@@ -54,18 +54,11 @@ cargo clippy --fix
 
 ### Language Bindings
 ```bash
-# Generate Kotlin bindings
-./scripts/uniffi_bindgen_generate_kotlin.sh
-
-# Generate Android bindings
-./scripts/uniffi_bindgen_generate_kotlin_android.sh
-
-# Generate Python bindings
-./scripts/uniffi_bindgen_generate_python.sh
-
-# Generate Swift bindings
-./scripts/uniffi_bindgen_generate_swift.sh
+# Generate ALL bindings (Swift, Kotlin, Python) + xcframework archive
+./bindgen.sh
 ```
+Individual scripts live under `scripts/` but should NOT be run directly —
+`bindgen.sh` installs shared tooling once and sets the correct build profile.
 
 ## Architecture
 
@@ -122,7 +115,17 @@ You are an extremely strict senior Rust systems engineer with 15+ years shipping
 
 Your job is not just to write or review code — it is to deliver code that would pass a full Trail of Bits + Rust unsafe + Jepsen-level audit on the first try.
 
-Follow this exact multi-stage process and never skip or summarize any stage:
+Follow this exact multi-stage process and never skip or summarize any stage, with
+one exception for automated CI reviews (see below):
+
+**Automated CI code reviews (GitHub Actions):** When running as the `code-review`
+plugin in GitHub Actions, build and test tools (Bash, cargo, etc.) are unavailable.
+In this context:
+- Run Stages 1, 2, 3, and 5 using static analysis only (Read, Grep, Glob).
+- Skip Stage 4 (Testing) and Stage 6 (Build & CI Verification) entirely.
+  Do NOT attempt to run cargo, build, or test commands.
+- For Stage 7, report only: (1) threat model notes, (2) critical issues found,
+  and (7) verification checklist — marking Stages 4 and 6 items as "N/A (CI)".
 
 Stage 1 – Threat Model & Architecture Review
 - Explicitly write a concise threat model (adversaries, trust boundaries, failure modes).
@@ -187,7 +190,8 @@ Only after completing all stages above, output in this exact order:
    - Architecture is minimal and correct
 
 Never say "trust me" or "in practice this would pass". You must demonstrate everything above explicitly.
-If anything is missing or cannot be verified, you must fix it before declaring success.
+If anything is missing or cannot be verified (outside of stages explicitly
+marked as skipped for CI), you must fix it before declaring success.
 
 ---
 ## RULES
@@ -196,7 +200,7 @@ If anything is missing or cannot be verified, you must fix it before declaring s
 - NEVER suggest manually adding @Serializable annotations to generated Kotlin bindings
 - ALWAYS run `cargo fmt` before committing to ensure consistent code formatting
 - ALWAYS move imports to the top of the file when applicable (no inline imports in functions)
-- NEVER run binding generation scripts yourself - always ask the user to run them (they are long-running and resource-intensive)
+- Run `./bindgen.sh` in the background when bindings need regeneration (it is long-running)
 
 ## Bindings Generation Command
 To regenerate ALL bindings (Swift, Kotlin, Python), run from the repo root:
@@ -215,21 +219,33 @@ When bumping the version, ALWAYS update ALL of these files:
 
 ## CHANGELOG
 - The Synonym fork maintains a SINGLE section at the top: `# X.X.X (Synonym Fork)`
+- This section is **cumulative** — it contains ALL changes across ALL rc versions for this fork
 - When bumping version, update the version in the existing heading (don't create new sections)
 - All Synonym fork additions go under ONE `## Synonym Fork Additions` subsection
 - New additions should be added at the TOP of the Synonym Fork Additions list
 - Do NOT create separate sections for each rc version
-- Use the CHANGELOG content as the GitHub release notes body
+- **GitHub release notes are NOT the full CHANGELOG** — see PR Release Workflow below
 
 ## PR Release Workflow
 - For PRs that bump version, ALWAYS create a release on the PR branch BEFORE merge
+- **CRITICAL: Commit and push ALL changes to the branch BEFORE tagging.** The tag must
+  point to a commit that contains every change included in the release (CHANGELOG, version
+  bumps, bindings, etc.). Never tag uncommitted or unpushed work.
 - Tag the last commit on the PR branch with the version from Cargo.toml (e.g., `v0.7.0-rc.6`)
 - **CRITICAL: Before uploading `LDKNodeFFI.xcframework.zip`, ALWAYS verify the checksum matches `Package.swift`:**
   ```bash
   shasum -a 256 bindings/swift/LDKNodeFFI.xcframework.zip
   # Compare output with the checksum value in Package.swift - they MUST match
   ```
-- Create GitHub release with same name as the tag, upload `LDKNodeFFI.xcframework.zip`
+- Create GitHub release as **published** (not draft) and **set as latest release**, with
+  same name as the tag, upload `LDKNodeFFI.xcframework.zip`
+- **Release notes = DELTA only.** Describe only what changed since the previous release
+  (e.g., rc.31 notes list only changes since rc.30). Do NOT paste the full cumulative
+  CHANGELOG section — that covers all rc versions combined. Write concise notes covering
+  the PR's changes: bug fixes, features, optimizations, and binding/version updates.
+- Release notes are for **consumers of the bindings** — cover only Rust code changes,
+  FFI changes, and binding updates. Do NOT include internal CI, documentation, or
+  workflow changes.
 - **ALWAYS add release link at the end of PR description** (use `gh pr edit` to update the body):
   ```
   ### Release

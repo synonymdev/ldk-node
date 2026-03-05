@@ -24,6 +24,11 @@ swift.swiftdoc
 # Ignore LDKNodeFFI.xcframework files
 /bindings/swift/LDKNodeFFI.xcframework
 
+# Build artifacts
+*.o
+*.a
+*.d
+
 # IDE and local files
 .idea
 .build
