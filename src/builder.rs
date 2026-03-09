@@ -43,7 +43,7 @@ use lightning::util::persist::{
 };
 use lightning::util::ser::{Readable, ReadableArgs};
 use lightning::util::sweep::OutputSweeper;
-use lightning::{log_info, log_trace};
+use lightning::{log_info, log_trace, log_warn};
 use lightning_persister::fs_store::FilesystemStore;
 use vss_client::headers::{FixedHeaders, LnurlAuthToJwtProvider, VssHeaderProvider};
 
@@ -1639,23 +1639,88 @@ fn build_with_store_internal(
 
 			let funding_txo = channel_monitor.get_funding_txo();
 			let monitor_key = format!("{}_{}", funding_txo.txid, funding_txo.index);
-			log_info!(logger, "Migrating channel monitor: {}", monitor_key);
+			let migrated_update_id = channel_monitor.get_latest_update_id();
+			log_info!(
+				logger,
+				"Migrating channel monitor: {} (update_id={})",
+				monitor_key,
+				migrated_update_id
+			);
 
-			runtime
-				.block_on(async {
-					KVStore::write(
-						&*kv_store,
-						CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
-						CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
-						&monitor_key,
-						monitor_data.clone(),
-					)
-					.await
-				})
-				.map_err(|e| {
-					log_error!(logger, "Failed to write channel_monitor {}: {}", monitor_key, e);
-					BuildError::WriteFailed
-				})?;
+			// Check if the store already has a newer monitor to avoid overwriting
+			// current state with stale migration data.
+			let should_write = match runtime.block_on(KVStore::read(
+				&*kv_store,
+				CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+				&monitor_key,
+			)) {
+				Ok(existing_data) => {
+					let mut existing_reader = Cursor::new(&existing_data);
+					match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
+						&mut existing_reader,
+						(&*keys_manager, &*keys_manager),
+					) {
+						Ok((_, existing_monitor)) => {
+							let existing_update_id = existing_monitor.get_latest_update_id();
+							if existing_update_id > migrated_update_id {
+								log_warn!(
+									logger,
+									"Skipping migration for monitor {}: existing update_id {} is newer than migrated update_id {}",
+									monitor_key,
+									existing_update_id,
+									migrated_update_id
+								);
+								false
+							} else {
+								true
+							}
+						},
+						Err(e) => {
+							log_warn!(
+								logger,
+								"Failed to deserialize existing monitor {}, proceeding with migration write: {:?}",
+								monitor_key,
+								e
+							);
+							true
+						},
+					}
+				},
+				Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => true,
+				Err(e) => {
+					log_warn!(
+						logger,
+						"Failed to read existing monitor {}, proceeding with migration write: {}",
+						monitor_key,
+						e
+					);
+					true
+				},
+			};
+
+			if should_write {
+				runtime
+					.block_on(async {
+						KVStore::write(
+							&*kv_store,
+							CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+							CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+							&monitor_key,
+							monitor_data.clone(),
+						)
+						.await
+					})
+					.map_err(|e| {
+						log_error!(
+							logger,
+							"Failed to write channel_monitor {}: {}",
+							monitor_key,
+							e
+						);
+						BuildError::WriteFailed
+					})?;
+			}
 		}
 
 		log_info!(
