@@ -1,7 +1,11 @@
-# 0.7.0-rc.32 (Synonym Fork)
+# 0.7.0-rc.33 (Synonym Fork)
 
 ## Bug Fixes
 
+- Fixed channel monitor migration from filesystem store to KV store overwriting newer state.
+  During FS→KV migration, the code now checks if the KV store already has a channel monitor
+  with a newer `update_id` before writing, preventing stale migration data from overwriting
+  current state on repeated migrations or restarts.
 - Fixed cumulative change-address derivation index leak during fee estimation and dry-run
   transaction builds. BDK's `TxBuilder::finish()` advances the internal (change) keychain index
   each time it's called; repeated fee estimations would burn through change addresses without
