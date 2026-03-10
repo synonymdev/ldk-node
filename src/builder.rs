@@ -1677,25 +1677,25 @@ fn build_with_store_internal(
 							}
 						},
 						Err(e) => {
-							log_warn!(
+							log_error!(
 								logger,
-								"Failed to deserialize existing monitor {}, proceeding with migration write: {:?}",
+								"Failed to deserialize existing monitor {}, refusing migration write to avoid overwriting potentially newer state: {:?}",
 								monitor_key,
 								e
 							);
-							true
+							return Err(BuildError::ReadFailed);
 						},
 					}
 				},
 				Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => true,
 				Err(e) => {
-					log_warn!(
+					log_error!(
 						logger,
-						"Failed to read existing monitor {}, proceeding with migration write: {}",
+						"Failed to read existing monitor {}, refusing migration write to avoid overwriting potentially newer state: {}",
 						monitor_key,
 						e
 					);
-					true
+					return Err(BuildError::ReadFailed);
 				},
 			};
 

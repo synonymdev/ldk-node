@@ -2,10 +2,6 @@
 
 ## Bug Fixes
 
-- Fixed channel monitor migration from filesystem store to KV store overwriting newer state.
-  During FS→KV migration, the code now checks if the KV store already has a channel monitor
-  with a newer `update_id` before writing, preventing stale migration data from overwriting
-  current state on repeated migrations or restarts.
 - Fixed cumulative change-address derivation index leak during fee estimation and dry-run
   transaction builds. BDK's `TxBuilder::finish()` advances the internal (change) keychain index
   each time it's called; repeated fee estimations would burn through change addresses without
@@ -33,6 +29,11 @@
 
 ## Synonym Fork Additions
 
+- Fixed channel monitor migration from filesystem store to KV store overwriting newer state.
+  During FS→KV migration, the code now checks if the KV store already has a channel monitor
+  with a newer `update_id` before writing, preventing stale migration data from overwriting
+  current state on repeated migrations or restarts. Errors reading or deserializing existing
+  monitors now fail-closed (abort migration) to avoid silent data loss.
 - Added `OnchainPayment::calculate_send_all_fee()` to preview the fee for a drain / send-all
   transaction before broadcasting (fee-calculation counterpart of `send_all_to_address`)
 - Added runtime APIs for dynamic address type management:
