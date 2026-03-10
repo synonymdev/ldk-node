@@ -8206,14 +8206,18 @@ class _UniffiConverterTypeCustomTlvRecord(_UniffiConverterRustBuffer):
 
 class ElectrumSyncConfig:
     background_sync_config: "typing.Optional[BackgroundSyncConfig]"
-    def __init__(self, *, background_sync_config: "typing.Optional[BackgroundSyncConfig]"):
+    connection_timeout_secs: "int"
+    def __init__(self, *, background_sync_config: "typing.Optional[BackgroundSyncConfig]", connection_timeout_secs: "int"):
         self.background_sync_config = background_sync_config
+        self.connection_timeout_secs = connection_timeout_secs
 
     def __str__(self):
-        return "ElectrumSyncConfig(background_sync_config={})".format(self.background_sync_config)
+        return "ElectrumSyncConfig(background_sync_config={}, connection_timeout_secs={})".format(self.background_sync_config, self.connection_timeout_secs)
 
     def __eq__(self, other):
         if self.background_sync_config != other.background_sync_config:
+            return False
+        if self.connection_timeout_secs != other.connection_timeout_secs:
             return False
         return True
 
@@ -8222,15 +8226,18 @@ class _UniffiConverterTypeElectrumSyncConfig(_UniffiConverterRustBuffer):
     def read(buf):
         return ElectrumSyncConfig(
             background_sync_config=_UniffiConverterOptionalTypeBackgroundSyncConfig.read(buf),
+            connection_timeout_secs=_UniffiConverterUInt64.read(buf),
         )
 
     @staticmethod
     def check_lower(value):
         _UniffiConverterOptionalTypeBackgroundSyncConfig.check_lower(value.background_sync_config)
+        _UniffiConverterUInt64.check_lower(value.connection_timeout_secs)
 
     @staticmethod
     def write(value, buf):
         _UniffiConverterOptionalTypeBackgroundSyncConfig.write(value.background_sync_config, buf)
+        _UniffiConverterUInt64.write(value.connection_timeout_secs, buf)
 
 
 class EsploraSyncConfig:

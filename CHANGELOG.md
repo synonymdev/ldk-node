@@ -1,4 +1,4 @@
-# 0.7.0-rc.32 (Synonym Fork)
+# 0.7.0-rc.33 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -28,6 +28,14 @@
   `lightning-transaction-sync` v0.2.1. Also picks up `lightning` v0.2.2 fixes.
 
 ## Synonym Fork Additions
+
+- Added `connection_timeout_secs` field to `ElectrumSyncConfig` (default: 10 s). This bounds
+  Electrum socket operations for both the BDK on-chain and LDK tx-sync clients, preventing Tokio's
+  blocking thread pool from being exhausted by threads stuck on dead sockets under total packet
+  loss (e.g. a captive portal on iOS). Set to `0` to disable; values above 255 are capped to
+  255 and a warning is logged.
+  **Breaking change:** existing struct-literal construction of `ElectrumSyncConfig` must add the
+  new field or switch to `ElectrumSyncConfig { .., ..Default::default() }`.
 
 - Added `OnchainPayment::calculate_send_all_fee()` to preview the fee for a drain / send-all
   transaction before broadcasting (fee-calculation counterpart of `send_all_to_address`)

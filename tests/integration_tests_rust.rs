@@ -25,7 +25,7 @@ use common::{
 	random_listening_addresses, setup_bitcoind_and_electrsd, setup_builder, setup_node,
 	setup_node_for_async_payments, setup_two_nodes, wait_for_tx, TestChainSource, TestSyncStore,
 };
-use ldk_node::config::{AsyncPaymentsRole, EsploraSyncConfig};
+use ldk_node::config::{AsyncPaymentsRole, ElectrumSyncConfig, EsploraSyncConfig};
 use ldk_node::liquidity::LSPS2ServiceConfig;
 use ldk_node::payment::{
 	ConfirmationStatus, PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus,
@@ -3297,4 +3297,54 @@ async fn get_address_balance_electrum() {
 	// Test with an invalid address
 	let invalid_result = node.get_address_balance("invalid_address");
 	assert!(invalid_result.is_err(), "Invalid address should return error");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn electrum_connection_timeout_config() {
+	let (_, electrsd) = setup_bitcoind_and_electrsd();
+	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
+	let config = random_config(false);
+	setup_builder!(builder, config.node_config);
+	let sync_config =
+		ElectrumSyncConfig { background_sync_config: None, connection_timeout_secs: 20 };
+	builder.set_chain_source_electrum(electrum_url, Some(sync_config));
+	let node = builder.build().unwrap();
+	node.start().unwrap();
+	node.sync_wallets().unwrap();
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn electrum_connection_timeout_zero_disables() {
+	// connection_timeout_secs: 0 must map to no socket timeout rather than passing
+	// Duration::ZERO to set_read_timeout, which errors on most platforms and would
+	// cause start() to fail.
+	let (_, electrsd) = setup_bitcoind_and_electrsd();
+	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
+	let config = random_config(false);
+	setup_builder!(builder, config.node_config);
+	let sync_config =
+		ElectrumSyncConfig { background_sync_config: None, connection_timeout_secs: 0 };
+	builder.set_chain_source_electrum(electrum_url, Some(sync_config));
+	let node = builder.build().unwrap();
+	node.start().unwrap();
+	node.sync_wallets().unwrap();
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn electrum_connection_timeout_above_max_is_capped() {
+	// Values above 255 must be capped to 255 (electrum_client uses u8) and must not
+	// prevent startup or sync — the node should start and sync successfully.
+	let (_, electrsd) = setup_bitcoind_and_electrsd();
+	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
+	let config = random_config(false);
+	setup_builder!(builder, config.node_config);
+	let sync_config =
+		ElectrumSyncConfig { background_sync_config: None, connection_timeout_secs: 300 };
+	builder.set_chain_source_electrum(electrum_url, Some(sync_config));
+	let node = builder.build().unwrap();
+	node.start().unwrap();
+	node.sync_wallets().unwrap();
+	node.stop().unwrap();
 }

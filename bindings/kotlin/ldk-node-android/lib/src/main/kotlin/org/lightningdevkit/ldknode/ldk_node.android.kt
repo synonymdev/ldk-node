@@ -9459,15 +9459,18 @@ object FfiConverterTypeElectrumSyncConfig: FfiConverterRustBuffer<ElectrumSyncCo
     override fun read(buf: ByteBuffer): ElectrumSyncConfig {
         return ElectrumSyncConfig(
             FfiConverterOptionalTypeBackgroundSyncConfig.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
     override fun allocationSize(value: ElectrumSyncConfig) = (
-            FfiConverterOptionalTypeBackgroundSyncConfig.allocationSize(value.`backgroundSyncConfig`)
+            FfiConverterOptionalTypeBackgroundSyncConfig.allocationSize(value.`backgroundSyncConfig`) +
+            FfiConverterULong.allocationSize(value.`connectionTimeoutSecs`)
     )
 
     override fun write(value: ElectrumSyncConfig, buf: ByteBuffer) {
         FfiConverterOptionalTypeBackgroundSyncConfig.write(value.`backgroundSyncConfig`, buf)
+        FfiConverterULong.write(value.`connectionTimeoutSecs`, buf)
     }
 }
 
