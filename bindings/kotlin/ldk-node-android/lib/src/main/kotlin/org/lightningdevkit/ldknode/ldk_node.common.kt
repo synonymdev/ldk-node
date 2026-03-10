@@ -16,7 +16,7 @@ package org.lightningdevkit.ldknode
 // compile the Rust component. The easiest way to ensure this is to bundle the Kotlin
 // helpers directly inline like we're doing here.
 
-public class InternalException(message: String) : kotlin.Exception(message)
+class InternalException(message: String) : kotlin.Exception(message)
 
 // Public interface members begin here.
 
@@ -30,17 +30,16 @@ public class InternalException(message: String) : kotlin.Exception(message)
 // The easiest way to ensure this method is called is to use the `.use`
 // helper method to execute a block and destroy the object at the end.
 @OptIn(ExperimentalStdlibApi::class)
-public interface Disposable : AutoCloseable {
-    public fun destroy()
-    override fun close(): Unit = destroy()
-    public companion object {
+interface Disposable : AutoCloseable {
+    fun destroy()
+    override fun close() = destroy()
+    companion object {
         internal fun destroy(vararg args: Any?) {
             for (arg in args) {
                 when (arg) {
                     is Disposable -> arg.destroy()
-                    is ArrayList<*> -> {
-                        for (idx in arg.indices) {
-                            val element = arg[idx]
+                    is Iterable<*> -> {
+                        for (element in arg) {
                             if (element is Disposable) {
                                 element.destroy()
                             }
@@ -60,13 +59,6 @@ public interface Disposable : AutoCloseable {
                             }
                         }
                     }
-                    is Iterable<*> -> {
-                        for (element in arg) {
-                            if (element is Disposable) {
-                                element.destroy()
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -74,7 +66,7 @@ public interface Disposable : AutoCloseable {
 }
 
 @OptIn(kotlin.contracts.ExperimentalContracts::class)
-public inline fun <T : Disposable?, R> T.use(block: (T) -> R): R {
+inline fun <T : Disposable?, R> T.use(block: (T) -> R): R {
     kotlin.contracts.contract {
         callsInPlace(block, kotlin.contracts.InvocationKind.EXACTLY_ONCE)
     }
@@ -91,7 +83,7 @@ public inline fun <T : Disposable?, R> T.use(block: (T) -> R): R {
 }
 
 /** Used to instantiate an interface without an actual pointer, for fakes in tests, mostly. */
-public object NoPointer
+object NoPointer
 
 
 
@@ -111,626 +103,626 @@ public object NoPointer
 
 
 
-public interface Bolt11InvoiceInterface {
+interface Bolt11InvoiceInterface {
     
-    public fun `amountMilliSatoshis`(): kotlin.ULong?
+    fun `amountMilliSatoshis`(): kotlin.ULong?
     
-    public fun `currency`(): Currency
+    fun `currency`(): Currency
     
-    public fun `expiryTimeSeconds`(): kotlin.ULong
+    fun `expiryTimeSeconds`(): kotlin.ULong
     
-    public fun `fallbackAddresses`(): List<Address>
+    fun `fallbackAddresses`(): List<Address>
     
-    public fun `invoiceDescription`(): Bolt11InvoiceDescription
+    fun `invoiceDescription`(): Bolt11InvoiceDescription
     
-    public fun `isExpired`(): kotlin.Boolean
+    fun `isExpired`(): kotlin.Boolean
     
-    public fun `minFinalCltvExpiryDelta`(): kotlin.ULong
+    fun `minFinalCltvExpiryDelta`(): kotlin.ULong
     
-    public fun `network`(): Network
+    fun `network`(): Network
     
-    public fun `paymentHash`(): PaymentHash
+    fun `paymentHash`(): PaymentHash
     
-    public fun `paymentSecret`(): PaymentSecret
+    fun `paymentSecret`(): PaymentSecret
     
-    public fun `recoverPayeePubKey`(): PublicKey
+    fun `recoverPayeePubKey`(): PublicKey
     
-    public fun `routeHints`(): List<List<RouteHintHop>>
+    fun `routeHints`(): List<List<RouteHintHop>>
     
-    public fun `secondsSinceEpoch`(): kotlin.ULong
+    fun `secondsSinceEpoch`(): kotlin.ULong
     
-    public fun `secondsUntilExpiry`(): kotlin.ULong
+    fun `secondsUntilExpiry`(): kotlin.ULong
     
-    public fun `signableHash`(): List<kotlin.UByte>
+    fun `signableHash`(): List<kotlin.UByte>
     
-    public fun `wouldExpire`(`atTimeSeconds`: kotlin.ULong): kotlin.Boolean
+    fun `wouldExpire`(`atTimeSeconds`: kotlin.ULong): kotlin.Boolean
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface Bolt11PaymentInterface {
+interface Bolt11PaymentInterface {
     
     @Throws(NodeException::class)
-    public fun `claimForHash`(`paymentHash`: PaymentHash, `claimableAmountMsat`: kotlin.ULong, `preimage`: PaymentPreimage)
+    fun `claimForHash`(`paymentHash`: PaymentHash, `claimableAmountMsat`: kotlin.ULong, `preimage`: PaymentPreimage)
     
     @Throws(NodeException::class)
-    public fun `estimateRoutingFees`(`invoice`: Bolt11Invoice): kotlin.ULong
+    fun `estimateRoutingFees`(`invoice`: Bolt11Invoice): kotlin.ULong
     
     @Throws(NodeException::class)
-    public fun `estimateRoutingFeesUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong): kotlin.ULong
+    fun `estimateRoutingFeesUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong): kotlin.ULong
     
     @Throws(NodeException::class)
-    public fun `failForHash`(`paymentHash`: PaymentHash)
+    fun `failForHash`(`paymentHash`: PaymentHash)
     
     @Throws(NodeException::class)
-    public fun `receive`(`amountMsat`: kotlin.ULong, `description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt): Bolt11Invoice
+    fun `receive`(`amountMsat`: kotlin.ULong, `description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt): Bolt11Invoice
     
     @Throws(NodeException::class)
-    public fun `receiveForHash`(`amountMsat`: kotlin.ULong, `description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `paymentHash`: PaymentHash): Bolt11Invoice
+    fun `receiveForHash`(`amountMsat`: kotlin.ULong, `description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `paymentHash`: PaymentHash): Bolt11Invoice
     
     @Throws(NodeException::class)
-    public fun `receiveVariableAmount`(`description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt): Bolt11Invoice
+    fun `receiveVariableAmount`(`description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt): Bolt11Invoice
     
     @Throws(NodeException::class)
-    public fun `receiveVariableAmountForHash`(`description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `paymentHash`: PaymentHash): Bolt11Invoice
+    fun `receiveVariableAmountForHash`(`description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `paymentHash`: PaymentHash): Bolt11Invoice
     
     @Throws(NodeException::class)
-    public fun `receiveVariableAmountViaJitChannel`(`description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `maxProportionalLspFeeLimitPpmMsat`: kotlin.ULong?): Bolt11Invoice
+    fun `receiveVariableAmountViaJitChannel`(`description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `maxProportionalLspFeeLimitPpmMsat`: kotlin.ULong?): Bolt11Invoice
     
     @Throws(NodeException::class)
-    public fun `receiveVariableAmountViaJitChannelForHash`(`description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `maxProportionalLspFeeLimitPpmMsat`: kotlin.ULong?, `paymentHash`: PaymentHash): Bolt11Invoice
+    fun `receiveVariableAmountViaJitChannelForHash`(`description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `maxProportionalLspFeeLimitPpmMsat`: kotlin.ULong?, `paymentHash`: PaymentHash): Bolt11Invoice
     
     @Throws(NodeException::class)
-    public fun `receiveViaJitChannel`(`amountMsat`: kotlin.ULong, `description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `maxLspFeeLimitMsat`: kotlin.ULong?): Bolt11Invoice
+    fun `receiveViaJitChannel`(`amountMsat`: kotlin.ULong, `description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `maxLspFeeLimitMsat`: kotlin.ULong?): Bolt11Invoice
     
     @Throws(NodeException::class)
-    public fun `receiveViaJitChannelForHash`(`amountMsat`: kotlin.ULong, `description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `maxLspFeeLimitMsat`: kotlin.ULong?, `paymentHash`: PaymentHash): Bolt11Invoice
+    fun `receiveViaJitChannelForHash`(`amountMsat`: kotlin.ULong, `description`: Bolt11InvoiceDescription, `expirySecs`: kotlin.UInt, `maxLspFeeLimitMsat`: kotlin.ULong?, `paymentHash`: PaymentHash): Bolt11Invoice
     
     @Throws(NodeException::class)
-    public fun `send`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?): PaymentId
+    fun `send`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?): PaymentId
     
     @Throws(NodeException::class)
-    public fun `sendProbes`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?)
+    fun `sendProbes`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?)
     
     @Throws(NodeException::class)
-    public fun `sendProbesUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?)
+    fun `sendProbesUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?)
     
     @Throws(NodeException::class)
-    public fun `sendUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?): PaymentId
+    fun `sendUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?): PaymentId
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface Bolt12InvoiceInterface {
+interface Bolt12InvoiceInterface {
     
-    public fun `absoluteExpirySeconds`(): kotlin.ULong?
+    fun `absoluteExpirySeconds`(): kotlin.ULong?
     
-    public fun `amount`(): OfferAmount?
+    fun `amount`(): OfferAmount?
     
-    public fun `amountMsats`(): kotlin.ULong
+    fun `amountMsats`(): kotlin.ULong
     
-    public fun `chain`(): List<kotlin.UByte>
+    fun `chain`(): List<kotlin.UByte>
     
-    public fun `createdAt`(): kotlin.ULong
+    fun `createdAt`(): kotlin.ULong
     
-    public fun `encode`(): List<kotlin.UByte>
+    fun `encode`(): List<kotlin.UByte>
     
-    public fun `fallbackAddresses`(): List<Address>
+    fun `fallbackAddresses`(): List<Address>
     
-    public fun `invoiceDescription`(): kotlin.String?
+    fun `invoiceDescription`(): kotlin.String?
     
-    public fun `isExpired`(): kotlin.Boolean
+    fun `isExpired`(): kotlin.Boolean
     
-    public fun `issuer`(): kotlin.String?
+    fun `issuer`(): kotlin.String?
     
-    public fun `issuerSigningPubkey`(): PublicKey?
+    fun `issuerSigningPubkey`(): PublicKey?
     
-    public fun `metadata`(): List<kotlin.UByte>?
+    fun `metadata`(): List<kotlin.UByte>?
     
-    public fun `offerChains`(): List<List<kotlin.UByte>>?
+    fun `offerChains`(): List<List<kotlin.UByte>>?
     
-    public fun `payerNote`(): kotlin.String?
+    fun `payerNote`(): kotlin.String?
     
-    public fun `payerSigningPubkey`(): PublicKey
+    fun `payerSigningPubkey`(): PublicKey
     
-    public fun `paymentHash`(): PaymentHash
+    fun `paymentHash`(): PaymentHash
     
-    public fun `quantity`(): kotlin.ULong?
+    fun `quantity`(): kotlin.ULong?
     
-    public fun `relativeExpiry`(): kotlin.ULong
+    fun `relativeExpiry`(): kotlin.ULong
     
-    public fun `signableHash`(): List<kotlin.UByte>
+    fun `signableHash`(): List<kotlin.UByte>
     
-    public fun `signingPubkey`(): PublicKey
+    fun `signingPubkey`(): PublicKey
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface Bolt12PaymentInterface {
+interface Bolt12PaymentInterface {
     
     @Throws(NodeException::class)
-    public fun `blindedPathsForAsyncRecipient`(`recipientId`: kotlin.ByteArray): kotlin.ByteArray
+    fun `blindedPathsForAsyncRecipient`(`recipientId`: kotlin.ByteArray): kotlin.ByteArray
     
     @Throws(NodeException::class)
-    public fun `initiateRefund`(`amountMsat`: kotlin.ULong, `expirySecs`: kotlin.UInt, `quantity`: kotlin.ULong?, `payerNote`: kotlin.String?, `routeParameters`: RouteParametersConfig?): Refund
+    fun `initiateRefund`(`amountMsat`: kotlin.ULong, `expirySecs`: kotlin.UInt, `quantity`: kotlin.ULong?, `payerNote`: kotlin.String?, `routeParameters`: RouteParametersConfig?): Refund
     
     @Throws(NodeException::class)
-    public fun `receive`(`amountMsat`: kotlin.ULong, `description`: kotlin.String, `expirySecs`: kotlin.UInt?, `quantity`: kotlin.ULong?): Offer
+    fun `receive`(`amountMsat`: kotlin.ULong, `description`: kotlin.String, `expirySecs`: kotlin.UInt?, `quantity`: kotlin.ULong?): Offer
     
     @Throws(NodeException::class)
-    public fun `receiveAsync`(): Offer
+    fun `receiveAsync`(): Offer
     
     @Throws(NodeException::class)
-    public fun `receiveVariableAmount`(`description`: kotlin.String, `expirySecs`: kotlin.UInt?): Offer
+    fun `receiveVariableAmount`(`description`: kotlin.String, `expirySecs`: kotlin.UInt?): Offer
     
     @Throws(NodeException::class)
-    public fun `requestRefundPayment`(`refund`: Refund): Bolt12Invoice
+    fun `requestRefundPayment`(`refund`: Refund): Bolt12Invoice
     
     @Throws(NodeException::class)
-    public fun `send`(`offer`: Offer, `quantity`: kotlin.ULong?, `payerNote`: kotlin.String?, `routeParameters`: RouteParametersConfig?): PaymentId
+    fun `send`(`offer`: Offer, `quantity`: kotlin.ULong?, `payerNote`: kotlin.String?, `routeParameters`: RouteParametersConfig?): PaymentId
     
     @Throws(NodeException::class)
-    public fun `sendUsingAmount`(`offer`: Offer, `amountMsat`: kotlin.ULong, `quantity`: kotlin.ULong?, `payerNote`: kotlin.String?, `routeParameters`: RouteParametersConfig?): PaymentId
+    fun `sendUsingAmount`(`offer`: Offer, `amountMsat`: kotlin.ULong, `quantity`: kotlin.ULong?, `payerNote`: kotlin.String?, `routeParameters`: RouteParametersConfig?): PaymentId
     
     @Throws(NodeException::class)
-    public fun `setPathsToStaticInvoiceServer`(`paths`: kotlin.ByteArray)
+    fun `setPathsToStaticInvoiceServer`(`paths`: kotlin.ByteArray)
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface BuilderInterface {
+interface BuilderInterface {
     
     @Throws(BuildException::class)
-    public fun `build`(): Node
+    fun `build`(): Node
     
     @Throws(BuildException::class)
-    public fun `buildWithFsStore`(): Node
+    fun `buildWithFsStore`(): Node
     
     @Throws(BuildException::class)
-    public fun `buildWithVssStore`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `lnurlAuthServerUrl`: kotlin.String, `fixedHeaders`: Map<kotlin.String, kotlin.String>): Node
+    fun `buildWithVssStore`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `lnurlAuthServerUrl`: kotlin.String, `fixedHeaders`: Map<kotlin.String, kotlin.String>): Node
     
     @Throws(BuildException::class)
-    public fun `buildWithVssStoreAndFixedHeaders`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `fixedHeaders`: Map<kotlin.String, kotlin.String>): Node
+    fun `buildWithVssStoreAndFixedHeaders`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `fixedHeaders`: Map<kotlin.String, kotlin.String>): Node
     
     @Throws(BuildException::class)
-    public fun `buildWithVssStoreAndHeaderProvider`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `headerProvider`: VssHeaderProvider): Node
+    fun `buildWithVssStoreAndHeaderProvider`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `headerProvider`: VssHeaderProvider): Node
     
-    public fun `setAddressType`(`addressType`: AddressType)
+    fun `setAddressType`(`addressType`: AddressType)
     
-    public fun `setAddressTypesToMonitor`(`addressTypesToMonitor`: List<AddressType>)
-    
-    @Throws(BuildException::class)
-    public fun `setAnnouncementAddresses`(`announcementAddresses`: List<SocketAddress>)
+    fun `setAddressTypesToMonitor`(`addressTypesToMonitor`: List<AddressType>)
     
     @Throws(BuildException::class)
-    public fun `setAsyncPaymentsRole`(`role`: AsyncPaymentsRole?)
-    
-    public fun `setChainSourceBitcoindRest`(`restHost`: kotlin.String, `restPort`: kotlin.UShort, `rpcHost`: kotlin.String, `rpcPort`: kotlin.UShort, `rpcUser`: kotlin.String, `rpcPassword`: kotlin.String)
-    
-    public fun `setChainSourceBitcoindRpc`(`rpcHost`: kotlin.String, `rpcPort`: kotlin.UShort, `rpcUser`: kotlin.String, `rpcPassword`: kotlin.String)
-    
-    public fun `setChainSourceElectrum`(`serverUrl`: kotlin.String, `config`: ElectrumSyncConfig?)
-    
-    public fun `setChainSourceEsplora`(`serverUrl`: kotlin.String, `config`: EsploraSyncConfig?)
-    
-    public fun `setChannelDataMigration`(`migration`: ChannelDataMigration)
-    
-    public fun `setCustomLogger`(`logWriter`: LogWriter)
-    
-    public fun `setEntropyBip39Mnemonic`(`mnemonic`: Mnemonic, `passphrase`: kotlin.String?)
+    fun `setAnnouncementAddresses`(`announcementAddresses`: List<SocketAddress>)
     
     @Throws(BuildException::class)
-    public fun `setEntropySeedBytes`(`seedBytes`: List<kotlin.UByte>)
+    fun `setAsyncPaymentsRole`(`role`: AsyncPaymentsRole?)
     
-    public fun `setEntropySeedPath`(`seedPath`: kotlin.String)
+    fun `setChainSourceBitcoindRest`(`restHost`: kotlin.String, `restPort`: kotlin.UShort, `rpcHost`: kotlin.String, `rpcPort`: kotlin.UShort, `rpcUser`: kotlin.String, `rpcPassword`: kotlin.String)
     
-    public fun `setFilesystemLogger`(`logFilePath`: kotlin.String?, `maxLogLevel`: LogLevel?)
+    fun `setChainSourceBitcoindRpc`(`rpcHost`: kotlin.String, `rpcPort`: kotlin.UShort, `rpcUser`: kotlin.String, `rpcPassword`: kotlin.String)
     
-    public fun `setGossipSourceP2p`()
+    fun `setChainSourceElectrum`(`serverUrl`: kotlin.String, `config`: ElectrumSyncConfig?)
     
-    public fun `setGossipSourceRgs`(`rgsServerUrl`: kotlin.String)
+    fun `setChainSourceEsplora`(`serverUrl`: kotlin.String, `config`: EsploraSyncConfig?)
     
-    public fun `setLiquiditySourceLsps1`(`nodeId`: PublicKey, `address`: SocketAddress, `token`: kotlin.String?)
+    fun `setChannelDataMigration`(`migration`: ChannelDataMigration)
     
-    public fun `setLiquiditySourceLsps2`(`nodeId`: PublicKey, `address`: SocketAddress, `token`: kotlin.String?)
+    fun `setCustomLogger`(`logWriter`: LogWriter)
     
-    @Throws(BuildException::class)
-    public fun `setListeningAddresses`(`listeningAddresses`: List<SocketAddress>)
-    
-    public fun `setLogFacadeLogger`()
-    
-    public fun `setNetwork`(`network`: Network)
+    fun `setEntropyBip39Mnemonic`(`mnemonic`: Mnemonic, `passphrase`: kotlin.String?)
     
     @Throws(BuildException::class)
-    public fun `setNodeAlias`(`nodeAlias`: kotlin.String)
+    fun `setEntropySeedBytes`(`seedBytes`: List<kotlin.UByte>)
     
-    public fun `setPathfindingScoresSource`(`url`: kotlin.String)
+    fun `setEntropySeedPath`(`seedPath`: kotlin.String)
     
-    public fun `setStorageDirPath`(`storageDirPath`: kotlin.String)
+    fun `setFilesystemLogger`(`logFilePath`: kotlin.String?, `maxLogLevel`: LogLevel?)
     
-    public companion object
+    fun `setGossipSourceP2p`()
+    
+    fun `setGossipSourceRgs`(`rgsServerUrl`: kotlin.String)
+    
+    fun `setLiquiditySourceLsps1`(`nodeId`: PublicKey, `address`: SocketAddress, `token`: kotlin.String?)
+    
+    fun `setLiquiditySourceLsps2`(`nodeId`: PublicKey, `address`: SocketAddress, `token`: kotlin.String?)
+    
+    @Throws(BuildException::class)
+    fun `setListeningAddresses`(`listeningAddresses`: List<SocketAddress>)
+    
+    fun `setLogFacadeLogger`()
+    
+    fun `setNetwork`(`network`: Network)
+    
+    @Throws(BuildException::class)
+    fun `setNodeAlias`(`nodeAlias`: kotlin.String)
+    
+    fun `setPathfindingScoresSource`(`url`: kotlin.String)
+    
+    fun `setStorageDirPath`(`storageDirPath`: kotlin.String)
+    
+    companion object
 }
 
 
 
 
-public interface FeeRateInterface {
+interface FeeRateInterface {
     
-    public fun `toSatPerKwu`(): kotlin.ULong
+    fun `toSatPerKwu`(): kotlin.ULong
     
-    public fun `toSatPerVbCeil`(): kotlin.ULong
+    fun `toSatPerVbCeil`(): kotlin.ULong
     
-    public fun `toSatPerVbFloor`(): kotlin.ULong
+    fun `toSatPerVbFloor`(): kotlin.ULong
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface Lsps1LiquidityInterface {
+interface Lsps1LiquidityInterface {
     
     @Throws(NodeException::class)
-    public fun `checkOrderStatus`(`orderId`: Lsps1OrderId): Lsps1OrderStatus
+    fun `checkOrderStatus`(`orderId`: Lsps1OrderId): Lsps1OrderStatus
     
     @Throws(NodeException::class)
-    public fun `requestChannel`(`lspBalanceSat`: kotlin.ULong, `clientBalanceSat`: kotlin.ULong, `channelExpiryBlocks`: kotlin.UInt, `announceChannel`: kotlin.Boolean): Lsps1OrderStatus
+    fun `requestChannel`(`lspBalanceSat`: kotlin.ULong, `clientBalanceSat`: kotlin.ULong, `channelExpiryBlocks`: kotlin.UInt, `announceChannel`: kotlin.Boolean): Lsps1OrderStatus
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface LogWriter {
+interface LogWriter {
     
-    public fun `log`(`record`: LogRecord)
+    fun `log`(`record`: LogRecord)
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface NetworkGraphInterface {
+interface NetworkGraphInterface {
     
-    public fun `channel`(`shortChannelId`: kotlin.ULong): ChannelInfo?
+    fun `channel`(`shortChannelId`: kotlin.ULong): ChannelInfo?
     
-    public fun `listChannels`(): List<kotlin.ULong>
+    fun `listChannels`(): List<kotlin.ULong>
     
-    public fun `listNodes`(): List<NodeId>
+    fun `listNodes`(): List<NodeId>
     
-    public fun `node`(`nodeId`: NodeId): NodeInfo?
+    fun `node`(`nodeId`: NodeId): NodeInfo?
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface NodeInterface {
+interface NodeInterface {
     
     @Throws(NodeException::class)
-    public fun `addAddressTypeToMonitor`(`addressType`: AddressType, `seedBytes`: List<kotlin.UByte>)
+    fun `addAddressTypeToMonitor`(`addressType`: AddressType, `seedBytes`: List<kotlin.UByte>)
     
     @Throws(NodeException::class)
-    public fun `addAddressTypeToMonitorWithMnemonic`(`addressType`: AddressType, `mnemonic`: Mnemonic, `passphrase`: kotlin.String?)
+    fun `addAddressTypeToMonitorWithMnemonic`(`addressType`: AddressType, `mnemonic`: Mnemonic, `passphrase`: kotlin.String?)
     
-    public fun `announcementAddresses`(): List<SocketAddress>?
+    fun `announcementAddresses`(): List<SocketAddress>?
     
-    public fun `bolt11Payment`(): Bolt11Payment
+    fun `bolt11Payment`(): Bolt11Payment
     
-    public fun `bolt12Payment`(): Bolt12Payment
-    
-    @Throws(NodeException::class)
-    public fun `closeChannel`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey)
-    
-    public fun `config`(): Config
+    fun `bolt12Payment`(): Bolt12Payment
     
     @Throws(NodeException::class)
-    public fun `connect`(`nodeId`: PublicKey, `address`: SocketAddress, `persist`: kotlin.Boolean)
+    fun `closeChannel`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey)
     
-    public fun `currentSyncIntervals`(): RuntimeSyncIntervals
-    
-    @Throws(NodeException::class)
-    public fun `disconnect`(`nodeId`: PublicKey)
+    fun `config`(): Config
     
     @Throws(NodeException::class)
-    public fun `eventHandled`()
+    fun `connect`(`nodeId`: PublicKey, `address`: SocketAddress, `persist`: kotlin.Boolean)
+    
+    fun `currentSyncIntervals`(): RuntimeSyncIntervals
     
     @Throws(NodeException::class)
-    public fun `exportPathfindingScores`(): kotlin.ByteArray
+    fun `disconnect`(`nodeId`: PublicKey)
     
     @Throws(NodeException::class)
-    public fun `forceCloseChannel`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `reason`: kotlin.String?)
+    fun `eventHandled`()
     
     @Throws(NodeException::class)
-    public fun `getAddressBalance`(`addressStr`: kotlin.String): kotlin.ULong
+    fun `exportPathfindingScores`(): kotlin.ByteArray
     
     @Throws(NodeException::class)
-    public fun `getBalanceForAddressType`(`addressType`: AddressType): AddressTypeBalance
-    
-    public fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
-    
-    public fun `listBalances`(): BalanceDetails
-    
-    public fun `listChannels`(): List<ChannelDetails>
-    
-    public fun `listMonitoredAddressTypes`(): List<AddressType>
-    
-    public fun `listPayments`(): List<PaymentDetails>
-    
-    public fun `listPeers`(): List<PeerDetails>
-    
-    public fun `listeningAddresses`(): List<SocketAddress>?
-    
-    public fun `lsps1Liquidity`(): Lsps1Liquidity
-    
-    public fun `networkGraph`(): NetworkGraph
-    
-    public fun `nextEvent`(): Event?
-    
-    public suspend fun `nextEventAsync`(): Event
-    
-    public fun `nodeAlias`(): NodeAlias?
-    
-    public fun `nodeId`(): PublicKey
-    
-    public fun `onchainPayment`(): OnchainPayment
+    fun `forceCloseChannel`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `reason`: kotlin.String?)
     
     @Throws(NodeException::class)
-    public fun `openAnnouncedChannel`(`nodeId`: PublicKey, `address`: SocketAddress, `channelAmountSats`: kotlin.ULong, `pushToCounterpartyMsat`: kotlin.ULong?, `channelConfig`: ChannelConfig?): UserChannelId
+    fun `getAddressBalance`(`addressStr`: kotlin.String): kotlin.ULong
     
     @Throws(NodeException::class)
-    public fun `openChannel`(`nodeId`: PublicKey, `address`: SocketAddress, `channelAmountSats`: kotlin.ULong, `pushToCounterpartyMsat`: kotlin.ULong?, `channelConfig`: ChannelConfig?): UserChannelId
+    fun `getBalanceForAddressType`(`addressType`: AddressType): AddressTypeBalance
     
-    public fun `payment`(`paymentId`: PaymentId): PaymentDetails?
+    fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
     
-    @Throws(NodeException::class)
-    public fun `removeAddressTypeFromMonitor`(`addressType`: AddressType)
+    fun `listBalances`(): BalanceDetails
     
-    @Throws(NodeException::class)
-    public fun `removePayment`(`paymentId`: PaymentId)
+    fun `listChannels`(): List<ChannelDetails>
     
-    @Throws(NodeException::class)
-    public fun `setPrimaryAddressType`(`addressType`: AddressType, `seedBytes`: List<kotlin.UByte>)
+    fun `listMonitoredAddressTypes`(): List<AddressType>
     
-    @Throws(NodeException::class)
-    public fun `setPrimaryAddressTypeWithMnemonic`(`addressType`: AddressType, `mnemonic`: Mnemonic, `passphrase`: kotlin.String?)
+    fun `listPayments`(): List<PaymentDetails>
     
-    public fun `signMessage`(`msg`: List<kotlin.UByte>): kotlin.String
+    fun `listPeers`(): List<PeerDetails>
     
-    @Throws(NodeException::class)
-    public fun `spliceIn`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `spliceAmountSats`: kotlin.ULong)
+    fun `listeningAddresses`(): List<SocketAddress>?
     
-    @Throws(NodeException::class)
-    public fun `spliceOut`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `address`: Address, `spliceAmountSats`: kotlin.ULong)
+    fun `lsps1Liquidity`(): Lsps1Liquidity
     
-    public fun `spontaneousPayment`(): SpontaneousPayment
+    fun `networkGraph`(): NetworkGraph
     
-    @Throws(NodeException::class)
-    public fun `start`()
+    fun `nextEvent`(): Event?
     
-    public fun `status`(): NodeStatus
+    suspend fun `nextEventAsync`(): Event
     
-    @Throws(NodeException::class)
-    public fun `stop`()
+    fun `nodeAlias`(): NodeAlias?
+    
+    fun `nodeId`(): PublicKey
+    
+    fun `onchainPayment`(): OnchainPayment
     
     @Throws(NodeException::class)
-    public fun `syncWallets`()
-    
-    public fun `unifiedQrPayment`(): UnifiedQrPayment
+    fun `openAnnouncedChannel`(`nodeId`: PublicKey, `address`: SocketAddress, `channelAmountSats`: kotlin.ULong, `pushToCounterpartyMsat`: kotlin.ULong?, `channelConfig`: ChannelConfig?): UserChannelId
     
     @Throws(NodeException::class)
-    public fun `updateChannelConfig`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `channelConfig`: ChannelConfig)
+    fun `openChannel`(`nodeId`: PublicKey, `address`: SocketAddress, `channelAmountSats`: kotlin.ULong, `pushToCounterpartyMsat`: kotlin.ULong?, `channelConfig`: ChannelConfig?): UserChannelId
+    
+    fun `payment`(`paymentId`: PaymentId): PaymentDetails?
     
     @Throws(NodeException::class)
-    public fun `updateSyncIntervals`(`intervals`: RuntimeSyncIntervals)
+    fun `removeAddressTypeFromMonitor`(`addressType`: AddressType)
     
-    public fun `verifySignature`(`msg`: List<kotlin.UByte>, `sig`: kotlin.String, `pkey`: PublicKey): kotlin.Boolean
+    @Throws(NodeException::class)
+    fun `removePayment`(`paymentId`: PaymentId)
     
-    public fun `waitNextEvent`(): Event
+    @Throws(NodeException::class)
+    fun `setPrimaryAddressType`(`addressType`: AddressType, `seedBytes`: List<kotlin.UByte>)
     
-    public companion object
+    @Throws(NodeException::class)
+    fun `setPrimaryAddressTypeWithMnemonic`(`addressType`: AddressType, `mnemonic`: Mnemonic, `passphrase`: kotlin.String?)
+    
+    fun `signMessage`(`msg`: List<kotlin.UByte>): kotlin.String
+    
+    @Throws(NodeException::class)
+    fun `spliceIn`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `spliceAmountSats`: kotlin.ULong)
+    
+    @Throws(NodeException::class)
+    fun `spliceOut`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `address`: Address, `spliceAmountSats`: kotlin.ULong)
+    
+    fun `spontaneousPayment`(): SpontaneousPayment
+    
+    @Throws(NodeException::class)
+    fun `start`()
+    
+    fun `status`(): NodeStatus
+    
+    @Throws(NodeException::class)
+    fun `stop`()
+    
+    @Throws(NodeException::class)
+    fun `syncWallets`()
+    
+    fun `unifiedQrPayment`(): UnifiedQrPayment
+    
+    @Throws(NodeException::class)
+    fun `updateChannelConfig`(`userChannelId`: UserChannelId, `counterpartyNodeId`: PublicKey, `channelConfig`: ChannelConfig)
+    
+    @Throws(NodeException::class)
+    fun `updateSyncIntervals`(`intervals`: RuntimeSyncIntervals)
+    
+    fun `verifySignature`(`msg`: List<kotlin.UByte>, `sig`: kotlin.String, `pkey`: PublicKey): kotlin.Boolean
+    
+    fun `waitNextEvent`(): Event
+    
+    companion object
 }
 
 
 
 
-public interface OfferInterface {
+interface OfferInterface {
     
-    public fun `absoluteExpirySeconds`(): kotlin.ULong?
+    fun `absoluteExpirySeconds`(): kotlin.ULong?
     
-    public fun `amount`(): OfferAmount?
+    fun `amount`(): OfferAmount?
     
-    public fun `chains`(): List<Network>
+    fun `chains`(): List<Network>
     
-    public fun `expectsQuantity`(): kotlin.Boolean
+    fun `expectsQuantity`(): kotlin.Boolean
     
-    public fun `id`(): OfferId
+    fun `id`(): OfferId
     
-    public fun `isExpired`(): kotlin.Boolean
+    fun `isExpired`(): kotlin.Boolean
     
-    public fun `isValidQuantity`(`quantity`: kotlin.ULong): kotlin.Boolean
+    fun `isValidQuantity`(`quantity`: kotlin.ULong): kotlin.Boolean
     
-    public fun `issuer`(): kotlin.String?
+    fun `issuer`(): kotlin.String?
     
-    public fun `issuerSigningPubkey`(): PublicKey?
+    fun `issuerSigningPubkey`(): PublicKey?
     
-    public fun `metadata`(): List<kotlin.UByte>?
+    fun `metadata`(): List<kotlin.UByte>?
     
-    public fun `offerDescription`(): kotlin.String?
+    fun `offerDescription`(): kotlin.String?
     
-    public fun `supportsChain`(`chain`: Network): kotlin.Boolean
+    fun `supportsChain`(`chain`: Network): kotlin.Boolean
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface OnchainPaymentInterface {
+interface OnchainPaymentInterface {
     
     @Throws(NodeException::class)
-    public fun `accelerateByCpfp`(`txid`: Txid, `feeRate`: FeeRate?, `destinationAddress`: Address?): Txid
+    fun `accelerateByCpfp`(`txid`: Txid, `feeRate`: FeeRate?, `destinationAddress`: Address?): Txid
     
     @Throws(NodeException::class)
-    public fun `bumpFeeByRbf`(`txid`: Txid, `feeRate`: FeeRate): Txid
+    fun `bumpFeeByRbf`(`txid`: Txid, `feeRate`: FeeRate): Txid
     
     @Throws(NodeException::class)
-    public fun `calculateCpfpFeeRate`(`parentTxid`: Txid, `urgent`: kotlin.Boolean): FeeRate
+    fun `calculateCpfpFeeRate`(`parentTxid`: Txid, `urgent`: kotlin.Boolean): FeeRate
     
     @Throws(NodeException::class)
-    public fun `calculateSendAllFee`(`address`: Address, `retainReserves`: kotlin.Boolean, `feeRate`: FeeRate?): kotlin.ULong
+    fun `calculateSendAllFee`(`address`: Address, `retainReserves`: kotlin.Boolean, `feeRate`: FeeRate?): kotlin.ULong
     
     @Throws(NodeException::class)
-    public fun `calculateTotalFee`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): kotlin.ULong
+    fun `calculateTotalFee`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): kotlin.ULong
     
     @Throws(NodeException::class)
-    public fun `listSpendableOutputs`(): List<SpendableUtxo>
+    fun `listSpendableOutputs`(): List<SpendableUtxo>
     
     @Throws(NodeException::class)
-    public fun `newAddress`(): Address
+    fun `newAddress`(): Address
     
     @Throws(NodeException::class)
-    public fun `newAddressForType`(`addressType`: AddressType): Address
+    fun `newAddressForType`(`addressType`: AddressType): Address
     
     @Throws(NodeException::class)
-    public fun `selectUtxosWithAlgorithm`(`targetAmountSats`: kotlin.ULong, `feeRate`: FeeRate?, `algorithm`: CoinSelectionAlgorithm, `utxos`: List<SpendableUtxo>?): List<SpendableUtxo>
+    fun `selectUtxosWithAlgorithm`(`targetAmountSats`: kotlin.ULong, `feeRate`: FeeRate?, `algorithm`: CoinSelectionAlgorithm, `utxos`: List<SpendableUtxo>?): List<SpendableUtxo>
     
     @Throws(NodeException::class)
-    public fun `sendAllToAddress`(`address`: Address, `retainReserve`: kotlin.Boolean, `feeRate`: FeeRate?): Txid
+    fun `sendAllToAddress`(`address`: Address, `retainReserve`: kotlin.Boolean, `feeRate`: FeeRate?): Txid
     
     @Throws(NodeException::class)
-    public fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid
+    fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface RefundInterface {
+interface RefundInterface {
     
-    public fun `absoluteExpirySeconds`(): kotlin.ULong?
+    fun `absoluteExpirySeconds`(): kotlin.ULong?
     
-    public fun `amountMsats`(): kotlin.ULong
+    fun `amountMsats`(): kotlin.ULong
     
-    public fun `chain`(): Network?
+    fun `chain`(): Network?
     
-    public fun `isExpired`(): kotlin.Boolean
+    fun `isExpired`(): kotlin.Boolean
     
-    public fun `issuer`(): kotlin.String?
+    fun `issuer`(): kotlin.String?
     
-    public fun `payerMetadata`(): List<kotlin.UByte>
+    fun `payerMetadata`(): List<kotlin.UByte>
     
-    public fun `payerNote`(): kotlin.String?
+    fun `payerNote`(): kotlin.String?
     
-    public fun `payerSigningPubkey`(): PublicKey
+    fun `payerSigningPubkey`(): PublicKey
     
-    public fun `quantity`(): kotlin.ULong?
+    fun `quantity`(): kotlin.ULong?
     
-    public fun `refundDescription`(): kotlin.String
+    fun `refundDescription`(): kotlin.String
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface SpontaneousPaymentInterface {
+interface SpontaneousPaymentInterface {
     
     @Throws(NodeException::class)
-    public fun `send`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `routeParameters`: RouteParametersConfig?): PaymentId
+    fun `send`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `routeParameters`: RouteParametersConfig?): PaymentId
     
     @Throws(NodeException::class)
-    public fun `sendProbes`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey)
+    fun `sendProbes`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey)
     
     @Throws(NodeException::class)
-    public fun `sendWithCustomTlvs`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `routeParameters`: RouteParametersConfig?, `customTlvs`: List<CustomTlvRecord>): PaymentId
+    fun `sendWithCustomTlvs`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `routeParameters`: RouteParametersConfig?, `customTlvs`: List<CustomTlvRecord>): PaymentId
     
     @Throws(NodeException::class)
-    public fun `sendWithPreimage`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `preimage`: PaymentPreimage, `routeParameters`: RouteParametersConfig?): PaymentId
+    fun `sendWithPreimage`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `preimage`: PaymentPreimage, `routeParameters`: RouteParametersConfig?): PaymentId
     
     @Throws(NodeException::class)
-    public fun `sendWithPreimageAndCustomTlvs`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `customTlvs`: List<CustomTlvRecord>, `preimage`: PaymentPreimage, `routeParameters`: RouteParametersConfig?): PaymentId
+    fun `sendWithPreimageAndCustomTlvs`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `customTlvs`: List<CustomTlvRecord>, `preimage`: PaymentPreimage, `routeParameters`: RouteParametersConfig?): PaymentId
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface UnifiedQrPaymentInterface {
+interface UnifiedQrPaymentInterface {
     
     @Throws(NodeException::class)
-    public fun `receive`(`amountSats`: kotlin.ULong, `message`: kotlin.String, `expirySec`: kotlin.UInt): kotlin.String
+    fun `receive`(`amountSats`: kotlin.ULong, `message`: kotlin.String, `expirySec`: kotlin.UInt): kotlin.String
     
     @Throws(NodeException::class)
-    public fun `send`(`uriStr`: kotlin.String, `routeParameters`: RouteParametersConfig?): QrPaymentResult
+    fun `send`(`uriStr`: kotlin.String, `routeParameters`: RouteParametersConfig?): QrPaymentResult
     
-    public companion object
+    companion object
 }
 
 
 
 
-public interface VssHeaderProviderInterface {
+interface VssHeaderProviderInterface {
     
     @Throws(VssHeaderProviderException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public suspend fun `getHeaders`(`request`: List<kotlin.UByte>): Map<kotlin.String, kotlin.String>
+    suspend fun `getHeaders`(`request`: List<kotlin.UByte>): Map<kotlin.String, kotlin.String>
     
-    public companion object
+    companion object
 }
 
 
 
 
 @kotlinx.serialization.Serializable
-public data class AddressTypeBalance (
+data class AddressTypeBalance (
     val `totalSats`: kotlin.ULong, 
     val `spendableSats`: kotlin.ULong
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class AnchorChannelsConfig (
+data class AnchorChannelsConfig (
     val `trustedPeersNoReserve`: List<PublicKey>, 
     val `perChannelReserveSats`: kotlin.ULong
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class BackgroundSyncConfig (
+data class BackgroundSyncConfig (
     val `onchainWalletSyncIntervalSecs`: kotlin.ULong, 
     val `lightningWalletSyncIntervalSecs`: kotlin.ULong, 
     val `feeRateCacheUpdateIntervalSecs`: kotlin.ULong
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class BalanceDetails (
+data class BalanceDetails (
     val `totalOnchainBalanceSats`: kotlin.ULong, 
     val `spendableOnchainBalanceSats`: kotlin.ULong, 
     val `totalAnchorChannelsReserveSats`: kotlin.ULong, 
@@ -738,23 +730,23 @@ public data class BalanceDetails (
     val `lightningBalances`: List<LightningBalance>, 
     val `pendingBalancesFromChannelClosures`: List<PendingSweepBalance>
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class BestBlock (
+data class BestBlock (
     val `blockHash`: BlockHash, 
     val `height`: kotlin.UInt
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class ChannelConfig (
+data class ChannelConfig (
     val `forwardingFeeProportionalMillionths`: kotlin.UInt, 
     val `forwardingFeeBaseMsat`: kotlin.UInt, 
     val `cltvExpiryDelta`: kotlin.UShort, 
@@ -762,23 +754,23 @@ public data class ChannelConfig (
     val `forceCloseAvoidanceMaxFeeSatoshis`: kotlin.ULong, 
     val `acceptUnderpayingHtlcs`: kotlin.Boolean
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class ChannelDataMigration (
+data class ChannelDataMigration (
     val `channelManager`: List<kotlin.UByte>?, 
     val `channelMonitors`: List<List<kotlin.UByte>>
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class ChannelDetails (
+data class ChannelDetails (
     val `channelId`: ChannelId, 
     val `counterpartyNodeId`: PublicKey, 
     val `fundingTxo`: OutPoint?, 
@@ -812,26 +804,26 @@ public data class ChannelDetails (
     val `config`: ChannelConfig, 
     val `claimableOnCloseSats`: kotlin.ULong?
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class ChannelInfo (
+data class ChannelInfo (
     val `nodeOne`: NodeId, 
     val `oneToTwo`: ChannelUpdateInfo?, 
     val `nodeTwo`: NodeId, 
     val `twoToOne`: ChannelUpdateInfo?, 
     val `capacitySats`: kotlin.ULong?
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class ChannelUpdateInfo (
+data class ChannelUpdateInfo (
     val `lastUpdate`: kotlin.UInt, 
     val `enabled`: kotlin.Boolean, 
     val `cltvExpiryDelta`: kotlin.UShort, 
@@ -839,13 +831,13 @@ public data class ChannelUpdateInfo (
     val `htlcMaximumMsat`: kotlin.ULong, 
     val `fees`: RoutingFees
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class Config (
+data class Config (
     val `storageDirPath`: kotlin.String, 
     val `network`: Network, 
     val `listeningAddresses`: List<SocketAddress>?, 
@@ -859,51 +851,51 @@ public data class Config (
     val `addressType`: AddressType, 
     val `addressTypesToMonitor`: List<AddressType>
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class CustomTlvRecord (
+data class CustomTlvRecord (
     val `typeNum`: kotlin.ULong, 
     val `value`: List<kotlin.UByte>
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class ElectrumSyncConfig (
+data class ElectrumSyncConfig (
     val `backgroundSyncConfig`: BackgroundSyncConfig?
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class EsploraSyncConfig (
+data class EsploraSyncConfig (
     val `backgroundSyncConfig`: BackgroundSyncConfig?
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class LspFeeLimits (
+data class LspFeeLimits (
     val `maxTotalOpeningFeeMsat`: kotlin.ULong?, 
     val `maxProportionalOpeningFeePpmMsat`: kotlin.ULong?
 ) {
-    public companion object
+    companion object
 }
 
 
 
 
-public data class Lsps1Bolt11PaymentInfo (
+data class Lsps1Bolt11PaymentInfo (
     val `state`: Lsps1PaymentState, 
     val `expiresAt`: LspsDateTime, 
     val `feeTotalSat`: kotlin.ULong, 
@@ -919,24 +911,24 @@ public data class Lsps1Bolt11PaymentInfo (
             this.`invoice`,
         )
     }
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class Lsps1ChannelInfo (
+data class Lsps1ChannelInfo (
     val `fundedAt`: LspsDateTime, 
     val `fundingOutpoint`: OutPoint, 
     val `expiresAt`: LspsDateTime
 ) {
-    public companion object
+    companion object
 }
 
 
 
 
-public data class Lsps1OnchainPaymentInfo (
+data class Lsps1OnchainPaymentInfo (
     val `state`: Lsps1PaymentState, 
     val `expiresAt`: LspsDateTime, 
     val `feeTotalSat`: kotlin.ULong, 
@@ -958,13 +950,13 @@ public data class Lsps1OnchainPaymentInfo (
             this.`refundOnchainAddress`,
         )
     }
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class Lsps1OrderParams (
+data class Lsps1OrderParams (
     val `lspBalanceSat`: kotlin.ULong, 
     val `clientBalanceSat`: kotlin.ULong, 
     val `requiredChannelConfirmations`: kotlin.UShort, 
@@ -973,13 +965,13 @@ public data class Lsps1OrderParams (
     val `token`: kotlin.String?, 
     val `announceChannel`: kotlin.Boolean
 ) {
-    public companion object
+    companion object
 }
 
 
 
 
-public data class Lsps1OrderStatus (
+data class Lsps1OrderStatus (
     val `orderId`: Lsps1OrderId, 
     val `orderParams`: Lsps1OrderParams, 
     val `paymentOptions`: Lsps1PaymentInfo, 
@@ -993,13 +985,13 @@ public data class Lsps1OrderStatus (
             this.`channelState`,
         )
     }
-    public companion object
+    companion object
 }
 
 
 
 
-public data class Lsps1PaymentInfo (
+data class Lsps1PaymentInfo (
     val `bolt11`: Lsps1Bolt11PaymentInfo?, 
     val `onchain`: Lsps1OnchainPaymentInfo?
 ) : Disposable {
@@ -1009,13 +1001,13 @@ public data class Lsps1PaymentInfo (
             this.`onchain`,
         )
     }
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class Lsps2ServiceConfig (
+data class Lsps2ServiceConfig (
     val `requireToken`: kotlin.String?, 
     val `advertiseService`: kotlin.Boolean, 
     val `channelOpeningFeePpm`: kotlin.UInt, 
@@ -1027,46 +1019,46 @@ public data class Lsps2ServiceConfig (
     val `maxPaymentSizeMsat`: kotlin.ULong, 
     val `clientTrustsLsp`: kotlin.Boolean
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class LogRecord (
+data class LogRecord (
     val `level`: LogLevel, 
     val `args`: kotlin.String, 
     val `modulePath`: kotlin.String, 
     val `line`: kotlin.UInt
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class NodeAnnouncementInfo (
+data class NodeAnnouncementInfo (
     val `lastUpdate`: kotlin.UInt, 
     val `alias`: kotlin.String, 
     val `addresses`: List<SocketAddress>
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class NodeInfo (
+data class NodeInfo (
     val `channels`: List<kotlin.ULong>, 
     val `announcementInfo`: NodeAnnouncementInfo?
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class NodeStatus (
+data class NodeStatus (
     val `isRunning`: kotlin.Boolean, 
     val `currentBestBlock`: BestBlock, 
     val `latestLightningWalletSyncTimestamp`: kotlin.ULong?, 
@@ -1077,23 +1069,23 @@ public data class NodeStatus (
     val `latestNodeAnnouncementBroadcastTimestamp`: kotlin.ULong?, 
     val `latestChannelMonitorArchivalHeight`: kotlin.UInt?
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class OutPoint (
+data class OutPoint (
     val `txid`: Txid, 
     val `vout`: kotlin.UInt
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class PaymentDetails (
+data class PaymentDetails (
     val `id`: PaymentId, 
     val `kind`: PaymentKind, 
     val `amountMsat`: kotlin.ULong?, 
@@ -1102,25 +1094,25 @@ public data class PaymentDetails (
     val `status`: PaymentStatus, 
     val `latestUpdateTimestamp`: kotlin.ULong
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class PeerDetails (
+data class PeerDetails (
     val `nodeId`: PublicKey, 
     val `address`: SocketAddress, 
     val `isPersisted`: kotlin.Boolean, 
     val `isConnected`: kotlin.Boolean
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class RouteHintHop (
+data class RouteHintHop (
     val `srcNodeId`: PublicKey, 
     val `shortChannelId`: kotlin.ULong, 
     val `cltvExpiryDelta`: kotlin.UShort, 
@@ -1128,87 +1120,87 @@ public data class RouteHintHop (
     val `htlcMaximumMsat`: kotlin.ULong?, 
     val `fees`: RoutingFees
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class RouteParametersConfig (
+data class RouteParametersConfig (
     val `maxTotalRoutingFeeMsat`: kotlin.ULong?, 
     val `maxTotalCltvExpiryDelta`: kotlin.UInt, 
     val `maxPathCount`: kotlin.UByte, 
     val `maxChannelSaturationPowerOfHalf`: kotlin.UByte
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class RoutingFees (
+data class RoutingFees (
     val `baseMsat`: kotlin.UInt, 
     val `proportionalMillionths`: kotlin.UInt
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class RuntimeSyncIntervals (
+data class RuntimeSyncIntervals (
     val `onchainWalletSyncIntervalSecs`: kotlin.ULong, 
     val `lightningWalletSyncIntervalSecs`: kotlin.ULong, 
     val `feeRateCacheUpdateIntervalSecs`: kotlin.ULong
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class SpendableUtxo (
+data class SpendableUtxo (
     val `outpoint`: OutPoint, 
     val `valueSats`: kotlin.ULong
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class TransactionDetails (
+data class TransactionDetails (
     val `amountSats`: kotlin.Long, 
     val `inputs`: List<TxInput>, 
     val `outputs`: List<TxOutput>
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class TxInput (
+data class TxInput (
     val `txid`: Txid, 
     val `vout`: kotlin.UInt, 
     val `scriptsig`: kotlin.String, 
     val `witness`: List<kotlin.String>, 
     val `sequence`: kotlin.UInt
 ) {
-    public companion object
+    companion object
 }
 
 
 
 @kotlinx.serialization.Serializable
-public data class TxOutput (
+data class TxOutput (
     val `scriptpubkey`: kotlin.String, 
     val `scriptpubkeyType`: kotlin.String?, 
     val `scriptpubkeyAddress`: kotlin.String?, 
     val `value`: kotlin.Long, 
     val `n`: kotlin.UInt
 ) {
-    public companion object
+    companion object
 }
 
 
@@ -1216,13 +1208,13 @@ public data class TxOutput (
 
 
 @kotlinx.serialization.Serializable
-public enum class AddressType {
+enum class AddressType {
     
     LEGACY,
     NESTED_SEGWIT,
     NATIVE_SEGWIT,
     TAPROOT;
-    public companion object
+    companion object
 }
 
 
@@ -1232,11 +1224,11 @@ public enum class AddressType {
 
 
 @kotlinx.serialization.Serializable
-public enum class AsyncPaymentsRole {
+enum class AsyncPaymentsRole {
     
     CLIENT,
     SERVER;
-    public companion object
+    companion object
 }
 
 
@@ -1246,13 +1238,13 @@ public enum class AsyncPaymentsRole {
 
 
 @kotlinx.serialization.Serializable
-public enum class BalanceSource {
+enum class BalanceSource {
     
     HOLDER_FORCE_CLOSED,
     COUNTERPARTY_FORCE_CLOSED,
     COOP_CLOSE,
     HTLC;
-    public companion object
+    companion object
 }
 
 
@@ -1261,14 +1253,14 @@ public enum class BalanceSource {
 
 
 @kotlinx.serialization.Serializable
-public sealed class Bolt11InvoiceDescription {
+sealed class Bolt11InvoiceDescription {
     @kotlinx.serialization.Serializable
-    public data class Hash(
+    data class Hash(
         val `hash`: kotlin.String,
     ) : Bolt11InvoiceDescription() {
     }
     @kotlinx.serialization.Serializable
-    public data class Direct(
+    data class Direct(
         val `description`: kotlin.String,
     ) : Bolt11InvoiceDescription() {
     }
@@ -1281,39 +1273,39 @@ public sealed class Bolt11InvoiceDescription {
 
 
 
-public sealed class BuildException(message: String): kotlin.Exception(message) {
+sealed class BuildException(message: String): kotlin.Exception(message) {
     
-    public class InvalidSeedBytes(message: String) : BuildException(message)
+    class InvalidSeedBytes(message: String) : BuildException(message)
     
-    public class InvalidSeedFile(message: String) : BuildException(message)
+    class InvalidSeedFile(message: String) : BuildException(message)
     
-    public class InvalidSystemTime(message: String) : BuildException(message)
+    class InvalidSystemTime(message: String) : BuildException(message)
     
-    public class InvalidChannelMonitor(message: String) : BuildException(message)
+    class InvalidChannelMonitor(message: String) : BuildException(message)
     
-    public class InvalidListeningAddresses(message: String) : BuildException(message)
+    class InvalidListeningAddresses(message: String) : BuildException(message)
     
-    public class InvalidAnnouncementAddresses(message: String) : BuildException(message)
+    class InvalidAnnouncementAddresses(message: String) : BuildException(message)
     
-    public class InvalidNodeAlias(message: String) : BuildException(message)
+    class InvalidNodeAlias(message: String) : BuildException(message)
     
-    public class RuntimeSetupFailed(message: String) : BuildException(message)
+    class RuntimeSetupFailed(message: String) : BuildException(message)
     
-    public class ReadFailed(message: String) : BuildException(message)
+    class ReadFailed(message: String) : BuildException(message)
     
-    public class WriteFailed(message: String) : BuildException(message)
+    class WriteFailed(message: String) : BuildException(message)
     
-    public class StoragePathAccessFailed(message: String) : BuildException(message)
+    class StoragePathAccessFailed(message: String) : BuildException(message)
     
-    public class KvStoreSetupFailed(message: String) : BuildException(message)
+    class KvStoreSetupFailed(message: String) : BuildException(message)
     
-    public class WalletSetupFailed(message: String) : BuildException(message)
+    class WalletSetupFailed(message: String) : BuildException(message)
     
-    public class LoggerSetupFailed(message: String) : BuildException(message)
+    class LoggerSetupFailed(message: String) : BuildException(message)
     
-    public class NetworkMismatch(message: String) : BuildException(message)
+    class NetworkMismatch(message: String) : BuildException(message)
     
-    public class AsyncPaymentsConfigMismatch(message: String) : BuildException(message)
+    class AsyncPaymentsConfigMismatch(message: String) : BuildException(message)
     
 }
 
@@ -1321,70 +1313,70 @@ public sealed class BuildException(message: String): kotlin.Exception(message) {
 
 
 @kotlinx.serialization.Serializable
-public sealed class ClosureReason {
+sealed class ClosureReason {
     @kotlinx.serialization.Serializable
-    public data class CounterpartyForceClosed(
+    data class CounterpartyForceClosed(
         val `peerMsg`: UntrustedString,
     ) : ClosureReason() {
     }
     @kotlinx.serialization.Serializable
-    public data class HolderForceClosed(
+    data class HolderForceClosed(
         val `broadcastedLatestTxn`: kotlin.Boolean?,
         val `message`: kotlin.String,
     ) : ClosureReason() {
     }
     
     @kotlinx.serialization.Serializable
-    public data object LegacyCooperativeClosure : ClosureReason() 
+    data object LegacyCooperativeClosure : ClosureReason() 
     
     
     @kotlinx.serialization.Serializable
-    public data object CounterpartyInitiatedCooperativeClosure : ClosureReason() 
+    data object CounterpartyInitiatedCooperativeClosure : ClosureReason() 
     
     
     @kotlinx.serialization.Serializable
-    public data object LocallyInitiatedCooperativeClosure : ClosureReason() 
+    data object LocallyInitiatedCooperativeClosure : ClosureReason() 
     
     
     @kotlinx.serialization.Serializable
-    public data object CommitmentTxConfirmed : ClosureReason() 
+    data object CommitmentTxConfirmed : ClosureReason() 
     
     
     @kotlinx.serialization.Serializable
-    public data object FundingTimedOut : ClosureReason() 
+    data object FundingTimedOut : ClosureReason() 
     
     @kotlinx.serialization.Serializable
-    public data class ProcessingError(
+    data class ProcessingError(
         val `err`: kotlin.String,
     ) : ClosureReason() {
     }
     
     @kotlinx.serialization.Serializable
-    public data object DisconnectedPeer : ClosureReason() 
+    data object DisconnectedPeer : ClosureReason() 
     
     
     @kotlinx.serialization.Serializable
-    public data object OutdatedChannelManager : ClosureReason() 
+    data object OutdatedChannelManager : ClosureReason() 
     
     
     @kotlinx.serialization.Serializable
-    public data object CounterpartyCoopClosedUnfundedChannel : ClosureReason() 
+    data object CounterpartyCoopClosedUnfundedChannel : ClosureReason() 
     
     
     @kotlinx.serialization.Serializable
-    public data object LocallyCoopClosedUnfundedChannel : ClosureReason() 
+    data object LocallyCoopClosedUnfundedChannel : ClosureReason() 
     
     
     @kotlinx.serialization.Serializable
-    public data object FundingBatchClosure : ClosureReason() 
+    data object FundingBatchClosure : ClosureReason() 
     
     @kotlinx.serialization.Serializable
-    public data class HtlCsTimedOut(
+    data class HtlCsTimedOut(
         val `paymentHash`: PaymentHash?,
     ) : ClosureReason() {
     }
     @kotlinx.serialization.Serializable
-    public data class PeerFeerateTooLow(
+    data class PeerFeerateTooLow(
         val `peerFeerateSatPerKw`: kotlin.UInt,
         val `requiredFeerateSatPerKw`: kotlin.UInt,
     ) : ClosureReason() {
@@ -1399,13 +1391,13 @@ public sealed class ClosureReason {
 
 
 @kotlinx.serialization.Serializable
-public enum class CoinSelectionAlgorithm {
+enum class CoinSelectionAlgorithm {
     
     BRANCH_AND_BOUND,
     LARGEST_FIRST,
     OLDEST_FIRST,
     SINGLE_RANDOM_DRAW;
-    public companion object
+    companion object
 }
 
 
@@ -1414,9 +1406,9 @@ public enum class CoinSelectionAlgorithm {
 
 
 @kotlinx.serialization.Serializable
-public sealed class ConfirmationStatus {
+sealed class ConfirmationStatus {
     @kotlinx.serialization.Serializable
-    public data class Confirmed(
+    data class Confirmed(
         val `blockHash`: BlockHash,
         val `height`: kotlin.UInt,
         val `timestamp`: kotlin.ULong,
@@ -1424,7 +1416,7 @@ public sealed class ConfirmationStatus {
     }
     
     @kotlinx.serialization.Serializable
-    public data object Unconfirmed : ConfirmationStatus() 
+    data object Unconfirmed : ConfirmationStatus() 
     
     
 }
@@ -1436,14 +1428,14 @@ public sealed class ConfirmationStatus {
 
 
 @kotlinx.serialization.Serializable
-public enum class Currency {
+enum class Currency {
     
     BITCOIN,
     BITCOIN_TESTNET,
     REGTEST,
     SIMNET,
     SIGNET;
-    public companion object
+    companion object
 }
 
 
@@ -1452,9 +1444,9 @@ public enum class Currency {
 
 
 @kotlinx.serialization.Serializable
-public sealed class Event {
+sealed class Event {
     @kotlinx.serialization.Serializable
-    public data class PaymentSuccessful(
+    data class PaymentSuccessful(
         val `paymentId`: PaymentId?,
         val `paymentHash`: PaymentHash,
         val `paymentPreimage`: PaymentPreimage?,
@@ -1462,14 +1454,14 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class PaymentFailed(
+    data class PaymentFailed(
         val `paymentId`: PaymentId?,
         val `paymentHash`: PaymentHash?,
         val `reason`: PaymentFailureReason?,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class PaymentReceived(
+    data class PaymentReceived(
         val `paymentId`: PaymentId?,
         val `paymentHash`: PaymentHash,
         val `amountMsat`: kotlin.ULong,
@@ -1477,7 +1469,7 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class PaymentClaimable(
+    data class PaymentClaimable(
         val `paymentId`: PaymentId,
         val `paymentHash`: PaymentHash,
         val `claimableAmountMsat`: kotlin.ULong,
@@ -1486,7 +1478,7 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class PaymentForwarded(
+    data class PaymentForwarded(
         val `prevChannelId`: ChannelId,
         val `nextChannelId`: ChannelId,
         val `prevUserChannelId`: UserChannelId?,
@@ -1500,7 +1492,7 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class ChannelPending(
+    data class ChannelPending(
         val `channelId`: ChannelId,
         val `userChannelId`: UserChannelId,
         val `formerTemporaryChannelId`: ChannelId,
@@ -1509,7 +1501,7 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class ChannelReady(
+    data class ChannelReady(
         val `channelId`: ChannelId,
         val `userChannelId`: UserChannelId,
         val `counterpartyNodeId`: PublicKey?,
@@ -1517,7 +1509,7 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class ChannelClosed(
+    data class ChannelClosed(
         val `channelId`: ChannelId,
         val `userChannelId`: UserChannelId,
         val `counterpartyNodeId`: PublicKey?,
@@ -1525,7 +1517,7 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class SplicePending(
+    data class SplicePending(
         val `channelId`: ChannelId,
         val `userChannelId`: UserChannelId,
         val `counterpartyNodeId`: PublicKey,
@@ -1533,7 +1525,7 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class SpliceFailed(
+    data class SpliceFailed(
         val `channelId`: ChannelId,
         val `userChannelId`: UserChannelId,
         val `counterpartyNodeId`: PublicKey,
@@ -1541,7 +1533,7 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class OnchainTransactionConfirmed(
+    data class OnchainTransactionConfirmed(
         val `txid`: Txid,
         val `blockHash`: BlockHash,
         val `blockHeight`: kotlin.UInt,
@@ -1550,29 +1542,29 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class OnchainTransactionReceived(
+    data class OnchainTransactionReceived(
         val `txid`: Txid,
         val `details`: TransactionDetails,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class OnchainTransactionReplaced(
+    data class OnchainTransactionReplaced(
         val `txid`: Txid,
         val `conflicts`: List<Txid>,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class OnchainTransactionReorged(
+    data class OnchainTransactionReorged(
         val `txid`: Txid,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class OnchainTransactionEvicted(
+    data class OnchainTransactionEvicted(
         val `txid`: Txid,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class SyncProgress(
+    data class SyncProgress(
         val `syncType`: SyncType,
         val `progressPercent`: kotlin.UByte,
         val `currentBlockHeight`: kotlin.UInt,
@@ -1580,13 +1572,13 @@ public sealed class Event {
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class SyncCompleted(
+    data class SyncCompleted(
         val `syncType`: SyncType,
         val `syncedBlockHeight`: kotlin.UInt,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
-    public data class BalanceChanged(
+    data class BalanceChanged(
         val `oldSpendableOnchainBalanceSats`: kotlin.ULong,
         val `newSpendableOnchainBalanceSats`: kotlin.ULong,
         val `oldTotalOnchainBalanceSats`: kotlin.ULong,
@@ -1605,12 +1597,12 @@ public sealed class Event {
 
 
 @kotlinx.serialization.Serializable
-public enum class Lsps1PaymentState {
+enum class Lsps1PaymentState {
     
     EXPECT_PAYMENT,
     PAID,
     REFUNDED;
-    public companion object
+    companion object
 }
 
 
@@ -1619,9 +1611,9 @@ public enum class Lsps1PaymentState {
 
 
 @kotlinx.serialization.Serializable
-public sealed class LightningBalance {
+sealed class LightningBalance {
     @kotlinx.serialization.Serializable
-    public data class ClaimableOnChannelClose(
+    data class ClaimableOnChannelClose(
         val `channelId`: ChannelId,
         val `counterpartyNodeId`: PublicKey,
         val `amountSatoshis`: kotlin.ULong,
@@ -1633,7 +1625,7 @@ public sealed class LightningBalance {
     ) : LightningBalance() {
     }
     @kotlinx.serialization.Serializable
-    public data class ClaimableAwaitingConfirmations(
+    data class ClaimableAwaitingConfirmations(
         val `channelId`: ChannelId,
         val `counterpartyNodeId`: PublicKey,
         val `amountSatoshis`: kotlin.ULong,
@@ -1642,7 +1634,7 @@ public sealed class LightningBalance {
     ) : LightningBalance() {
     }
     @kotlinx.serialization.Serializable
-    public data class ContentiousClaimable(
+    data class ContentiousClaimable(
         val `channelId`: ChannelId,
         val `counterpartyNodeId`: PublicKey,
         val `amountSatoshis`: kotlin.ULong,
@@ -1652,7 +1644,7 @@ public sealed class LightningBalance {
     ) : LightningBalance() {
     }
     @kotlinx.serialization.Serializable
-    public data class MaybeTimeoutClaimableHtlc(
+    data class MaybeTimeoutClaimableHtlc(
         val `channelId`: ChannelId,
         val `counterpartyNodeId`: PublicKey,
         val `amountSatoshis`: kotlin.ULong,
@@ -1662,7 +1654,7 @@ public sealed class LightningBalance {
     ) : LightningBalance() {
     }
     @kotlinx.serialization.Serializable
-    public data class MaybePreimageClaimableHtlc(
+    data class MaybePreimageClaimableHtlc(
         val `channelId`: ChannelId,
         val `counterpartyNodeId`: PublicKey,
         val `amountSatoshis`: kotlin.ULong,
@@ -1671,7 +1663,7 @@ public sealed class LightningBalance {
     ) : LightningBalance() {
     }
     @kotlinx.serialization.Serializable
-    public data class CounterpartyRevokedOutputClaimable(
+    data class CounterpartyRevokedOutputClaimable(
         val `channelId`: ChannelId,
         val `counterpartyNodeId`: PublicKey,
         val `amountSatoshis`: kotlin.ULong,
@@ -1687,7 +1679,7 @@ public sealed class LightningBalance {
 
 
 @kotlinx.serialization.Serializable
-public enum class LogLevel {
+enum class LogLevel {
     
     GOSSIP,
     TRACE,
@@ -1695,7 +1687,7 @@ public enum class LogLevel {
     INFO,
     WARN,
     ERROR;
-    public companion object
+    companion object
 }
 
 
@@ -1704,14 +1696,14 @@ public enum class LogLevel {
 
 
 @kotlinx.serialization.Serializable
-public sealed class MaxDustHtlcExposure {
+sealed class MaxDustHtlcExposure {
     @kotlinx.serialization.Serializable
-    public data class FixedLimit(
+    data class FixedLimit(
         val `limitMsat`: kotlin.ULong,
     ) : MaxDustHtlcExposure() {
     }
     @kotlinx.serialization.Serializable
-    public data class FeeRateMultiplier(
+    data class FeeRateMultiplier(
         val `multiplier`: kotlin.ULong,
     ) : MaxDustHtlcExposure() {
     }
@@ -1725,13 +1717,13 @@ public sealed class MaxDustHtlcExposure {
 
 
 @kotlinx.serialization.Serializable
-public enum class Network {
+enum class Network {
     
     BITCOIN,
     TESTNET,
     SIGNET,
     REGTEST;
-    public companion object
+    companion object
 }
 
 
@@ -1740,141 +1732,141 @@ public enum class Network {
 
 
 
-public sealed class NodeException(message: String): kotlin.Exception(message) {
+sealed class NodeException(message: String): kotlin.Exception(message) {
     
-    public class AlreadyRunning(message: String) : NodeException(message)
+    class AlreadyRunning(message: String) : NodeException(message)
     
-    public class NotRunning(message: String) : NodeException(message)
+    class NotRunning(message: String) : NodeException(message)
     
-    public class OnchainTxCreationFailed(message: String) : NodeException(message)
+    class OnchainTxCreationFailed(message: String) : NodeException(message)
     
-    public class ConnectionFailed(message: String) : NodeException(message)
+    class ConnectionFailed(message: String) : NodeException(message)
     
-    public class InvoiceCreationFailed(message: String) : NodeException(message)
+    class InvoiceCreationFailed(message: String) : NodeException(message)
     
-    public class InvoiceRequestCreationFailed(message: String) : NodeException(message)
+    class InvoiceRequestCreationFailed(message: String) : NodeException(message)
     
-    public class OfferCreationFailed(message: String) : NodeException(message)
+    class OfferCreationFailed(message: String) : NodeException(message)
     
-    public class RefundCreationFailed(message: String) : NodeException(message)
+    class RefundCreationFailed(message: String) : NodeException(message)
     
-    public class PaymentSendingFailed(message: String) : NodeException(message)
+    class PaymentSendingFailed(message: String) : NodeException(message)
     
-    public class InvalidCustomTlvs(message: String) : NodeException(message)
+    class InvalidCustomTlvs(message: String) : NodeException(message)
     
-    public class ProbeSendingFailed(message: String) : NodeException(message)
+    class ProbeSendingFailed(message: String) : NodeException(message)
     
-    public class RouteNotFound(message: String) : NodeException(message)
+    class RouteNotFound(message: String) : NodeException(message)
     
-    public class ChannelCreationFailed(message: String) : NodeException(message)
+    class ChannelCreationFailed(message: String) : NodeException(message)
     
-    public class ChannelClosingFailed(message: String) : NodeException(message)
+    class ChannelClosingFailed(message: String) : NodeException(message)
     
-    public class ChannelSplicingFailed(message: String) : NodeException(message)
+    class ChannelSplicingFailed(message: String) : NodeException(message)
     
-    public class ChannelConfigUpdateFailed(message: String) : NodeException(message)
+    class ChannelConfigUpdateFailed(message: String) : NodeException(message)
     
-    public class PersistenceFailed(message: String) : NodeException(message)
+    class PersistenceFailed(message: String) : NodeException(message)
     
-    public class FeerateEstimationUpdateFailed(message: String) : NodeException(message)
+    class FeerateEstimationUpdateFailed(message: String) : NodeException(message)
     
-    public class FeerateEstimationUpdateTimeout(message: String) : NodeException(message)
+    class FeerateEstimationUpdateTimeout(message: String) : NodeException(message)
     
-    public class WalletOperationFailed(message: String) : NodeException(message)
+    class WalletOperationFailed(message: String) : NodeException(message)
     
-    public class WalletOperationTimeout(message: String) : NodeException(message)
+    class WalletOperationTimeout(message: String) : NodeException(message)
     
-    public class OnchainTxSigningFailed(message: String) : NodeException(message)
+    class OnchainTxSigningFailed(message: String) : NodeException(message)
     
-    public class TxSyncFailed(message: String) : NodeException(message)
+    class TxSyncFailed(message: String) : NodeException(message)
     
-    public class TxSyncTimeout(message: String) : NodeException(message)
+    class TxSyncTimeout(message: String) : NodeException(message)
     
-    public class GossipUpdateFailed(message: String) : NodeException(message)
+    class GossipUpdateFailed(message: String) : NodeException(message)
     
-    public class GossipUpdateTimeout(message: String) : NodeException(message)
+    class GossipUpdateTimeout(message: String) : NodeException(message)
     
-    public class LiquidityRequestFailed(message: String) : NodeException(message)
+    class LiquidityRequestFailed(message: String) : NodeException(message)
     
-    public class UriParameterParsingFailed(message: String) : NodeException(message)
+    class UriParameterParsingFailed(message: String) : NodeException(message)
     
-    public class InvalidAddress(message: String) : NodeException(message)
+    class InvalidAddress(message: String) : NodeException(message)
     
-    public class InvalidSocketAddress(message: String) : NodeException(message)
+    class InvalidSocketAddress(message: String) : NodeException(message)
     
-    public class InvalidPublicKey(message: String) : NodeException(message)
+    class InvalidPublicKey(message: String) : NodeException(message)
     
-    public class InvalidSecretKey(message: String) : NodeException(message)
+    class InvalidSecretKey(message: String) : NodeException(message)
     
-    public class InvalidOfferId(message: String) : NodeException(message)
+    class InvalidOfferId(message: String) : NodeException(message)
     
-    public class InvalidNodeId(message: String) : NodeException(message)
+    class InvalidNodeId(message: String) : NodeException(message)
     
-    public class InvalidPaymentId(message: String) : NodeException(message)
+    class InvalidPaymentId(message: String) : NodeException(message)
     
-    public class InvalidPaymentHash(message: String) : NodeException(message)
+    class InvalidPaymentHash(message: String) : NodeException(message)
     
-    public class InvalidPaymentPreimage(message: String) : NodeException(message)
+    class InvalidPaymentPreimage(message: String) : NodeException(message)
     
-    public class InvalidPaymentSecret(message: String) : NodeException(message)
+    class InvalidPaymentSecret(message: String) : NodeException(message)
     
-    public class InvalidAmount(message: String) : NodeException(message)
+    class InvalidAmount(message: String) : NodeException(message)
     
-    public class InvalidInvoice(message: String) : NodeException(message)
+    class InvalidInvoice(message: String) : NodeException(message)
     
-    public class InvalidOffer(message: String) : NodeException(message)
+    class InvalidOffer(message: String) : NodeException(message)
     
-    public class InvalidRefund(message: String) : NodeException(message)
+    class InvalidRefund(message: String) : NodeException(message)
     
-    public class InvalidChannelId(message: String) : NodeException(message)
+    class InvalidChannelId(message: String) : NodeException(message)
     
-    public class InvalidNetwork(message: String) : NodeException(message)
+    class InvalidNetwork(message: String) : NodeException(message)
     
-    public class InvalidUri(message: String) : NodeException(message)
+    class InvalidUri(message: String) : NodeException(message)
     
-    public class InvalidQuantity(message: String) : NodeException(message)
+    class InvalidQuantity(message: String) : NodeException(message)
     
-    public class InvalidNodeAlias(message: String) : NodeException(message)
+    class InvalidNodeAlias(message: String) : NodeException(message)
     
-    public class InvalidDateTime(message: String) : NodeException(message)
+    class InvalidDateTime(message: String) : NodeException(message)
     
-    public class InvalidFeeRate(message: String) : NodeException(message)
+    class InvalidFeeRate(message: String) : NodeException(message)
     
-    public class DuplicatePayment(message: String) : NodeException(message)
+    class DuplicatePayment(message: String) : NodeException(message)
     
-    public class UnsupportedCurrency(message: String) : NodeException(message)
+    class UnsupportedCurrency(message: String) : NodeException(message)
     
-    public class InsufficientFunds(message: String) : NodeException(message)
+    class InsufficientFunds(message: String) : NodeException(message)
     
-    public class LiquiditySourceUnavailable(message: String) : NodeException(message)
+    class LiquiditySourceUnavailable(message: String) : NodeException(message)
     
-    public class LiquidityFeeTooHigh(message: String) : NodeException(message)
+    class LiquidityFeeTooHigh(message: String) : NodeException(message)
     
-    public class InvalidBlindedPaths(message: String) : NodeException(message)
+    class InvalidBlindedPaths(message: String) : NodeException(message)
     
-    public class AsyncPaymentServicesDisabled(message: String) : NodeException(message)
+    class AsyncPaymentServicesDisabled(message: String) : NodeException(message)
     
-    public class CannotRbfFundingTransaction(message: String) : NodeException(message)
+    class CannotRbfFundingTransaction(message: String) : NodeException(message)
     
-    public class TransactionNotFound(message: String) : NodeException(message)
+    class TransactionNotFound(message: String) : NodeException(message)
     
-    public class TransactionAlreadyConfirmed(message: String) : NodeException(message)
+    class TransactionAlreadyConfirmed(message: String) : NodeException(message)
     
-    public class NoSpendableOutputs(message: String) : NodeException(message)
+    class NoSpendableOutputs(message: String) : NodeException(message)
     
-    public class CoinSelectionFailed(message: String) : NodeException(message)
+    class CoinSelectionFailed(message: String) : NodeException(message)
     
-    public class InvalidMnemonic(message: String) : NodeException(message)
+    class InvalidMnemonic(message: String) : NodeException(message)
     
-    public class BackgroundSyncNotEnabled(message: String) : NodeException(message)
+    class BackgroundSyncNotEnabled(message: String) : NodeException(message)
     
-    public class AddressTypeAlreadyMonitored(message: String) : NodeException(message)
+    class AddressTypeAlreadyMonitored(message: String) : NodeException(message)
     
-    public class AddressTypeIsPrimary(message: String) : NodeException(message)
+    class AddressTypeIsPrimary(message: String) : NodeException(message)
     
-    public class AddressTypeNotMonitored(message: String) : NodeException(message)
+    class AddressTypeNotMonitored(message: String) : NodeException(message)
     
-    public class InvalidSeedBytes(message: String) : NodeException(message)
+    class InvalidSeedBytes(message: String) : NodeException(message)
     
 }
 
@@ -1882,14 +1874,14 @@ public sealed class NodeException(message: String): kotlin.Exception(message) {
 
 
 @kotlinx.serialization.Serializable
-public sealed class OfferAmount {
+sealed class OfferAmount {
     @kotlinx.serialization.Serializable
-    public data class Bitcoin(
+    data class Bitcoin(
         val `amountMsats`: kotlin.ULong,
     ) : OfferAmount() {
     }
     @kotlinx.serialization.Serializable
-    public data class Currency(
+    data class Currency(
         val `iso4217Code`: kotlin.String,
         val `amount`: kotlin.ULong,
     ) : OfferAmount() {
@@ -1904,11 +1896,11 @@ public sealed class OfferAmount {
 
 
 @kotlinx.serialization.Serializable
-public enum class PaymentDirection {
+enum class PaymentDirection {
     
     INBOUND,
     OUTBOUND;
-    public companion object
+    companion object
 }
 
 
@@ -1918,7 +1910,7 @@ public enum class PaymentDirection {
 
 
 @kotlinx.serialization.Serializable
-public enum class PaymentFailureReason {
+enum class PaymentFailureReason {
     
     RECIPIENT_REJECTED,
     USER_ABANDONED,
@@ -1930,7 +1922,7 @@ public enum class PaymentFailureReason {
     INVOICE_REQUEST_EXPIRED,
     INVOICE_REQUEST_REJECTED,
     BLINDED_PATH_CREATION_FAILED;
-    public companion object
+    companion object
 }
 
 
@@ -1939,15 +1931,15 @@ public enum class PaymentFailureReason {
 
 
 @kotlinx.serialization.Serializable
-public sealed class PaymentKind {
+sealed class PaymentKind {
     @kotlinx.serialization.Serializable
-    public data class Onchain(
+    data class Onchain(
         val `txid`: Txid,
         val `status`: ConfirmationStatus,
     ) : PaymentKind() {
     }
     @kotlinx.serialization.Serializable
-    public data class Bolt11(
+    data class Bolt11(
         val `hash`: PaymentHash,
         val `preimage`: PaymentPreimage?,
         val `secret`: PaymentSecret?,
@@ -1956,7 +1948,7 @@ public sealed class PaymentKind {
     ) : PaymentKind() {
     }
     @kotlinx.serialization.Serializable
-    public data class Bolt11Jit(
+    data class Bolt11Jit(
         val `hash`: PaymentHash,
         val `preimage`: PaymentPreimage?,
         val `secret`: PaymentSecret?,
@@ -1967,7 +1959,7 @@ public sealed class PaymentKind {
     ) : PaymentKind() {
     }
     @kotlinx.serialization.Serializable
-    public data class Bolt12Offer(
+    data class Bolt12Offer(
         val `hash`: PaymentHash?,
         val `preimage`: PaymentPreimage?,
         val `secret`: PaymentSecret?,
@@ -1977,7 +1969,7 @@ public sealed class PaymentKind {
     ) : PaymentKind() {
     }
     @kotlinx.serialization.Serializable
-    public data class Bolt12Refund(
+    data class Bolt12Refund(
         val `hash`: PaymentHash?,
         val `preimage`: PaymentPreimage?,
         val `secret`: PaymentSecret?,
@@ -1986,7 +1978,7 @@ public sealed class PaymentKind {
     ) : PaymentKind() {
     }
     @kotlinx.serialization.Serializable
-    public data class Spontaneous(
+    data class Spontaneous(
         val `hash`: PaymentHash,
         val `preimage`: PaymentPreimage?,
     ) : PaymentKind() {
@@ -2001,12 +1993,12 @@ public sealed class PaymentKind {
 
 
 @kotlinx.serialization.Serializable
-public enum class PaymentStatus {
+enum class PaymentStatus {
     
     PENDING,
     SUCCEEDED,
     FAILED;
-    public companion object
+    companion object
 }
 
 
@@ -2015,15 +2007,15 @@ public enum class PaymentStatus {
 
 
 @kotlinx.serialization.Serializable
-public sealed class PendingSweepBalance {
+sealed class PendingSweepBalance {
     @kotlinx.serialization.Serializable
-    public data class PendingBroadcast(
+    data class PendingBroadcast(
         val `channelId`: ChannelId?,
         val `amountSatoshis`: kotlin.ULong,
     ) : PendingSweepBalance() {
     }
     @kotlinx.serialization.Serializable
-    public data class BroadcastAwaitingConfirmation(
+    data class BroadcastAwaitingConfirmation(
         val `channelId`: ChannelId?,
         val `latestBroadcastHeight`: kotlin.UInt,
         val `latestSpendingTxid`: Txid,
@@ -2031,7 +2023,7 @@ public sealed class PendingSweepBalance {
     ) : PendingSweepBalance() {
     }
     @kotlinx.serialization.Serializable
-    public data class AwaitingThresholdConfirmations(
+    data class AwaitingThresholdConfirmations(
         val `channelId`: ChannelId?,
         val `latestSpendingTxid`: Txid,
         val `confirmationHash`: BlockHash,
@@ -2048,19 +2040,19 @@ public sealed class PendingSweepBalance {
 
 
 @kotlinx.serialization.Serializable
-public sealed class QrPaymentResult {
+sealed class QrPaymentResult {
     @kotlinx.serialization.Serializable
-    public data class Onchain(
+    data class Onchain(
         val `txid`: Txid,
     ) : QrPaymentResult() {
     }
     @kotlinx.serialization.Serializable
-    public data class Bolt11(
+    data class Bolt11(
         val `paymentId`: PaymentId,
     ) : QrPaymentResult() {
     }
     @kotlinx.serialization.Serializable
-    public data class Bolt12(
+    data class Bolt12(
         val `paymentId`: PaymentId,
     ) : QrPaymentResult() {
     }
@@ -2074,12 +2066,12 @@ public sealed class QrPaymentResult {
 
 
 @kotlinx.serialization.Serializable
-public enum class SyncType {
+enum class SyncType {
     
     ONCHAIN_WALLET,
     LIGHTNING_WALLET,
     FEE_RATE_CACHE;
-    public companion object
+    companion object
 }
 
 
@@ -2088,15 +2080,15 @@ public enum class SyncType {
 
 
 
-public sealed class VssHeaderProviderException(message: String): kotlin.Exception(message) {
+sealed class VssHeaderProviderException(message: String): kotlin.Exception(message) {
     
-    public class InvalidData(message: String) : VssHeaderProviderException(message)
+    class InvalidData(message: String) : VssHeaderProviderException(message)
     
-    public class RequestException(message: String) : VssHeaderProviderException(message)
+    class RequestException(message: String) : VssHeaderProviderException(message)
     
-    public class AuthorizationException(message: String) : VssHeaderProviderException(message)
+    class AuthorizationException(message: String) : VssHeaderProviderException(message)
     
-    public class InternalException(message: String) : VssHeaderProviderException(message)
+    class InternalException(message: String) : VssHeaderProviderException(message)
     
 }
 
@@ -2105,14 +2097,14 @@ public sealed class VssHeaderProviderException(message: String): kotlin.Exceptio
 
 
 @kotlinx.serialization.Serializable
-public enum class WordCount {
+enum class WordCount {
     
     WORDS12,
     WORDS15,
     WORDS18,
     WORDS21,
     WORDS24;
-    public companion object
+    companion object
 }
 
 
@@ -2258,7 +2250,7 @@ public enum class WordCount {
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias Address = kotlin.String
+typealias Address = kotlin.String
 
 
 
@@ -2267,7 +2259,7 @@ public typealias Address = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias BlockHash = kotlin.String
+typealias BlockHash = kotlin.String
 
 
 
@@ -2276,7 +2268,7 @@ public typealias BlockHash = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias ChannelId = kotlin.String
+typealias ChannelId = kotlin.String
 
 
 
@@ -2285,7 +2277,7 @@ public typealias ChannelId = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias Lsps1OrderId = kotlin.String
+typealias Lsps1OrderId = kotlin.String
 
 
 
@@ -2294,7 +2286,7 @@ public typealias Lsps1OrderId = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias LspsDateTime = kotlin.String
+typealias LspsDateTime = kotlin.String
 
 
 
@@ -2303,7 +2295,7 @@ public typealias LspsDateTime = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias Mnemonic = kotlin.String
+typealias Mnemonic = kotlin.String
 
 
 
@@ -2312,7 +2304,7 @@ public typealias Mnemonic = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias NodeAlias = kotlin.String
+typealias NodeAlias = kotlin.String
 
 
 
@@ -2321,7 +2313,7 @@ public typealias NodeAlias = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias NodeId = kotlin.String
+typealias NodeId = kotlin.String
 
 
 
@@ -2330,7 +2322,7 @@ public typealias NodeId = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias OfferId = kotlin.String
+typealias OfferId = kotlin.String
 
 
 
@@ -2339,7 +2331,7 @@ public typealias OfferId = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias PaymentHash = kotlin.String
+typealias PaymentHash = kotlin.String
 
 
 
@@ -2348,7 +2340,7 @@ public typealias PaymentHash = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias PaymentId = kotlin.String
+typealias PaymentId = kotlin.String
 
 
 
@@ -2357,7 +2349,7 @@ public typealias PaymentId = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias PaymentPreimage = kotlin.String
+typealias PaymentPreimage = kotlin.String
 
 
 
@@ -2366,7 +2358,7 @@ public typealias PaymentPreimage = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias PaymentSecret = kotlin.String
+typealias PaymentSecret = kotlin.String
 
 
 
@@ -2375,7 +2367,7 @@ public typealias PaymentSecret = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias PublicKey = kotlin.String
+typealias PublicKey = kotlin.String
 
 
 
@@ -2384,7 +2376,7 @@ public typealias PublicKey = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias SocketAddress = kotlin.String
+typealias SocketAddress = kotlin.String
 
 
 
@@ -2393,7 +2385,7 @@ public typealias SocketAddress = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias Txid = kotlin.String
+typealias Txid = kotlin.String
 
 
 
@@ -2402,7 +2394,7 @@ public typealias Txid = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias UntrustedString = kotlin.String
+typealias UntrustedString = kotlin.String
 
 
 
@@ -2411,5 +2403,5 @@ public typealias UntrustedString = kotlin.String
  * is needed because the UDL type name is used in function/method signatures.
  * It's also what we have an external type that references a custom type.
  */
-public typealias UserChannelId = kotlin.String
+typealias UserChannelId = kotlin.String
 
