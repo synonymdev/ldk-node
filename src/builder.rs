@@ -1347,21 +1347,48 @@ where
 	K: EntropySource + SignerProvider<EcdsaSigner = InMemorySigner>,
 {
 	if let Some(manager_bytes) = &migration.channel_manager {
-		runtime
-			.block_on(async {
-				KVStore::write(
-					&**kv_store,
-					CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
-					CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
-					CHANNEL_MANAGER_PERSISTENCE_KEY,
-					manager_bytes.clone(),
-				)
-				.await
-			})
-			.map_err(|e| {
-				log_error!(logger, "Failed to write migrated channel_manager: {}", e);
-				BuildError::WriteFailed
-			})?;
+		let should_write = match runtime.block_on(KVStore::read(
+			&**kv_store,
+			CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+			CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+			CHANNEL_MANAGER_PERSISTENCE_KEY,
+		)) {
+			Ok(_existing_data) => {
+				log_warn!(
+					logger,
+					"Skipping channel manager migration: store already contains a channel manager"
+				);
+				false
+			},
+			Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => true,
+			Err(e) => {
+				log_error!(
+					logger,
+					"Failed to read existing channel manager, refusing migration write \
+					 to avoid overwriting potentially newer state: {}",
+					e
+				);
+				return Err(BuildError::ReadFailed);
+			},
+		};
+
+		if should_write {
+			runtime
+				.block_on(async {
+					KVStore::write(
+						&**kv_store,
+						CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+						CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+						CHANNEL_MANAGER_PERSISTENCE_KEY,
+						manager_bytes.clone(),
+					)
+					.await
+				})
+				.map_err(|e| {
+					log_error!(logger, "Failed to write migrated channel_manager: {}", e);
+					BuildError::WriteFailed
+				})?;
+		}
 	}
 
 	for monitor_data in &migration.channel_monitors {
@@ -2437,7 +2464,10 @@ mod tests {
 	};
 	use lightning::sign::KeysManager as LdkKeysManager;
 	use lightning::util::persist::{
-		KVStore, KVStoreSync, CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+		KVStore, KVStoreSync, CHANNEL_MANAGER_PERSISTENCE_KEY,
+		CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+		CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+		CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
 		CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
 	};
 	use lightning::util::ser::Writeable;
@@ -2703,6 +2733,87 @@ mod tests {
 		// (fail-closed: non-NotFound errors refuse migration).
 		let migration =
 			ChannelDataMigration { channel_manager: None, channel_monitors: vec![monitor_bytes] };
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert_eq!(result, Err(BuildError::ReadFailed));
+	}
+
+	#[test]
+	fn test_channel_manager_migration_fresh_write_to_empty_store() {
+		let (store, keys_manager, logger, runtime) = make_test_deps(&[42u8; 32]);
+		let manager_bytes = vec![0x01, 0x02, 0x03, 0x04];
+
+		let migration = ChannelDataMigration {
+			channel_manager: Some(manager_bytes.clone()),
+			channel_monitors: Vec::new(),
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+
+		// Verify the channel manager was written to the store.
+		let stored = runtime.block_on(KVStore::read(
+			&*store,
+			CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+			CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+			CHANNEL_MANAGER_PERSISTENCE_KEY,
+		));
+		assert!(stored.is_ok());
+		assert_eq!(stored.unwrap(), manager_bytes);
+	}
+
+	#[test]
+	fn test_channel_manager_migration_skips_when_existing_data_present() {
+		let (store, keys_manager, logger, runtime) = make_test_deps(&[42u8; 32]);
+
+		// Pre-populate the store with existing channel manager data.
+		let existing_data = vec![0xAA, 0xBB, 0xCC];
+		runtime
+			.block_on(KVStore::write(
+				&*store,
+				CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_KEY,
+				existing_data.clone(),
+			))
+			.unwrap();
+
+		// Attempt migration with different data.
+		let migration_bytes = vec![0x01, 0x02, 0x03];
+		let migration = ChannelDataMigration {
+			channel_manager: Some(migration_bytes),
+			channel_monitors: Vec::new(),
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+
+		// Verify the original data is preserved (migration was skipped).
+		let stored = runtime
+			.block_on(KVStore::read(
+				&*store,
+				CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_KEY,
+			))
+			.unwrap();
+		assert_eq!(stored, existing_data);
+	}
+
+	#[test]
+	fn test_channel_manager_migration_fails_on_store_read_error() {
+		let store: Arc<DynStore> = Arc::new(FailingReadStore);
+		let keys_manager = LdkKeysManager::new(&[42u8; 32], 0, 0, false);
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
+
+		let migration = ChannelDataMigration {
+			channel_manager: Some(vec![0x01, 0x02, 0x03]),
+			channel_monitors: Vec::new(),
+		};
 
 		let result =
 			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
