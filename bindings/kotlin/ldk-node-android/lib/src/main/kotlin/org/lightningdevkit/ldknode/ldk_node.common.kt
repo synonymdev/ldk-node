@@ -868,7 +868,8 @@ data class CustomTlvRecord (
 
 @kotlinx.serialization.Serializable
 data class ElectrumSyncConfig (
-    val `backgroundSyncConfig`: BackgroundSyncConfig?
+    val `backgroundSyncConfig`: BackgroundSyncConfig?, 
+    val `connectionTimeoutSecs`: kotlin.ULong
 ) {
     companion object
 }

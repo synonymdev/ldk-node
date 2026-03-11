@@ -450,7 +450,8 @@ pub(crate) fn setup_node_for_async_payments(
 		},
 		TestChainSource::Electrum(electrsd) => {
 			let electrum_url = format!("tcp://{}", electrsd.electrum_url);
-			let sync_config = ElectrumSyncConfig { background_sync_config: None };
+			let sync_config =
+				ElectrumSyncConfig { background_sync_config: None, ..Default::default() };
 			builder.set_chain_source_electrum(electrum_url.clone(), Some(sync_config));
 		},
 		TestChainSource::BitcoindRpcSync(bitcoind) => {

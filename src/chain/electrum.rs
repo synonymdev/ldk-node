@@ -44,7 +44,6 @@ use crate::NodeMetrics;
 
 const BDK_ELECTRUM_CLIENT_BATCH_SIZE: usize = 5;
 const ELECTRUM_CLIENT_NUM_RETRIES: u8 = 3;
-const ELECTRUM_CLIENT_TIMEOUT_SECS: u8 = 10;
 
 pub(super) struct ElectrumChainSource {
 	server_url: String,
@@ -91,6 +90,7 @@ impl ElectrumChainSource {
 			Arc::clone(&runtime),
 			Arc::clone(&self.config),
 			Arc::clone(&self.logger),
+			self.sync_config.connection_timeout_secs,
 		)
 	}
 
@@ -469,7 +469,7 @@ impl ElectrumRuntimeStatus {
 
 	pub(super) fn start(
 		&mut self, server_url: String, runtime: Arc<Runtime>, config: Arc<Config>,
-		logger: Arc<Logger>,
+		logger: Arc<Logger>, connection_timeout_secs: u64,
 	) -> Result<(), Error> {
 		match self {
 			Self::Stopped { pending_registered_txs, pending_registered_outputs } => {
@@ -478,6 +478,7 @@ impl ElectrumRuntimeStatus {
 					runtime,
 					config,
 					logger,
+					connection_timeout_secs,
 				)?);
 
 				// Apply any pending `Filter` entries
@@ -540,24 +541,55 @@ struct ElectrumRuntimeClient {
 impl ElectrumRuntimeClient {
 	fn new(
 		server_url: String, runtime: Arc<Runtime>, config: Arc<Config>, logger: Arc<Logger>,
+		connection_timeout_secs: u64,
 	) -> Result<Self, Error> {
+		// 0 disables the socket timeout entirely. Values above u8::MAX are capped to 255
+		// because the electrum_client crate's timeout field is a u8.
+		let timeout_opt = match connection_timeout_secs {
+			0 => None,
+			n => {
+				let capped = n.min(u8::MAX as u64) as u8;
+				if capped as u64 != n {
+					log_warn!(
+						logger,
+						"Electrum connection_timeout_secs ({}) exceeds maximum of {}; capping to {}.",
+						n,
+						u8::MAX,
+						capped,
+					);
+				}
+				Some(capped)
+			},
+		};
+
 		let electrum_config = ElectrumConfigBuilder::new()
 			.retry(ELECTRUM_CLIENT_NUM_RETRIES)
-			.timeout(Some(ELECTRUM_CLIENT_TIMEOUT_SECS))
+			.timeout(timeout_opt)
 			.build();
 
 		let electrum_client = Arc::new(
 			ElectrumClient::from_config(&server_url, electrum_config.clone()).map_err(|e| {
-				log_error!(logger, "Failed to connect to electrum server: {}", e);
+				log_error!(logger, "Failed to connect to Electrum server: {}", e);
 				Error::ConnectionFailed
 			})?,
 		);
 		let bdk_electrum_client = Arc::new(BdkElectrumClient::new(Arc::clone(&electrum_client)));
-		let tx_sync = Arc::new(
-			ElectrumSyncClient::new(server_url.clone(), Arc::clone(&logger)).map_err(|e| {
-				log_error!(logger, "Failed to connect to electrum server: {}", e);
+
+		// The LDK tx-sync client needs its own TCP connection, configured with the same
+		// timeout so that its blocking reads are bounded and Tokio's blocking thread pool
+		// is not exhausted by threads stuck on dead sockets.
+		let ldk_electrum_client =
+			Arc::new(ElectrumClient::from_config(&server_url, electrum_config).map_err(|e| {
+				log_error!(logger, "Failed to connect to Electrum server for tx sync: {}", e);
 				Error::ConnectionFailed
-			})?,
+			})?);
+		let tx_sync = Arc::new(
+			ElectrumSyncClient::from_client(ldk_electrum_client, Arc::clone(&logger)).map_err(
+				|e| {
+					log_error!(logger, "Failed to initialize Electrum tx sync client: {}", e);
+					Error::ConnectionFailed
+				},
+			)?,
 		);
 		Ok(Self { electrum_client, bdk_electrum_client, tx_sync, runtime, config, logger })
 	}

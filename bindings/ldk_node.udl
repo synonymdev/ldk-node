@@ -44,6 +44,7 @@ dictionary EsploraSyncConfig {
 
 dictionary ElectrumSyncConfig {
 	BackgroundSyncConfig? background_sync_config;
+	u64 connection_timeout_secs;
 };
 
 dictionary LSPS2ServiceConfig {
