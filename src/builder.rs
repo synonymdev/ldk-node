@@ -1347,6 +1347,13 @@ where
 	K: EntropySource + SignerProvider<EcdsaSigner = InMemorySigner>,
 {
 	if let Some(manager_bytes) = &migration.channel_manager {
+		// Existence-only check (no deserialization). Unlike monitors, we cannot
+		// deserialize the channel manager here because ChannelManagerReadArgs
+		// requires already-deserialized channel_monitor_references, which are
+		// loaded later in build(). This means corrupt existing data will block
+		// migration — that is intentional: overwriting a potentially valid
+		// channel manager with stale FS data risks fund loss, while a node that
+		// refuses to start can be recovered by clearing the KV store.
 		let should_write = match runtime.block_on(KVStore::read(
 			&**kv_store,
 			CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
@@ -2801,6 +2808,47 @@ mod tests {
 			))
 			.unwrap();
 		assert_eq!(stored, existing_data);
+	}
+
+	#[test]
+	fn test_channel_manager_migration_skips_even_when_existing_data_is_corrupt() {
+		let (store, keys_manager, logger, runtime) = make_test_deps(&[42u8; 32]);
+
+		// Pre-populate the store with corrupt/garbage data.
+		let corrupt_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+		runtime
+			.block_on(KVStore::write(
+				&*store,
+				CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_KEY,
+				corrupt_data.clone(),
+			))
+			.unwrap();
+
+		// Migration should skip (existence-only check, no deserialization).
+		// This is intentional: overwriting potentially valid data with stale
+		// FS bytes risks fund loss; a node that fails to start on corrupt
+		// data can be recovered by clearing the KV store.
+		let migration = ChannelDataMigration {
+			channel_manager: Some(vec![0x01, 0x02, 0x03]),
+			channel_monitors: Vec::new(),
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+
+		// Verify the corrupt data is preserved (migration was skipped).
+		let stored = runtime
+			.block_on(KVStore::read(
+				&*store,
+				CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_KEY,
+			))
+			.unwrap();
+		assert_eq!(stored, corrupt_data);
 	}
 
 	#[test]
