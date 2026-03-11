@@ -1403,10 +1403,10 @@ where
 				) {
 					Ok((_, existing_monitor)) => {
 						let existing_update_id = existing_monitor.get_latest_update_id();
-						if existing_update_id > migrated_update_id {
+						if existing_update_id >= migrated_update_id {
 							log_warn!(
 								logger,
-								"Skipping migration for monitor {}: existing update_id {} is newer than migrated update_id {}",
+								"Skipping migration for monitor {}: existing update_id {} is newer than or equal to migrated update_id {}",
 								monitor_key,
 								existing_update_id,
 								migrated_update_id
@@ -2637,13 +2637,13 @@ mod tests {
 	}
 
 	#[test]
-	fn test_migration_skips_when_existing_is_newer() {
+	fn test_migration_skips_when_existing_is_newer_or_equal() {
 		let (monitor_bytes, monitor_key, _, seed) = create_test_monitor_bytes();
 		let (store, keys_manager, logger, runtime) = make_test_deps(&seed);
 
-		// Both existing and migrated have update_id=0. The function only skips
-		// when existing > migrated, so equal means it will write (not skip).
-		// This test verifies that the "equal" path succeeds.
+		// Pre-populate the store with valid monitor data (update_id=0).
+		// Migration data also has update_id=0. Since existing >= migrated,
+		// the function should skip the redundant write and succeed.
 		runtime
 			.block_on(KVStore::write(
 				&*store,
@@ -2662,44 +2662,6 @@ mod tests {
 		let result =
 			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
 		assert!(result.is_ok());
-	}
-
-	#[test]
-	fn test_migration_overwrites_when_existing_is_older() {
-		let (monitor_bytes, monitor_key, _, seed) = create_test_monitor_bytes();
-		let (store, keys_manager, logger, runtime) = make_test_deps(&seed);
-
-		// Write the monitor to the store first (same update_id=0).
-		runtime
-			.block_on(KVStore::write(
-				&*store,
-				CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
-				CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
-				&monitor_key,
-				monitor_bytes.clone(),
-			))
-			.unwrap();
-
-		// Migrate with the same bytes — existing_update_id (0) is NOT greater than
-		// migrated_update_id (0), so it overwrites.
-		let migration = ChannelDataMigration {
-			channel_manager: None,
-			channel_monitors: vec![monitor_bytes.clone()],
-		};
-
-		let result =
-			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
-		assert!(result.is_ok());
-
-		// Verify the store still has the data.
-		let stored = runtime.block_on(KVStore::read(
-			&*store,
-			CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
-			CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
-			&monitor_key,
-		));
-		assert!(stored.is_ok());
-		assert_eq!(stored.unwrap(), monitor_bytes);
 	}
 
 	#[test]
