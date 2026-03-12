@@ -44,6 +44,9 @@ pub(crate) const DEFAULT_ESPLORA_SERVER_URL: &str = "https://blockstream.info/ap
 // The default Esplora client timeout we're using.
 pub(crate) const DEFAULT_ESPLORA_CLIENT_TIMEOUT_SECS: u64 = 10;
 
+// The default Electrum connection/read timeout we're using.
+pub(crate) const DEFAULT_ELECTRUM_CONNECTION_TIMEOUT_SECS: u64 = 10;
+
 // The 'stop gap' parameter used by BDK's wallet sync. This seems to configure the threshold
 // number of derivation indexes after which BDK stops looking for new scripts belonging to the wallet.
 pub(crate) const BDK_CLIENT_STOP_GAP: usize = 20;
@@ -611,11 +614,25 @@ pub struct ElectrumSyncConfig {
 	///
 	/// [`Node::sync_wallets`]: crate::Node::sync_wallets
 	pub background_sync_config: Option<BackgroundSyncConfig>,
+	/// Timeout in seconds for each Electrum socket operation (connect, read, write).
+	///
+	/// **Note:** Without a per-socket timeout, threads spawned by `sync_wallets` can block
+	/// indefinitely under total packet loss, eventually exhausting Tokio's blocking thread pool
+	/// and causing subsequent `sync_wallets` calls to block indefinitely.
+	///
+	/// Set to `0` to disable the socket timeout entirely. The effective maximum is 255 seconds
+	/// (the underlying `electrum_client` crate uses a `u8`); larger values are capped with a
+	/// warning. Note that two TCP connections are opened at node start (on-chain and Lightning
+	/// sync), so budget accordingly when tuning this value. Defaults to 10 seconds.
+	pub connection_timeout_secs: u64,
 }
 
 impl Default for ElectrumSyncConfig {
 	fn default() -> Self {
-		Self { background_sync_config: Some(BackgroundSyncConfig::default()) }
+		Self {
+			background_sync_config: Some(BackgroundSyncConfig::default()),
+			connection_timeout_secs: DEFAULT_ELECTRUM_CONNECTION_TIMEOUT_SECS,
+		}
 	}
 }
 
