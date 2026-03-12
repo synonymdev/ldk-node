@@ -26,14 +26,13 @@
 - Switched from forked rust-lightning (`ovitrif/rust-lightning#0.2-electrum-fix`) back to official
   upstream crates.io releases. The Electrum sync fix (PR #4341) is now in upstream
   `lightning-transaction-sync` v0.2.1. Also picks up `lightning` v0.2.2 fixes.
+- Fixed FS→KV channel data migration blindly overwriting newer state. The migration now skips
+  writing a channel monitor when the KV store already holds one with a newer or equal `update_id`,
+  and skips the channel manager when one already exists. Read or deserialization failures fail-closed
+  to prevent silent data loss.
 
 ## Synonym Fork Additions
 
-- Fixed channel monitor migration from filesystem store to KV store overwriting newer state.
-  During FS→KV migration, the code now checks if the KV store already has a channel monitor
-  with a newer `update_id` before writing, preventing stale migration data from overwriting
-  current state on repeated migrations or restarts. Errors reading or deserializing existing
-  monitors now fail-closed (abort migration) to avoid silent data loss.
 - Added `connection_timeout_secs` field to `ElectrumSyncConfig` (default: 10 s). This bounds
   Electrum socket operations for both the BDK on-chain and LDK tx-sync clients, preventing Tokio's
   blocking thread pool from being exhausted by threads stuck on dead sockets under total packet
@@ -41,7 +40,6 @@
   255 and a warning is logged.
   **Breaking change:** existing struct-literal construction of `ElectrumSyncConfig` must add the
   new field or switch to `ElectrumSyncConfig { .., ..Default::default() }`.
-
 - Added `OnchainPayment::calculate_send_all_fee()` to preview the fee for a drain / send-all
   transaction before broadcasting (fee-calculation counterpart of `send_all_to_address`)
 - Added runtime APIs for dynamic address type management:
