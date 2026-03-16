@@ -1347,13 +1347,7 @@ where
 	K: EntropySource + SignerProvider<EcdsaSigner = InMemorySigner>,
 {
 	if let Some(manager_bytes) = &migration.channel_manager {
-		// Existence-only check (no deserialization). Unlike monitors, we cannot
-		// deserialize the channel manager here because ChannelManagerReadArgs
-		// requires already-deserialized channel_monitor_references, which are
-		// loaded later in build(). This means corrupt existing data will block
-		// migration — that is intentional: overwriting a potentially valid
-		// channel manager with stale FS data risks fund loss, while a node that
-		// refuses to start can be recovered by clearing the KV store.
+		// Skip if KV store already has a channel manager (existence-only check).
 		let should_write = match runtime.block_on(KVStore::read(
 			&**kv_store,
 			CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
