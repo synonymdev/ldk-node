@@ -32,7 +32,7 @@ use lightning::routing::scoring::{
 	ChannelLiquidities, CombinedScorer, ProbabilisticScorer, ProbabilisticScoringDecayParameters,
 	ProbabilisticScoringFeeParameters,
 };
-use lightning::sign::{EntropySource, InMemorySigner, NodeSigner};
+use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, SignerProvider};
 use lightning::util::persist::{
 	KVStore, KVStoreSync, CHANNEL_MANAGER_PERSISTENCE_KEY,
 	CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE, CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
@@ -43,7 +43,7 @@ use lightning::util::persist::{
 };
 use lightning::util::ser::{Readable, ReadableArgs};
 use lightning::util::sweep::OutputSweeper;
-use lightning::{log_info, log_trace};
+use lightning::{log_info, log_trace, log_warn};
 use lightning_persister::fs_store::FilesystemStore;
 use vss_client::headers::{FixedHeaders, LnurlAuthToJwtProvider, VssHeaderProvider};
 
@@ -1339,6 +1339,158 @@ fn build_additional_wallets(
 	additional_wallets
 }
 
+fn apply_channel_data_migration<K>(
+	migration: &ChannelDataMigration, kv_store: &Arc<DynStore>, keys_manager: &K,
+	logger: &Arc<Logger>, runtime: &Arc<Runtime>,
+) -> Result<(), BuildError>
+where
+	K: EntropySource + SignerProvider<EcdsaSigner = InMemorySigner>,
+{
+	if let Some(manager_bytes) = &migration.channel_manager {
+		// Skip if KV store already has a channel manager (existence-only check).
+		let should_write = match runtime.block_on(KVStore::read(
+			&**kv_store,
+			CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+			CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+			CHANNEL_MANAGER_PERSISTENCE_KEY,
+		)) {
+			Ok(_existing_data) => {
+				log_warn!(
+					logger,
+					"Skipping channel manager migration: store already contains a channel manager"
+				);
+				false
+			},
+			Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => true,
+			Err(e) => {
+				log_error!(
+					logger,
+					"Failed to read existing channel manager, refusing migration write \
+					 to avoid overwriting potentially newer state: {}",
+					e
+				);
+				return Err(BuildError::ReadFailed);
+			},
+		};
+
+		if should_write {
+			runtime
+				.block_on(async {
+					KVStore::write(
+						&**kv_store,
+						CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+						CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+						CHANNEL_MANAGER_PERSISTENCE_KEY,
+						manager_bytes.clone(),
+					)
+					.await
+				})
+				.map_err(|e| {
+					log_error!(logger, "Failed to write migrated channel_manager: {}", e);
+					BuildError::WriteFailed
+				})?;
+		}
+	}
+
+	for monitor_data in &migration.channel_monitors {
+		let mut reader = lightning::io::Cursor::new(monitor_data);
+		let (_, channel_monitor) = match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
+			&mut reader,
+			(keys_manager, keys_manager),
+		) {
+			Ok(monitor) => monitor,
+			Err(e) => {
+				log_error!(logger, "Failed to deserialize channel_monitor: {:?}", e);
+				return Err(BuildError::ReadFailed);
+			},
+		};
+
+		let funding_txo = channel_monitor.get_funding_txo();
+		let monitor_key = format!("{}_{}", funding_txo.txid, funding_txo.index);
+		let migrated_update_id = channel_monitor.get_latest_update_id();
+		log_info!(
+			logger,
+			"Migrating channel monitor: {} (update_id={})",
+			monitor_key,
+			migrated_update_id
+		);
+
+		// Check if the store already has a newer monitor to avoid overwriting
+		// current state with stale migration data.
+		let should_write = match runtime.block_on(KVStore::read(
+			&**kv_store,
+			CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+			CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+			&monitor_key,
+		)) {
+			Ok(existing_data) => {
+				let mut existing_reader = Cursor::new(&existing_data);
+				match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
+					&mut existing_reader,
+					(keys_manager, keys_manager),
+				) {
+					Ok((_, existing_monitor)) => {
+						let existing_update_id = existing_monitor.get_latest_update_id();
+						if existing_update_id >= migrated_update_id {
+							log_warn!(
+								logger,
+								"Skipping migration for monitor {}: existing update_id {} is newer than or equal to migrated update_id {}",
+								monitor_key,
+								existing_update_id,
+								migrated_update_id
+							);
+							false
+						} else {
+							true
+						}
+					},
+					Err(e) => {
+						log_error!(
+							logger,
+							"Failed to deserialize existing monitor {}, refusing migration write to avoid overwriting potentially newer state: {:?}",
+							monitor_key,
+							e
+						);
+						return Err(BuildError::ReadFailed);
+					},
+				}
+			},
+			Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => true,
+			Err(e) => {
+				log_error!(
+					logger,
+					"Failed to read existing monitor {}, refusing migration write to avoid overwriting potentially newer state: {}",
+					monitor_key,
+					e
+				);
+				return Err(BuildError::ReadFailed);
+			},
+		};
+
+		if should_write {
+			runtime
+				.block_on(async {
+					KVStore::write(
+						&**kv_store,
+						CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+						CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+						&monitor_key,
+						monitor_data.clone(),
+					)
+					.await
+				})
+				.map_err(|e| {
+					log_error!(logger, "Failed to write channel_monitor {}: {}", monitor_key, e);
+					BuildError::WriteFailed
+				})?;
+		}
+	}
+
+	log_info!(logger, "Applied channel migration: {} monitors", migration.channel_monitors.len());
+
+	Ok(())
+}
+
 fn build_with_store_internal(
 	config: Arc<Config>, chain_data_source_config: Option<&ChainDataSourceConfig>,
 	gossip_source_config: Option<&GossipSourceConfig>,
@@ -1606,63 +1758,7 @@ fn build_with_store_internal(
 	));
 
 	if let Some(migration) = channel_data_migration {
-		if let Some(manager_bytes) = &migration.channel_manager {
-			runtime
-				.block_on(async {
-					KVStore::write(
-						&*kv_store,
-						CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
-						CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
-						CHANNEL_MANAGER_PERSISTENCE_KEY,
-						manager_bytes.clone(),
-					)
-					.await
-				})
-				.map_err(|e| {
-					log_error!(logger, "Failed to write migrated channel_manager: {}", e);
-					BuildError::WriteFailed
-				})?;
-		}
-
-		for monitor_data in &migration.channel_monitors {
-			let mut reader = lightning::io::Cursor::new(monitor_data);
-			let (_, channel_monitor) = match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
-				&mut reader,
-				(&*keys_manager, &*keys_manager),
-			) {
-				Ok(monitor) => monitor,
-				Err(e) => {
-					log_error!(logger, "Failed to deserialize channel_monitor: {:?}", e);
-					return Err(BuildError::ReadFailed);
-				},
-			};
-
-			let funding_txo = channel_monitor.get_funding_txo();
-			let monitor_key = format!("{}_{}", funding_txo.txid, funding_txo.index);
-			log_info!(logger, "Migrating channel monitor: {}", monitor_key);
-
-			runtime
-				.block_on(async {
-					KVStore::write(
-						&*kv_store,
-						CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
-						CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
-						&monitor_key,
-						monitor_data.clone(),
-					)
-					.await
-				})
-				.map_err(|e| {
-					log_error!(logger, "Failed to write channel_monitor {}: {}", monitor_key, e);
-					BuildError::WriteFailed
-				})?;
-		}
-
-		log_info!(
-			logger,
-			"Applied channel migration: {} monitors",
-			migration.channel_monitors.len()
-		);
+		apply_channel_data_migration(migration, &kv_store, &*keys_manager, &logger, &runtime)?;
 	}
 
 	// Initialize the network graph from local cache, with VSS fallback for migration.
@@ -2358,7 +2454,32 @@ pub(crate) fn sanitize_alias(alias_str: &str) -> Result<NodeAlias, BuildError> {
 
 #[cfg(test)]
 mod tests {
-	use super::{sanitize_alias, BuildError, NodeAlias};
+	use std::future::Future;
+	use std::pin::Pin;
+	use std::sync::Arc;
+
+	use lightning::io;
+	use lightning::ln::functional_test_utils::{
+		create_announced_chan_between_nodes, create_chanmon_cfgs, create_network, create_node_cfgs,
+		create_node_chanmgrs,
+	};
+	use lightning::sign::KeysManager as LdkKeysManager;
+	use lightning::util::persist::{
+		KVStore, KVStoreSync, CHANNEL_MANAGER_PERSISTENCE_KEY,
+		CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+		CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+		CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+		CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+	};
+	use lightning::util::ser::Writeable;
+
+	use super::{
+		apply_channel_data_migration, sanitize_alias, BuildError, ChannelDataMigration, NodeAlias,
+	};
+	use crate::io::test_utils::InMemoryStore;
+	use crate::logger::Logger;
+	use crate::runtime::Runtime;
+	use crate::types::DynStore;
 
 	#[test]
 	fn sanitize_empty_node_alias() {
@@ -2394,5 +2515,350 @@ mod tests {
 		let alias = "This is a string longer than thirty-two bytes!"; // 46 bytes
 		let node = sanitize_alias(alias);
 		assert_eq!(node.err().unwrap(), BuildError::InvalidNodeAlias);
+	}
+
+	/// Creates valid serialized (BlockHash, ChannelMonitor) bytes for testing.
+	///
+	/// Uses LDK's functional test utilities to create a real channel between two
+	/// nodes, then serializes one of the resulting channel monitors. Returns the
+	/// seed used for node 0's KeysManager so callers can create a matching
+	/// KeysManager for deserialization.
+	///
+	/// Returns (monitor_bytes, monitor_key, update_id, seed).
+	fn create_test_monitor_bytes() -> (Vec<u8>, String, u64, [u8; 32]) {
+		let chanmon_cfgs = create_chanmon_cfgs(2);
+		let node_cfgs = create_node_cfgs(2, &chanmon_cfgs);
+		let node_chanmgrs = create_node_chanmgrs(2, &node_cfgs, &[None, None]);
+		let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
+
+		let _ = create_announced_chan_between_nodes(&nodes, 0, 1);
+
+		let channel_id = nodes[0].node.list_channels()[0].channel_id;
+		let monitor = nodes[0].chain_monitor.chain_monitor.get_monitor(channel_id).unwrap();
+
+		let funding_txo = monitor.get_funding_txo();
+		let monitor_key = format!("{}_{}", funding_txo.txid, funding_txo.index);
+		let update_id = monitor.get_latest_update_id();
+
+		let seed = nodes[0].node_seed;
+		let mut serialized = Vec::new();
+		monitor.write(&mut serialized).unwrap();
+
+		(serialized, monitor_key, update_id, seed)
+	}
+
+	fn make_test_deps(
+		seed: &[u8; 32],
+	) -> (Arc<DynStore>, LdkKeysManager, Arc<Logger>, Arc<Runtime>) {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let keys_manager = LdkKeysManager::new(seed, 0, 0, false);
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
+		(store, keys_manager, logger, runtime)
+	}
+
+	/// A KVStore wrapper that returns IO errors for reads from the channel
+	/// monitor namespace, simulating a storage backend failure.
+	struct FailingReadStore;
+
+	impl KVStore for FailingReadStore {
+		fn read(
+			&self, _primary_namespace: &str, _secondary_namespace: &str, _key: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, io::Error>> + 'static + Send>> {
+			Box::pin(async {
+				Err(io::Error::new(io::ErrorKind::ConnectionReset, "simulated IO error"))
+			})
+		}
+
+		fn write(
+			&self, _primary_namespace: &str, _secondary_namespace: &str, _key: &str, _buf: Vec<u8>,
+		) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'static + Send>> {
+			Box::pin(async { Ok(()) })
+		}
+
+		fn remove(
+			&self, _primary_namespace: &str, _secondary_namespace: &str, _key: &str, _lazy: bool,
+		) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'static + Send>> {
+			Box::pin(async { Ok(()) })
+		}
+
+		fn list(
+			&self, _primary_namespace: &str, _secondary_namespace: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, io::Error>> + 'static + Send>> {
+			Box::pin(async { Ok(Vec::new()) })
+		}
+	}
+
+	impl KVStoreSync for FailingReadStore {
+		fn read(
+			&self, _primary_namespace: &str, _secondary_namespace: &str, _key: &str,
+		) -> io::Result<Vec<u8>> {
+			Err(io::Error::new(io::ErrorKind::ConnectionReset, "simulated IO error"))
+		}
+
+		fn write(
+			&self, _primary_namespace: &str, _secondary_namespace: &str, _key: &str, _buf: Vec<u8>,
+		) -> io::Result<()> {
+			Ok(())
+		}
+
+		fn remove(
+			&self, _primary_namespace: &str, _secondary_namespace: &str, _key: &str, _lazy: bool,
+		) -> io::Result<()> {
+			Ok(())
+		}
+
+		fn list(
+			&self, _primary_namespace: &str, _secondary_namespace: &str,
+		) -> io::Result<Vec<String>> {
+			Ok(Vec::new())
+		}
+	}
+
+	unsafe impl Sync for FailingReadStore {}
+	unsafe impl Send for FailingReadStore {}
+
+	#[test]
+	fn test_migration_invalid_monitor_data_returns_read_failed() {
+		let (store, keys_manager, logger, runtime) = make_test_deps(&[42u8; 32]);
+		let migration = ChannelDataMigration {
+			channel_manager: None,
+			channel_monitors: vec![vec![0xDE, 0xAD, 0xBE, 0xEF]],
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert_eq!(result, Err(BuildError::ReadFailed));
+	}
+
+	#[test]
+	fn test_migration_empty_monitors_succeeds() {
+		let (store, keys_manager, logger, runtime) = make_test_deps(&[42u8; 32]);
+		let migration =
+			ChannelDataMigration { channel_manager: None, channel_monitors: Vec::new() };
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_migration_fresh_write_to_empty_store() {
+		let (monitor_bytes, monitor_key, _, seed) = create_test_monitor_bytes();
+		let (store, keys_manager, logger, runtime) = make_test_deps(&seed);
+
+		let migration = ChannelDataMigration {
+			channel_manager: None,
+			channel_monitors: vec![monitor_bytes.clone()],
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+
+		// Verify the monitor was written to the store.
+		let stored = runtime.block_on(KVStore::read(
+			&*store,
+			CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+			CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+			&monitor_key,
+		));
+		assert!(stored.is_ok());
+		assert_eq!(stored.unwrap(), monitor_bytes);
+	}
+
+	#[test]
+	fn test_migration_skips_when_existing_is_newer_or_equal() {
+		let (monitor_bytes, monitor_key, _, seed) = create_test_monitor_bytes();
+		let (store, keys_manager, logger, runtime) = make_test_deps(&seed);
+
+		// Pre-populate the store with valid monitor data (update_id=0).
+		// Migration data also has update_id=0. Since existing >= migrated,
+		// the function should skip the redundant write and succeed.
+		runtime
+			.block_on(KVStore::write(
+				&*store,
+				CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+				&monitor_key,
+				monitor_bytes.clone(),
+			))
+			.unwrap();
+
+		let migration = ChannelDataMigration {
+			channel_manager: None,
+			channel_monitors: vec![monitor_bytes.clone()],
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_migration_fails_on_corrupt_existing_data() {
+		let (monitor_bytes, monitor_key, _, seed) = create_test_monitor_bytes();
+		let (store, keys_manager, logger, runtime) = make_test_deps(&seed);
+
+		// Pre-populate the store with garbage data for this monitor key.
+		runtime
+			.block_on(KVStore::write(
+				&*store,
+				CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+				&monitor_key,
+				vec![0xFF, 0xFE, 0xFD, 0xFC],
+			))
+			.unwrap();
+
+		// Migration should fail because the existing data can't be deserialized
+		// (fail-closed to avoid overwriting potentially newer state).
+		let migration =
+			ChannelDataMigration { channel_manager: None, channel_monitors: vec![monitor_bytes] };
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert_eq!(result, Err(BuildError::ReadFailed));
+	}
+
+	#[test]
+	fn test_migration_fails_on_store_read_error() {
+		let (monitor_bytes, _, _, seed) = create_test_monitor_bytes();
+
+		let store: Arc<DynStore> = Arc::new(FailingReadStore);
+		let keys_manager = LdkKeysManager::new(&seed, 0, 0, false);
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
+
+		// Migration should fail because the store returns an IO error on read
+		// (fail-closed: non-NotFound errors refuse migration).
+		let migration =
+			ChannelDataMigration { channel_manager: None, channel_monitors: vec![monitor_bytes] };
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert_eq!(result, Err(BuildError::ReadFailed));
+	}
+
+	#[test]
+	fn test_channel_manager_migration_fresh_write_to_empty_store() {
+		let (store, keys_manager, logger, runtime) = make_test_deps(&[42u8; 32]);
+		let manager_bytes = vec![0x01, 0x02, 0x03, 0x04];
+
+		let migration = ChannelDataMigration {
+			channel_manager: Some(manager_bytes.clone()),
+			channel_monitors: Vec::new(),
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+
+		// Verify the channel manager was written to the store.
+		let stored = runtime.block_on(KVStore::read(
+			&*store,
+			CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+			CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+			CHANNEL_MANAGER_PERSISTENCE_KEY,
+		));
+		assert!(stored.is_ok());
+		assert_eq!(stored.unwrap(), manager_bytes);
+	}
+
+	#[test]
+	fn test_channel_manager_migration_skips_when_existing_data_present() {
+		let (store, keys_manager, logger, runtime) = make_test_deps(&[42u8; 32]);
+
+		// Pre-populate the store with existing channel manager data.
+		let existing_data = vec![0xAA, 0xBB, 0xCC];
+		runtime
+			.block_on(KVStore::write(
+				&*store,
+				CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_KEY,
+				existing_data.clone(),
+			))
+			.unwrap();
+
+		// Attempt migration with different data.
+		let migration_bytes = vec![0x01, 0x02, 0x03];
+		let migration = ChannelDataMigration {
+			channel_manager: Some(migration_bytes),
+			channel_monitors: Vec::new(),
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+
+		// Verify the original data is preserved (migration was skipped).
+		let stored = runtime
+			.block_on(KVStore::read(
+				&*store,
+				CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_KEY,
+			))
+			.unwrap();
+		assert_eq!(stored, existing_data);
+	}
+
+	#[test]
+	fn test_channel_manager_migration_skips_even_when_existing_data_is_corrupt() {
+		let (store, keys_manager, logger, runtime) = make_test_deps(&[42u8; 32]);
+
+		// Pre-populate the store with corrupt/garbage data.
+		let corrupt_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+		runtime
+			.block_on(KVStore::write(
+				&*store,
+				CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_KEY,
+				corrupt_data.clone(),
+			))
+			.unwrap();
+
+		// Migration should skip (existence-only check, no deserialization).
+		// This is intentional: overwriting potentially valid data with stale
+		// FS bytes risks fund loss; a node that fails to start on corrupt
+		// data can be recovered by clearing the KV store.
+		let migration = ChannelDataMigration {
+			channel_manager: Some(vec![0x01, 0x02, 0x03]),
+			channel_monitors: Vec::new(),
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert!(result.is_ok());
+
+		// Verify the corrupt data is preserved (migration was skipped).
+		let stored = runtime
+			.block_on(KVStore::read(
+				&*store,
+				CHANNEL_MANAGER_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
+				CHANNEL_MANAGER_PERSISTENCE_KEY,
+			))
+			.unwrap();
+		assert_eq!(stored, corrupt_data);
+	}
+
+	#[test]
+	fn test_channel_manager_migration_fails_on_store_read_error() {
+		let store: Arc<DynStore> = Arc::new(FailingReadStore);
+		let keys_manager = LdkKeysManager::new(&[42u8; 32], 0, 0, false);
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
+
+		let migration = ChannelDataMigration {
+			channel_manager: Some(vec![0x01, 0x02, 0x03]),
+			channel_monitors: Vec::new(),
+		};
+
+		let result =
+			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
+		assert_eq!(result, Err(BuildError::ReadFailed));
 	}
 }

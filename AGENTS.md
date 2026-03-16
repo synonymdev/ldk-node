@@ -21,20 +21,56 @@ cargo build --profile=release-smaller
 ```
 
 ### Testing
+
+#### Unit tests (no external infrastructure needed)
 ```bash
-# Run all tests
-cargo test
+cargo test --lib
+```
 
-# Run a specific test
+#### Standard integration tests
+Uses the `electrsd` crate to auto-download and spawn `bitcoind` + `electrs` binaries.
+To use pre-downloaded binaries, set `BITCOIND_EXE` and `ELECTRS_EXE` env vars.
+
+On macOS, the default file descriptor limit (256) is too low for spawning `bitcoind` +
+`electrs`. Raise it before running integration tests:
+
+Test files: `tests/integration_tests_rust.rs`, `tests/reorg_test.rs`,
+`tests/multi_address_types_tests.rs`
+
+```bash
+ulimit -n 10240 && cargo test
+```
+
+#### Run a specific test
+```bash
 cargo test test_name
+```
 
-# Run tests with specific features
+#### Run tests with UniFFI bindings feature
+```bash
 cargo test --features "uniffi"
+```
 
-# Integration tests with specific backends
-cargo test --cfg cln_test  # Core Lightning tests
-cargo test --cfg lnd_test  # LND tests
-cargo test --cfg vss_test  # VSS (Versioned Storage Service) tests
+#### CLN integration tests
+Requires Docker and `socat` for RPC socket forwarding.
+```bash
+docker compose -f docker-compose-cln.yml up -d
+RUSTFLAGS="--cfg cln_test" cargo test --test integration_tests_cln
+```
+
+#### LND integration tests
+Requires Docker and CMake (>=3.5, <4.0) for `lnd_grpc_rust`.
+Set `LND_DATA_DIR`, `LND_CERT_PATH`, and `LND_MACAROON_PATH` env vars.
+```bash
+docker compose -f docker-compose-lnd.yml up -d
+RUSTFLAGS="--cfg lnd_test" cargo test --test integration_tests_lnd
+```
+
+#### VSS integration tests
+Requires PostgreSQL and a running VSS server (from `lightningdevkit/vss-server`).
+Set `TEST_VSS_BASE_URL` env var.
+```bash
+RUSTFLAGS="--cfg vss_test" cargo test --test integration_tests_vss
 ```
 
 ### Code Quality
@@ -200,6 +236,7 @@ marked as skipped for CI), you must fix it before declaring success.
 - NEVER suggest manually adding @Serializable annotations to generated Kotlin bindings
 - ALWAYS run `cargo fmt` before committing to ensure consistent code formatting
 - ALWAYS move imports to the top of the file when applicable (no inline imports in functions)
+- ALWAYS add unit tests for new business logic — untested code will be flagged in review
 - Run `./bindgen.sh` in the background when bindings need regeneration (it is long-running)
 
 ## Bindings Generation Command
