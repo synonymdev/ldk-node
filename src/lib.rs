@@ -148,8 +148,10 @@ use lightning::ln::funding::SpliceContribution;
 use lightning::ln::msgs::SocketAddress;
 use lightning::ln::types::ChannelId;
 use lightning::routing::gossip::NodeAlias;
+use lightning::routing::router::{Path, RouteHop};
 use lightning::util::persist::KVStoreSync;
 use lightning_background_processor::process_events_async;
+use lightning_types::features::{ChannelFeatures, NodeFeatures};
 use liquidity::{LSPS1Liquidity, LiquiditySource};
 use logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use payment::asynchronous::om_mailbox::OnionMessageMailbox;
@@ -649,6 +651,11 @@ impl Node {
 		}
 
 		if defer_chain_sync {
+			// Mark node as running and release the lock BEFORE the healing block,
+			// so stop() can be called to abort startup if needed.
+			*is_running_lock = true;
+			drop(is_running_lock);
+
 			// Stale monitor recovery: the background processor and peer connections are now
 			// running. We need to trigger a commitment round-trip on each channel to heal
 			// the stale monitors before processing any on-chain events.
@@ -664,6 +671,7 @@ impl Node {
 			let channel_manager = Arc::clone(&self.channel_manager);
 			let chain_monitor = Arc::clone(&self.chain_monitor);
 			let heal_logger = Arc::clone(&self.logger);
+			let mut stop_healing = self.stop_sender.subscribe();
 			self.runtime.block_on(async move {
 				// Record initial monitor update_ids to detect when they advance.
 				let initial_update_ids: Vec<_> = channel_manager
@@ -690,7 +698,13 @@ impl Node {
 				);
 
 				// Give peers time to connect and complete channel_reestablish.
-				tokio::time::sleep(Duration::from_secs(5)).await;
+				tokio::select! {
+					_ = stop_healing.changed() => {
+						log_info!(heal_logger, "Stale monitor recovery: cancelled by shutdown.");
+						return;
+					}
+					_ = tokio::time::sleep(Duration::from_secs(5)) => {}
+				}
 
 				// Send probes to force commitment round-trips on all channels.
 				// Probes work regardless of who the channel funder is.
@@ -704,12 +718,12 @@ impl Node {
 						None => continue,
 					};
 
-					let path = lightning::routing::router::Path {
-						hops: vec![lightning::routing::router::RouteHop {
+					let path = Path {
+						hops: vec![RouteHop {
 							pubkey: channel.counterparty.node_id,
-							node_features: lightning_types::features::NodeFeatures::empty(),
+							node_features: NodeFeatures::empty(),
 							short_channel_id: scid,
-							channel_features: lightning_types::features::ChannelFeatures::empty(),
+							channel_features: ChannelFeatures::empty(),
 							fee_msat: 1000,
 							cltv_expiry_delta: 144,
 							maybe_announced_channel: true,
@@ -809,14 +823,12 @@ impl Node {
 								.cloned()
 							{
 								if let Some(scid) = channel.short_channel_id {
-									let path = lightning::routing::router::Path {
-										hops: vec![lightning::routing::router::RouteHop {
+									let path = Path {
+										hops: vec![RouteHop {
 											pubkey: channel.counterparty.node_id,
-											node_features:
-												lightning_types::features::NodeFeatures::empty(),
+											node_features: NodeFeatures::empty(),
 											short_channel_id: scid,
-											channel_features:
-												lightning_types::features::ChannelFeatures::empty(),
+											channel_features: ChannelFeatures::empty(),
 											fee_msat: 1000,
 											cltv_expiry_delta: 144,
 											maybe_announced_channel: true,
@@ -835,11 +847,19 @@ impl Node {
 						}
 					}
 
-					tokio::time::sleep(poll_interval).await;
+					tokio::select! {
+						_ = stop_healing.changed() => {
+							log_info!(heal_logger, "Stale monitor recovery: cancelled by shutdown.");
+							break;
+						}
+						_ = tokio::time::sleep(poll_interval) => {}
+					}
 				}
 			});
 
 			self.spawn_chain_sync_task();
+			log_info!(self.logger, "Startup complete.");
+			return Ok(());
 		}
 
 		log_info!(self.logger, "Startup complete.");
