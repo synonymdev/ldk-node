@@ -2,6 +2,13 @@
 
 ## Bug Fixes
 
+- Fixed native crash (SIGABRT) during stale channel monitor recovery. The
+  `CounterpartyCommitmentSecrets` store was not reset when force-syncing the
+  monitor's `update_id`, causing `provide_secret()` to fail validation after
+  a few commitment round-trips. The failed update triggered a
+  `ChannelMonitorUpdateStatus` mode mismatch panic in the ChannelManager.
+  Fix: reset the secrets store in `force_set_latest_update_id` so new secrets
+  build a fresh, consistent tree. (rust-lightning fork change)
 - Added `BuildError::DangerousValue` variant to distinguish stale channel monitor failures from
   the 19 other `ReadFailed` causes. Apps can now catch this specific error to trigger one-shot
   recovery without false positives from unrelated I/O or deserialization errors.
@@ -9,7 +16,7 @@
   (e.g., after migration overwrote newer monitors with stale backup data). When enabled,
   force-syncs stale monitor update_ids during build, defers chain sync, and sends probes to
   trigger commitment round-trips that heal the monitor state. Depends on a patched rust-lightning
-  fork (`ben-kaufman/rust-lightning#fix/accept-stale-channel-monitors`).
+  fork (`ovitrif/rust-lightning#0.2.2-accept-stale-monitors-v2`).
 - Fixed cumulative change-address derivation index leak during fee estimation and dry-run
   transaction builds. BDK's `TxBuilder::finish()` advances the internal (change) keychain index
   each time it's called; repeated fee estimations would burn through change addresses without
