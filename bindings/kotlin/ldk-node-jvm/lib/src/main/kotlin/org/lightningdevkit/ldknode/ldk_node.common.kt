@@ -299,6 +299,8 @@ interface BuilderInterface {
     @Throws(BuildException::class)
     fun `buildWithVssStoreAndHeaderProvider`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `headerProvider`: VssHeaderProvider): Node
     
+    fun `setAcceptStaleChannelMonitors`(`accept`: kotlin.Boolean)
+    
     fun `setAddressType`(`addressType`: AddressType)
     
     fun `setAddressTypesToMonitor`(`addressTypesToMonitor`: List<AddressType>)

@@ -601,6 +601,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider() != 9090:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors() != 25727:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_address_type() != 647:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_address_types_to_monitor() != 23561:
@@ -1486,6 +1488,12 @@ _UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_header_pro
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_header_provider.restype = ctypes.c_void_p
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors.argtypes = (
+    ctypes.c_void_p,
+    ctypes.c_int8,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_builder_set_address_type.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2927,6 +2935,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_fixe
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_address_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_address_type.restype = ctypes.c_uint16
@@ -4642,6 +4653,8 @@ class BuilderProtocol(typing.Protocol):
         raise NotImplementedError
     def build_with_vss_store_and_header_provider(self, vss_url: "str",store_id: "str",header_provider: "VssHeaderProvider"):
         raise NotImplementedError
+    def set_accept_stale_channel_monitors(self, accept: "bool"):
+        raise NotImplementedError
     def set_address_type(self, address_type: "AddressType"):
         raise NotImplementedError
     def set_address_types_to_monitor(self, address_types_to_monitor: "typing.List[AddressType]"):
@@ -4795,6 +4808,17 @@ class Builder:
         _UniffiConverterString.lower(store_id),
         _UniffiConverterTypeVssHeaderProvider.lower(header_provider))
         )
+
+
+
+
+
+    def set_accept_stale_channel_monitors(self, accept: "bool") -> None:
+        _UniffiConverterBool.check_lower(accept)
+        
+        _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors,self._uniffi_clone_pointer(),
+        _UniffiConverterBool.lower(accept))
+
 
 
 
