@@ -123,18 +123,18 @@ check-cfg = [
 name = "payments"
 harness = false
 
-#[patch.crates-io]
-#lightning = { path = "../rust-lightning/lightning" }
-#lightning-types = { path = "../rust-lightning/lightning-types" }
-#lightning-invoice = { path = "../rust-lightning/lightning-invoice" }
-#lightning-net-tokio = { path = "../rust-lightning/lightning-net-tokio" }
-#lightning-persister = { path = "../rust-lightning/lightning-persister" }
-#lightning-background-processor = { path = "../rust-lightning/lightning-background-processor" }
-#lightning-rapid-gossip-sync = { path = "../rust-lightning/lightning-rapid-gossip-sync" }
-#lightning-block-sync = { path = "../rust-lightning/lightning-block-sync" }
-#lightning-transaction-sync = { path = "../rust-lightning/lightning-transaction-sync" }
-#lightning-liquidity = { path = "../rust-lightning/lightning-liquidity" }
-#lightning-macros = { path = "../rust-lightning/lightning-macros" }
+[patch.crates-io]
+lightning = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-types = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-invoice = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-net-tokio = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-persister = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-background-processor = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-rapid-gossip-sync = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-block-sync = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-transaction-sync = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-liquidity = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
+lightning-macros = { git = "https://github.com/ben-kaufman/rust-lightning", branch = "fix/accept-stale-channel-monitors" }
 
 #lightning = { git = "https://github.com/lightningdevkit/rust-lightning", branch = "main" }
 #lightning-types = { git = "https://github.com/lightningdevkit/rust-lightning", branch = "main" }

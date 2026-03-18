@@ -217,6 +217,7 @@ pub struct Node {
 	runtime_sync_intervals: Arc<RwLock<RuntimeSyncIntervals>>,
 	/// Shared RGS timestamp used by LocalGraphStore to persist the timestamp alongside the graph.
 	local_rgs_timestamp: Arc<AtomicU32>,
+	accept_stale_channel_monitors: bool,
 }
 
 impl Node {
@@ -255,24 +256,13 @@ impl Node {
 		// Set event queue for onchain event emission
 		self.chain_source.set_event_queue(Arc::clone(&self.event_queue));
 
-		// Spawn background task continuously syncing onchain, lightning, and fee rate cache.
-		let stop_sync_receiver = self.stop_sender.subscribe();
-		let chain_source = Arc::clone(&self.chain_source);
-		let sync_wallet = Arc::clone(&self.wallet);
-		let sync_cman = Arc::clone(&self.channel_manager);
-		let sync_cmon = Arc::clone(&self.chain_monitor);
-		let sync_sweeper = Arc::clone(&self.output_sweeper);
-		self.runtime.spawn_background_task(async move {
-			chain_source
-				.continuously_sync_wallets(
-					stop_sync_receiver,
-					sync_wallet,
-					sync_cman,
-					sync_cmon,
-					sync_sweeper,
-				)
-				.await;
-		});
+		// When recovering stale monitors, defer chain sync until after the background
+		// processor and peer connections have had time to heal the monitors via a
+		// commitment round-trip (triggered by fee update after timer_tick).
+		let defer_chain_sync = self.accept_stale_channel_monitors;
+		if !defer_chain_sync {
+			self.spawn_chain_sync_task();
+		}
 
 		if self.gossip_source.is_rgs() {
 			let gossip_source = Arc::clone(&self.gossip_source);
@@ -658,9 +648,223 @@ impl Node {
 			});
 		}
 
+		if defer_chain_sync {
+			// Stale monitor recovery: the background processor and peer connections are now
+			// running. We need to trigger a commitment round-trip on each channel to heal
+			// the stale monitors before processing any on-chain events.
+			log_info!(
+				self.logger,
+				"Stale monitor recovery: triggering commitment round-trips to heal monitors \
+				 before starting chain sync..."
+			);
+
+			// Trigger timer_tick to queue any fee updates (works for funder channels).
+			self.channel_manager.timer_tick_occurred();
+
+			let channel_manager = Arc::clone(&self.channel_manager);
+			let chain_monitor = Arc::clone(&self.chain_monitor);
+			let heal_logger = Arc::clone(&self.logger);
+			self.runtime.block_on(async move {
+				// Record initial monitor update_ids to detect when they advance.
+				let initial_update_ids: Vec<_> = channel_manager
+					.list_channels()
+					.iter()
+					.filter(|c| c.is_channel_ready)
+					.filter_map(|c| {
+						chain_monitor
+							.get_monitor(c.channel_id)
+							.ok()
+							.map(|m| (c.channel_id, m.get_latest_update_id()))
+					})
+					.collect();
+
+				if initial_update_ids.is_empty() {
+					log_info!(heal_logger, "Stale monitor recovery: no active channels to heal.");
+					return;
+				}
+
+				log_info!(
+					heal_logger,
+					"Stale monitor recovery: tracking {} channel(s) for healing.",
+					initial_update_ids.len()
+				);
+
+				// Give peers time to connect and complete channel_reestablish.
+				tokio::time::sleep(Duration::from_secs(5)).await;
+
+				// Send probes to force commitment round-trips on all channels.
+				// Probes work regardless of who the channel funder is.
+				for channel in channel_manager.list_channels() {
+					if !channel.is_channel_ready {
+						continue;
+					}
+
+					let scid = match channel.short_channel_id {
+						Some(scid) => scid,
+						None => continue,
+					};
+
+					let path = lightning::routing::router::Path {
+						hops: vec![lightning::routing::router::RouteHop {
+							pubkey: channel.counterparty.node_id,
+							node_features: lightning_types::features::NodeFeatures::empty(),
+							short_channel_id: scid,
+							channel_features: lightning_types::features::ChannelFeatures::empty(),
+							fee_msat: 1000,
+							cltv_expiry_delta: 144,
+							maybe_announced_channel: true,
+						}],
+						blinded_tail: None,
+					};
+
+					match channel_manager.send_probe(path) {
+						Ok(_) => {
+							log_info!(
+								heal_logger,
+								"Stale monitor recovery: sent probe on channel {}",
+								channel.channel_id
+							);
+						},
+						Err(e) => {
+							log_error!(
+								heal_logger,
+								"Stale monitor recovery: failed to send probe on channel {}: {:?}",
+								channel.channel_id,
+								e
+							);
+						},
+					}
+				}
+
+				// Poll monitor update_ids until all have advanced (healed) or timeout.
+				// Retry probes every 10s for channels that haven't healed yet (peer may
+				// have connected late).
+				let poll_interval = Duration::from_secs(1);
+				let probe_retry_interval = Duration::from_secs(10);
+				let max_wait = Duration::from_secs(60);
+				let start = tokio::time::Instant::now();
+				let mut last_probe_time = tokio::time::Instant::now();
+
+				loop {
+					if start.elapsed() >= max_wait {
+						let unhealed_count = initial_update_ids
+							.iter()
+							.filter(|(ch_id, initial_id)| {
+								chain_monitor
+									.get_monitor(*ch_id)
+									.ok()
+									.map(|m| m.get_latest_update_id() <= *initial_id)
+									.unwrap_or(false)
+							})
+							.count();
+
+						if unhealed_count == 0 {
+							log_info!(heal_logger, "Stale monitor recovery: all monitors healed.");
+						} else {
+							log_error!(
+								heal_logger,
+								"Stale monitor recovery: timeout reached with {} unhealed channel(s). \
+								 Proceeding with chain sync anyway.",
+								unhealed_count
+							);
+						}
+						break;
+					}
+
+					let all_healed = initial_update_ids.iter().all(|(ch_id, initial_id)| {
+						chain_monitor
+							.get_monitor(*ch_id)
+							.ok()
+							.map(|m| m.get_latest_update_id() > *initial_id)
+							.unwrap_or(true) // Channel gone = consider healed
+					});
+
+					if all_healed {
+						log_info!(
+							heal_logger,
+							"Stale monitor recovery: all monitors healed in {:.1}s.",
+							start.elapsed().as_secs_f64()
+						);
+						break;
+					}
+
+					// Retry probes on unhealed channels (peer may have connected since last attempt).
+					if last_probe_time.elapsed() >= probe_retry_interval {
+						last_probe_time = tokio::time::Instant::now();
+						for (ch_id, initial_id) in &initial_update_ids {
+							let healed = chain_monitor
+								.get_monitor(*ch_id)
+								.ok()
+								.map(|m| m.get_latest_update_id() > *initial_id)
+								.unwrap_or(true);
+							if healed {
+								continue;
+							}
+
+							// Find the channel details to construct a probe path.
+							if let Some(channel) = channel_manager
+								.list_channels()
+								.iter()
+								.find(|c| c.channel_id == *ch_id && c.is_channel_ready)
+								.cloned()
+							{
+								if let Some(scid) = channel.short_channel_id {
+									let path = lightning::routing::router::Path {
+										hops: vec![lightning::routing::router::RouteHop {
+											pubkey: channel.counterparty.node_id,
+											node_features:
+												lightning_types::features::NodeFeatures::empty(),
+											short_channel_id: scid,
+											channel_features:
+												lightning_types::features::ChannelFeatures::empty(),
+											fee_msat: 1000,
+											cltv_expiry_delta: 144,
+											maybe_announced_channel: true,
+										}],
+										blinded_tail: None,
+									};
+									if channel_manager.send_probe(path).is_ok() {
+										log_info!(
+											heal_logger,
+											"Stale monitor recovery: retried probe on channel {}",
+											ch_id
+										);
+									}
+								}
+							}
+						}
+					}
+
+					tokio::time::sleep(poll_interval).await;
+				}
+			});
+
+			self.spawn_chain_sync_task();
+		}
+
 		log_info!(self.logger, "Startup complete.");
 		*is_running_lock = true;
 		Ok(())
+	}
+
+	fn spawn_chain_sync_task(&self) {
+		let stop_sync_receiver = self.stop_sender.subscribe();
+		let chain_source = Arc::clone(&self.chain_source);
+		let sync_wallet = Arc::clone(&self.wallet);
+		let sync_cman = Arc::clone(&self.channel_manager);
+		let sync_cmon = Arc::clone(&self.chain_monitor);
+		let sync_sweeper = Arc::clone(&self.output_sweeper);
+		self.runtime.spawn_background_task(async move {
+			chain_source
+				.continuously_sync_wallets(
+					stop_sync_receiver,
+					sync_wallet,
+					sync_cman,
+					sync_cmon,
+					sync_sweeper,
+				)
+				.await;
+		});
 	}
 
 	/// Disconnects all peers, stops all running background tasks, and shuts down [`Node`].
