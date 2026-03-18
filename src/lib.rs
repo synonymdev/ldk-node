@@ -102,7 +102,7 @@ mod tx_broadcaster;
 mod types;
 mod wallet;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
@@ -728,14 +728,11 @@ impl Node {
 					)
 				};
 
-				// Deduplicate by counterparty — one payment per peer is enough to trigger
-				// a commitment round-trip. If a peer has multiple channels, each retry
-				// attempt may route through a different channel as outbound capacity shifts.
-				let mut seen_peers = HashSet::new();
+				// Send one healing payment per unhealed channel. Note: for multiple
+				// channels with the same peer, the router may pick the same channel for
+				// both payments. The retry loop gives multiple chances for the router to
+				// select different channels as scores and capacity shift between attempts.
 				for (_, counterparty_node_id, _) in &initial_update_ids {
-					if !seen_peers.insert(*counterparty_node_id) {
-						continue;
-					}
 					match send_heal_payment(*counterparty_node_id) {
 						Ok(_) => {
 							log_info!(
@@ -807,18 +804,16 @@ impl Node {
 						break;
 					}
 
-					// Retry healing payments for peers that still have unhealed channels.
-					// Dedup by peer — the router may pick a different channel on each retry.
+					// Retry healing payments for each unhealed channel.
 					if last_retry_time.elapsed() >= retry_interval {
 						last_retry_time = tokio::time::Instant::now();
-						let mut retried_peers = HashSet::new();
 						for (ch_id, counterparty_node_id, initial_id) in &initial_update_ids {
 							let healed = chain_monitor
 								.get_monitor(*ch_id)
 								.ok()
 								.map(|m| m.get_latest_update_id() > *initial_id)
 								.unwrap_or(true);
-							if healed || !retried_peers.insert(*counterparty_node_id) {
+							if healed {
 								continue;
 							}
 
@@ -845,12 +840,19 @@ impl Node {
 			// Clear the flag so subsequent start()/stop()/start() cycles don't re-trigger.
 			self.accept_stale_channel_monitors.store(false, Ordering::Relaxed);
 
-			// Only start chain sync if the node wasn't stopped during healing.
-			if *self.is_running.read().unwrap() {
-				self.spawn_chain_sync_task();
-				log_info!(self.logger, "Startup complete.");
-			} else {
-				log_info!(self.logger, "Node was stopped during stale monitor recovery.");
+			// Subscribe while holding the is_running read lock to prevent a TOCTOU
+			// race where stop() completes between our check and the subscribe — which
+			// would orphan the chain sync task (it would miss the stop signal).
+			{
+				let is_running = self.is_running.read().unwrap();
+				if *is_running {
+					let stop_receiver = self.stop_sender.subscribe();
+					drop(is_running);
+					self.spawn_chain_sync_task_with_receiver(stop_receiver);
+					log_info!(self.logger, "Startup complete.");
+				} else {
+					log_info!(self.logger, "Node was stopped during stale monitor recovery.");
+				}
 			}
 			return Ok(());
 		}
@@ -861,7 +863,13 @@ impl Node {
 	}
 
 	fn spawn_chain_sync_task(&self) {
-		let stop_sync_receiver = self.stop_sender.subscribe();
+		let stop_receiver = self.stop_sender.subscribe();
+		self.spawn_chain_sync_task_with_receiver(stop_receiver);
+	}
+
+	fn spawn_chain_sync_task_with_receiver(
+		&self, stop_sync_receiver: tokio::sync::watch::Receiver<()>,
+	) {
 		let chain_source = Arc::clone(&self.chain_source);
 		let sync_wallet = Arc::clone(&self.wallet);
 		let sync_cman = Arc::clone(&self.channel_manager);
