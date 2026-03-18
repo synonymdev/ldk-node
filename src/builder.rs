@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::default::Default;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Mutex, Once, RwLock};
 use std::time::SystemTime;
 use std::{fmt, fs};
@@ -2371,9 +2371,7 @@ fn build_with_store_internal(
 		async_payments_role,
 		runtime_sync_intervals: Arc::new(RwLock::new(RuntimeSyncIntervals::default())),
 		local_rgs_timestamp,
-		accept_stale_channel_monitors: std::sync::atomic::AtomicBool::new(
-			accept_stale_channel_monitors,
-		),
+		accept_stale_channel_monitors: AtomicBool::new(accept_stale_channel_monitors),
 	})
 }
 

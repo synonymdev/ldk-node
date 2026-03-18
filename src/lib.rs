@@ -102,7 +102,7 @@ mod tx_broadcaster;
 mod types;
 mod wallet;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
@@ -731,7 +731,7 @@ impl Node {
 				// Deduplicate by counterparty — one payment per peer is enough to trigger
 				// a commitment round-trip. If a peer has multiple channels, each retry
 				// attempt may route through a different channel as outbound capacity shifts.
-				let mut seen_peers = std::collections::HashSet::new();
+				let mut seen_peers = HashSet::new();
 				for (_, counterparty_node_id, _) in &initial_update_ids {
 					if !seen_peers.insert(*counterparty_node_id) {
 						continue;
@@ -811,7 +811,7 @@ impl Node {
 					// Dedup by peer — the router may pick a different channel on each retry.
 					if last_retry_time.elapsed() >= retry_interval {
 						last_retry_time = tokio::time::Instant::now();
-						let mut retried_peers = std::collections::HashSet::new();
+						let mut retried_peers = HashSet::new();
 						for (ch_id, counterparty_node_id, initial_id) in &initial_update_ids {
 							let healed = chain_monitor
 								.get_monitor(*ch_id)
