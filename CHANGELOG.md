@@ -2,6 +2,14 @@
 
 ## Bug Fixes
 
+- Added `BuildError::DangerousValue` variant to distinguish stale channel monitor failures from
+  the 19 other `ReadFailed` causes. Apps can now catch this specific error to trigger one-shot
+  recovery without false positives from unrelated I/O or deserialization errors.
+- Added `set_accept_stale_channel_monitors` builder API for recovery from channel monitor desync
+  (e.g., after migration overwrote newer monitors with stale backup data). When enabled,
+  force-syncs stale monitor update_ids during build, defers chain sync, and sends probes to
+  trigger commitment round-trips that heal the monitor state. Depends on a patched rust-lightning
+  fork (`ben-kaufman/rust-lightning#fix/accept-stale-channel-monitors`).
 - Fixed cumulative change-address derivation index leak during fee estimation and dry-run
   transaction builds. BDK's `TxBuilder::finish()` advances the internal (change) keychain index
   each time it's called; repeated fee estimations would burn through change addresses without
