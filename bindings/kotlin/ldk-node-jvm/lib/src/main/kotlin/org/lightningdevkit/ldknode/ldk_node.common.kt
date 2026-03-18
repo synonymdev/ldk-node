@@ -1296,6 +1296,8 @@ sealed class BuildException(message: String): kotlin.Exception(message) {
     
     class ReadFailed(message: String) : BuildException(message)
     
+    class DangerousValue(message: String) : BuildException(message)
+    
     class WriteFailed(message: String) : BuildException(message)
     
     class StoragePathAccessFailed(message: String) : BuildException(message)

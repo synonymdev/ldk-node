@@ -10314,13 +10314,14 @@ object FfiConverterTypeBuildError : FfiConverterRustBuffer<BuildException> {
             7 -> BuildException.InvalidNodeAlias(FfiConverterString.read(buf))
             8 -> BuildException.RuntimeSetupFailed(FfiConverterString.read(buf))
             9 -> BuildException.ReadFailed(FfiConverterString.read(buf))
-            10 -> BuildException.WriteFailed(FfiConverterString.read(buf))
-            11 -> BuildException.StoragePathAccessFailed(FfiConverterString.read(buf))
-            12 -> BuildException.KvStoreSetupFailed(FfiConverterString.read(buf))
-            13 -> BuildException.WalletSetupFailed(FfiConverterString.read(buf))
-            14 -> BuildException.LoggerSetupFailed(FfiConverterString.read(buf))
-            15 -> BuildException.NetworkMismatch(FfiConverterString.read(buf))
-            16 -> BuildException.AsyncPaymentsConfigMismatch(FfiConverterString.read(buf))
+            10 -> BuildException.DangerousValue(FfiConverterString.read(buf))
+            11 -> BuildException.WriteFailed(FfiConverterString.read(buf))
+            12 -> BuildException.StoragePathAccessFailed(FfiConverterString.read(buf))
+            13 -> BuildException.KvStoreSetupFailed(FfiConverterString.read(buf))
+            14 -> BuildException.WalletSetupFailed(FfiConverterString.read(buf))
+            15 -> BuildException.LoggerSetupFailed(FfiConverterString.read(buf))
+            16 -> BuildException.NetworkMismatch(FfiConverterString.read(buf))
+            17 -> BuildException.AsyncPaymentsConfigMismatch(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -10367,32 +10368,36 @@ object FfiConverterTypeBuildError : FfiConverterRustBuffer<BuildException> {
                 buf.putInt(9)
                 Unit
             }
-            is BuildException.WriteFailed -> {
+            is BuildException.DangerousValue -> {
                 buf.putInt(10)
                 Unit
             }
-            is BuildException.StoragePathAccessFailed -> {
+            is BuildException.WriteFailed -> {
                 buf.putInt(11)
                 Unit
             }
-            is BuildException.KvStoreSetupFailed -> {
+            is BuildException.StoragePathAccessFailed -> {
                 buf.putInt(12)
                 Unit
             }
-            is BuildException.WalletSetupFailed -> {
+            is BuildException.KvStoreSetupFailed -> {
                 buf.putInt(13)
                 Unit
             }
-            is BuildException.LoggerSetupFailed -> {
+            is BuildException.WalletSetupFailed -> {
                 buf.putInt(14)
                 Unit
             }
-            is BuildException.NetworkMismatch -> {
+            is BuildException.LoggerSetupFailed -> {
                 buf.putInt(15)
                 Unit
             }
-            is BuildException.AsyncPaymentsConfigMismatch -> {
+            is BuildException.NetworkMismatch -> {
                 buf.putInt(16)
+                Unit
+            }
+            is BuildException.AsyncPaymentsConfigMismatch -> {
+                buf.putInt(17)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

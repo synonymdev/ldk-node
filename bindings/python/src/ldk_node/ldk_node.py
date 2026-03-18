@@ -9811,6 +9811,11 @@ class BuildError:  # type: ignore
         def __repr__(self):
             return "BuildError.ReadFailed({})".format(repr(str(self)))
     _UniffiTempBuildError.ReadFailed = ReadFailed # type: ignore
+    class DangerousValue(_UniffiTempBuildError):
+
+        def __repr__(self):
+            return "BuildError.DangerousValue({})".format(repr(str(self)))
+    _UniffiTempBuildError.DangerousValue = DangerousValue # type: ignore
     class WriteFailed(_UniffiTempBuildError):
 
         def __repr__(self):
@@ -9892,30 +9897,34 @@ class _UniffiConverterTypeBuildError(_UniffiConverterRustBuffer):
                 _UniffiConverterString.read(buf),
             )
         if variant == 10:
-            return BuildError.WriteFailed(
+            return BuildError.DangerousValue(
                 _UniffiConverterString.read(buf),
             )
         if variant == 11:
-            return BuildError.StoragePathAccessFailed(
+            return BuildError.WriteFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 12:
-            return BuildError.KvStoreSetupFailed(
+            return BuildError.StoragePathAccessFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 13:
-            return BuildError.WalletSetupFailed(
+            return BuildError.KvStoreSetupFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 14:
-            return BuildError.LoggerSetupFailed(
+            return BuildError.WalletSetupFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 15:
-            return BuildError.NetworkMismatch(
+            return BuildError.LoggerSetupFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 16:
+            return BuildError.NetworkMismatch(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 17:
             return BuildError.AsyncPaymentsConfigMismatch(
                 _UniffiConverterString.read(buf),
             )
@@ -9940,6 +9949,8 @@ class _UniffiConverterTypeBuildError(_UniffiConverterRustBuffer):
         if isinstance(value, BuildError.RuntimeSetupFailed):
             return
         if isinstance(value, BuildError.ReadFailed):
+            return
+        if isinstance(value, BuildError.DangerousValue):
             return
         if isinstance(value, BuildError.WriteFailed):
             return
@@ -9976,20 +9987,22 @@ class _UniffiConverterTypeBuildError(_UniffiConverterRustBuffer):
             buf.write_i32(8)
         if isinstance(value, BuildError.ReadFailed):
             buf.write_i32(9)
-        if isinstance(value, BuildError.WriteFailed):
+        if isinstance(value, BuildError.DangerousValue):
             buf.write_i32(10)
-        if isinstance(value, BuildError.StoragePathAccessFailed):
+        if isinstance(value, BuildError.WriteFailed):
             buf.write_i32(11)
-        if isinstance(value, BuildError.KvStoreSetupFailed):
+        if isinstance(value, BuildError.StoragePathAccessFailed):
             buf.write_i32(12)
-        if isinstance(value, BuildError.WalletSetupFailed):
+        if isinstance(value, BuildError.KvStoreSetupFailed):
             buf.write_i32(13)
-        if isinstance(value, BuildError.LoggerSetupFailed):
+        if isinstance(value, BuildError.WalletSetupFailed):
             buf.write_i32(14)
-        if isinstance(value, BuildError.NetworkMismatch):
+        if isinstance(value, BuildError.LoggerSetupFailed):
             buf.write_i32(15)
-        if isinstance(value, BuildError.AsyncPaymentsConfigMismatch):
+        if isinstance(value, BuildError.NetworkMismatch):
             buf.write_i32(16)
+        if isinstance(value, BuildError.AsyncPaymentsConfigMismatch):
+            buf.write_i32(17)
 
 
 

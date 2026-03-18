@@ -202,6 +202,11 @@ pub enum BuildError {
 	///
 	/// [`KVStore`]: lightning::util::persist::KVStoreSync
 	ReadFailed,
+	/// The deserialized channel data would be dangerous to use, typically because
+	/// channel monitors are stale compared to the channel manager.
+	///
+	/// Use [`NodeBuilder::set_accept_stale_channel_monitors`] to recover.
+	DangerousValue,
 	/// We failed to write data to the [`KVStore`].
 	///
 	/// [`KVStore`]: lightning::util::persist::KVStoreSync
@@ -239,6 +244,11 @@ impl fmt::Display for BuildError {
 			},
 			Self::RuntimeSetupFailed => write!(f, "Failed to setup a runtime."),
 			Self::ReadFailed => write!(f, "Failed to read from store."),
+			Self::DangerousValue => write!(
+				f,
+				"Deserialized channel data is dangerous to use (stale channel monitors). \
+				 Use set_accept_stale_channel_monitors(true) to recover."
+			),
 			Self::WriteFailed => write!(f, "Failed to write to store."),
 			Self::StoragePathAccessFailed => write!(f, "Failed to access the given storage path."),
 			Self::KVStoreSetupFailed => write!(f, "Failed to setup KVStore."),
@@ -2012,8 +2022,19 @@ fn build_with_store_internal(
 			read_args.accept_stale_channel_monitors = accept_stale_channel_monitors;
 			let (_hash, channel_manager) =
 				<(BlockHash, ChannelManager)>::read(&mut reader, read_args).map_err(|e| {
-					log_error!(logger, "Failed to read channel manager from store: {}", e);
-					BuildError::ReadFailed
+					if matches!(e, lightning::ln::msgs::DecodeError::DangerousValue) {
+						log_error!(
+							logger,
+							"Channel manager deserialization returned DangerousValue \
+							 (stale channel monitors). \
+							 Use set_accept_stale_channel_monitors(true) to recover: {}",
+							e
+						);
+						BuildError::DangerousValue
+					} else {
+						log_error!(logger, "Failed to read channel manager from store: {}", e);
+						BuildError::ReadFailed
+					}
 				})?;
 			channel_manager
 		} else {
