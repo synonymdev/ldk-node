@@ -2371,7 +2371,9 @@ fn build_with_store_internal(
 		async_payments_role,
 		runtime_sync_intervals: Arc::new(RwLock::new(RuntimeSyncIntervals::default())),
 		local_rgs_timestamp,
-		accept_stale_channel_monitors,
+		accept_stale_channel_monitors: std::sync::atomic::AtomicBool::new(
+			accept_stale_channel_monitors,
+		),
 	})
 }
 

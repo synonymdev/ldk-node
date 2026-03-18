@@ -106,7 +106,7 @@ use std::collections::HashMap;
 use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -143,15 +143,15 @@ use lightning::events::bump_transaction::{Input, Wallet as LdkWallet};
 use lightning::impl_writeable_tlv_based;
 use lightning::ln::chan_utils::{make_funding_redeemscript, FUNDING_TRANSACTION_WITNESS_WEIGHT};
 use lightning::ln::channel_state::{ChannelDetails as LdkChannelDetails, ChannelShutdownState};
-use lightning::ln::channelmanager::PaymentId;
+use lightning::ln::channelmanager::{PaymentId, RecipientOnionFields, Retry};
 use lightning::ln::funding::SpliceContribution;
 use lightning::ln::msgs::SocketAddress;
 use lightning::ln::types::ChannelId;
 use lightning::routing::gossip::NodeAlias;
-use lightning::routing::router::{Path, RouteHop};
+use lightning::routing::router::{PaymentParameters, RouteParameters};
+use lightning::sign::EntropySource;
 use lightning::util::persist::KVStoreSync;
 use lightning_background_processor::process_events_async;
-use lightning_types::features::{ChannelFeatures, NodeFeatures};
 use liquidity::{LSPS1Liquidity, LiquiditySource};
 use logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use payment::asynchronous::om_mailbox::OnionMessageMailbox;
@@ -219,7 +219,7 @@ pub struct Node {
 	runtime_sync_intervals: Arc<RwLock<RuntimeSyncIntervals>>,
 	/// Shared RGS timestamp used by LocalGraphStore to persist the timestamp alongside the graph.
 	local_rgs_timestamp: Arc<AtomicU32>,
-	accept_stale_channel_monitors: bool,
+	accept_stale_channel_monitors: AtomicBool,
 }
 
 impl Node {
@@ -261,7 +261,7 @@ impl Node {
 		// When recovering stale monitors, defer chain sync until after the background
 		// processor and peer connections have had time to heal the monitors via a
 		// commitment round-trip (triggered by fee update after timer_tick).
-		let defer_chain_sync = self.accept_stale_channel_monitors;
+		let defer_chain_sync = self.accept_stale_channel_monitors.load(Ordering::Relaxed);
 		if !defer_chain_sync {
 			self.spawn_chain_sync_task();
 		}
@@ -670,6 +670,7 @@ impl Node {
 
 			let channel_manager = Arc::clone(&self.channel_manager);
 			let chain_monitor = Arc::clone(&self.chain_monitor);
+			let keys_manager = Arc::clone(&self.keys_manager);
 			let heal_logger = Arc::clone(&self.logger);
 			let mut stop_healing = self.stop_sender.subscribe();
 			self.runtime.block_on(async move {
@@ -679,10 +680,9 @@ impl Node {
 					.iter()
 					.filter(|c| c.is_channel_ready)
 					.filter_map(|c| {
-						chain_monitor
-							.get_monitor(c.channel_id)
-							.ok()
-							.map(|m| (c.channel_id, m.get_latest_update_id()))
+						chain_monitor.get_monitor(c.channel_id).ok().map(|m| {
+							(c.channel_id, c.counterparty.node_id, m.get_latest_update_id())
+						})
 					})
 					.collect();
 
@@ -706,49 +706,39 @@ impl Node {
 					_ = tokio::time::sleep(Duration::from_secs(5)) => {}
 				}
 
-				// Build a single-hop probe path to the given counterparty.
-				let build_probe_path =
-					|counterparty_node_id: bitcoin::secp256k1::PublicKey, scid: u64| -> Path {
-						Path {
-							hops: vec![RouteHop {
-								pubkey: counterparty_node_id,
-								node_features: NodeFeatures::empty(),
-								short_channel_id: scid,
-								channel_features: ChannelFeatures::empty(),
-								fee_msat: 1000,
-								cltv_expiry_delta: 144,
-								maybe_announced_channel: true,
-							}],
-							blinded_tail: None,
-						}
-					};
+				// Send 1-sat keysend payments to trigger commitment round-trips.
+				// We use real payments (not probes) because LDK rejects single-hop probes.
+				// The HTLC add/fail cycle triggers commitment_signed exchanges that heal
+				// the monitor. Cost: 1 sat per counterparty if keysend succeeds.
+				let send_heal_payment = |node_id: bitcoin::secp256k1::PublicKey| {
+					let payment_id = PaymentId(keys_manager.get_secure_random_bytes());
+					let route_params = RouteParameters::from_payment_params_and_value(
+						PaymentParameters::from_node_id(node_id, 144),
+						1_000, // 1 sat
+					);
+					channel_manager.send_spontaneous_payment(
+						None,
+						RecipientOnionFields::spontaneous_empty(),
+						payment_id,
+						route_params,
+						Retry::Attempts(0),
+					)
+				};
 
-				// Send probes to force commitment round-trips on all channels.
-				// Probes work regardless of who the channel funder is.
-				for channel in channel_manager.list_channels() {
-					if !channel.is_channel_ready {
-						continue;
-					}
-
-					let scid = match channel.short_channel_id {
-						Some(scid) => scid,
-						None => continue,
-					};
-
-					let path = build_probe_path(channel.counterparty.node_id, scid);
-					match channel_manager.send_probe(path) {
+				for (_, counterparty_node_id, _) in &initial_update_ids {
+					match send_heal_payment(*counterparty_node_id) {
 						Ok(_) => {
 							log_info!(
 								heal_logger,
-								"Stale monitor recovery: sent probe on channel {}",
-								channel.channel_id
+								"Stale monitor recovery: sent healing payment to {}",
+								counterparty_node_id
 							);
 						},
 						Err(e) => {
 							log_error!(
 								heal_logger,
-								"Stale monitor recovery: failed to send probe on channel {}: {:?}",
-								channel.channel_id,
+								"Stale monitor recovery: failed to send healing payment to {}: {:?}",
+								counterparty_node_id,
 								e
 							);
 						},
@@ -756,19 +746,19 @@ impl Node {
 				}
 
 				// Poll monitor update_ids until all have advanced (healed) or timeout.
-				// Retry probes every 10s for channels that haven't healed yet (peer may
-				// have connected late).
+				// Retry payments every 10s for channels that haven't healed yet (peer
+				// may have connected late).
 				let poll_interval = Duration::from_secs(1);
-				let probe_retry_interval = Duration::from_secs(10);
+				let retry_interval = Duration::from_secs(10);
 				let max_wait = Duration::from_secs(60);
 				let start = tokio::time::Instant::now();
-				let mut last_probe_time = tokio::time::Instant::now();
+				let mut last_retry_time = tokio::time::Instant::now();
 
 				loop {
 					if start.elapsed() >= max_wait {
 						let unhealed_count = initial_update_ids
 							.iter()
-							.filter(|(ch_id, initial_id)| {
+							.filter(|(ch_id, _, initial_id)| {
 								chain_monitor
 									.get_monitor(*ch_id)
 									.ok()
@@ -790,7 +780,7 @@ impl Node {
 						break;
 					}
 
-					let all_healed = initial_update_ids.iter().all(|(ch_id, initial_id)| {
+					let all_healed = initial_update_ids.iter().all(|(ch_id, _, initial_id)| {
 						chain_monitor
 							.get_monitor(*ch_id)
 							.ok()
@@ -807,10 +797,10 @@ impl Node {
 						break;
 					}
 
-					// Retry probes on unhealed channels (peer may have connected since last attempt).
-					if last_probe_time.elapsed() >= probe_retry_interval {
-						last_probe_time = tokio::time::Instant::now();
-						for (ch_id, initial_id) in &initial_update_ids {
+					// Retry healing payments for unhealed channels.
+					if last_retry_time.elapsed() >= retry_interval {
+						last_retry_time = tokio::time::Instant::now();
+						for (ch_id, counterparty_node_id, initial_id) in &initial_update_ids {
 							let healed = chain_monitor
 								.get_monitor(*ch_id)
 								.ok()
@@ -820,23 +810,12 @@ impl Node {
 								continue;
 							}
 
-							// Find the channel details to construct and send a probe.
-							if let Some(channel) = channel_manager
-								.list_channels()
-								.iter()
-								.find(|c| c.channel_id == *ch_id && c.is_channel_ready)
-								.cloned()
-							{
-								if let Some(scid) = channel.short_channel_id {
-									let path = build_probe_path(channel.counterparty.node_id, scid);
-									if channel_manager.send_probe(path).is_ok() {
-										log_info!(
-											heal_logger,
-											"Stale monitor recovery: retried probe on channel {}",
-											ch_id
-										);
-									}
-								}
+							if send_heal_payment(*counterparty_node_id).is_ok() {
+								log_info!(
+									heal_logger,
+									"Stale monitor recovery: retried healing payment for channel {}",
+									ch_id
+								);
 							}
 						}
 					}
@@ -851,8 +830,16 @@ impl Node {
 				}
 			});
 
-			self.spawn_chain_sync_task();
-			log_info!(self.logger, "Startup complete.");
+			// Clear the flag so subsequent start()/stop()/start() cycles don't re-trigger.
+			self.accept_stale_channel_monitors.store(false, Ordering::Relaxed);
+
+			// Only start chain sync if the node wasn't stopped during healing.
+			if *self.is_running.read().unwrap() {
+				self.spawn_chain_sync_task();
+				log_info!(self.logger, "Startup complete.");
+			} else {
+				log_info!(self.logger, "Node was stopped during stale monitor recovery.");
+			}
 			return Ok(());
 		}
 
