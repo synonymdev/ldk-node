@@ -706,6 +706,23 @@ impl Node {
 					_ = tokio::time::sleep(Duration::from_secs(5)) => {}
 				}
 
+				// Build a single-hop probe path to the given counterparty.
+				let build_probe_path =
+					|counterparty_node_id: bitcoin::secp256k1::PublicKey, scid: u64| -> Path {
+						Path {
+							hops: vec![RouteHop {
+								pubkey: counterparty_node_id,
+								node_features: NodeFeatures::empty(),
+								short_channel_id: scid,
+								channel_features: ChannelFeatures::empty(),
+								fee_msat: 1000,
+								cltv_expiry_delta: 144,
+								maybe_announced_channel: true,
+							}],
+							blinded_tail: None,
+						}
+					};
+
 				// Send probes to force commitment round-trips on all channels.
 				// Probes work regardless of who the channel funder is.
 				for channel in channel_manager.list_channels() {
@@ -718,19 +735,7 @@ impl Node {
 						None => continue,
 					};
 
-					let path = Path {
-						hops: vec![RouteHop {
-							pubkey: channel.counterparty.node_id,
-							node_features: NodeFeatures::empty(),
-							short_channel_id: scid,
-							channel_features: ChannelFeatures::empty(),
-							fee_msat: 1000,
-							cltv_expiry_delta: 144,
-							maybe_announced_channel: true,
-						}],
-						blinded_tail: None,
-					};
-
+					let path = build_probe_path(channel.counterparty.node_id, scid);
 					match channel_manager.send_probe(path) {
 						Ok(_) => {
 							log_info!(
@@ -815,7 +820,7 @@ impl Node {
 								continue;
 							}
 
-							// Find the channel details to construct a probe path.
+							// Find the channel details to construct and send a probe.
 							if let Some(channel) = channel_manager
 								.list_channels()
 								.iter()
@@ -823,18 +828,7 @@ impl Node {
 								.cloned()
 							{
 								if let Some(scid) = channel.short_channel_id {
-									let path = Path {
-										hops: vec![RouteHop {
-											pubkey: channel.counterparty.node_id,
-											node_features: NodeFeatures::empty(),
-											short_channel_id: scid,
-											channel_features: ChannelFeatures::empty(),
-											fee_msat: 1000,
-											cltv_expiry_delta: 144,
-											maybe_announced_channel: true,
-										}],
-										blinded_tail: None,
-									};
+									let path = build_probe_path(channel.counterparty.node_id, scid);
 									if channel_manager.send_probe(path).is_ok() {
 										log_info!(
 											heal_logger,
