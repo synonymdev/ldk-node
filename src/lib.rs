@@ -728,7 +728,14 @@ impl Node {
 					)
 				};
 
+				// Deduplicate by counterparty — one payment per peer is enough to trigger
+				// a commitment round-trip. If a peer has multiple channels, each retry
+				// attempt may route through a different channel as outbound capacity shifts.
+				let mut seen_peers = std::collections::HashSet::new();
 				for (_, counterparty_node_id, _) in &initial_update_ids {
+					if !seen_peers.insert(*counterparty_node_id) {
+						continue;
+					}
 					match send_heal_payment(*counterparty_node_id) {
 						Ok(_) => {
 							log_info!(
@@ -800,16 +807,18 @@ impl Node {
 						break;
 					}
 
-					// Retry healing payments for unhealed channels.
+					// Retry healing payments for peers that still have unhealed channels.
+					// Dedup by peer — the router may pick a different channel on each retry.
 					if last_retry_time.elapsed() >= retry_interval {
 						last_retry_time = tokio::time::Instant::now();
+						let mut retried_peers = std::collections::HashSet::new();
 						for (ch_id, counterparty_node_id, initial_id) in &initial_update_ids {
 							let healed = chain_monitor
 								.get_monitor(*ch_id)
 								.ok()
 								.map(|m| m.get_latest_update_id() > *initial_id)
 								.unwrap_or(true);
-							if healed {
+							if healed || !retried_peers.insert(*counterparty_node_id) {
 								continue;
 							}
 
