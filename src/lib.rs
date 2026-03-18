@@ -712,10 +712,13 @@ impl Node {
 				// the monitor. Cost: 1 sat per counterparty if keysend succeeds.
 				let send_heal_payment = |node_id: bitcoin::secp256k1::PublicKey| {
 					let payment_id = PaymentId(keys_manager.get_secure_random_bytes());
-					let route_params = RouteParameters::from_payment_params_and_value(
+					let mut route_params = RouteParameters::from_payment_params_and_value(
 						PaymentParameters::from_node_id(node_id, 144),
 						1_000, // 1 sat
 					);
+					// Force direct route only — prevent routing through a different channel
+					// which would heal the wrong monitor.
+					route_params.max_total_routing_fee_msat = Some(0);
 					channel_manager.send_spontaneous_payment(
 						None,
 						RecipientOnionFields::spontaneous_empty(),
