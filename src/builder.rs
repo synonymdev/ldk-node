@@ -1479,13 +1479,13 @@ where
 						}
 					},
 					Err(e) => {
-						log_error!(
+						log_warn!(
 							logger,
-							"Failed to deserialize existing monitor {}, refusing migration write to avoid overwriting potentially newer state: {:?}",
+							"Failed to deserialize existing monitor {}, skipping migration to avoid overwriting potentially newer state: {:?}",
 							monitor_key,
 							e
 						);
-						return Err(BuildError::ReadFailed);
+						false
 					},
 				}
 			},
@@ -2743,9 +2743,11 @@ mod tests {
 	}
 
 	#[test]
-	fn test_migration_fails_on_corrupt_existing_data() {
+	fn test_migration_skips_on_corrupt_existing_data() {
 		let (monitor_bytes, monitor_key, _, seed) = create_test_monitor_bytes();
 		let (store, keys_manager, logger, runtime) = make_test_deps(&seed);
+
+		let corrupt_data = vec![0xFF, 0xFE, 0xFD, 0xFC];
 
 		// Pre-populate the store with garbage data for this monitor key.
 		runtime
@@ -2754,18 +2756,29 @@ mod tests {
 				CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
 				CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
 				&monitor_key,
-				vec![0xFF, 0xFE, 0xFD, 0xFC],
+				corrupt_data.clone(),
 			))
 			.unwrap();
 
-		// Migration should fail because the existing data can't be deserialized
-		// (fail-closed to avoid overwriting potentially newer state).
+		// Migration should skip (not fail) when existing data can't be deserialized,
+		// to avoid blocking node startup while still not overwriting existing state.
 		let migration =
 			ChannelDataMigration { channel_manager: None, channel_monitors: vec![monitor_bytes] };
 
 		let result =
 			apply_channel_data_migration(&migration, &store, &keys_manager, &logger, &runtime);
-		assert_eq!(result, Err(BuildError::ReadFailed));
+		assert_eq!(result, Ok(()));
+
+		// Verify the corrupt data was NOT overwritten — existing state preserved.
+		let stored = runtime
+			.block_on(KVStore::read(
+				&*store,
+				CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+				CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
+				&monitor_key,
+			))
+			.unwrap();
+		assert_eq!(stored, corrupt_data);
 	}
 
 	#[test]
