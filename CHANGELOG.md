@@ -1,7 +1,32 @@
-# 0.7.0-rc.33 (Synonym Fork)
+# 0.7.0-rc.36 (Synonym Fork)
 
 ## Bug Fixes
 
+- Fixed orphaned channel migration blocking node startup when the existing monitor
+  in the KV store can't be deserialized (e.g., `UnknownVersion` from a newer LDK
+  version). The migration now skips writing and lets the node start normally,
+  preserving the existing monitor data.
+- Fixed HTLC timeout force-close during stale monitor recovery. The healing keysend
+  created HTLCs with a stale `cltv_expiry` (based on the ChannelManager's outdated
+  best block height for users offline >24h). When chain sync caught up, LDK
+  force-closed the channel (HTLCsTimedOut). Fix: sync the chain tip before sending
+  healing payments so HTLCs get a valid CLTV expiry. If sync fails, skip the keysend
+  to avoid the stale-CLTV force-close.
+- Fixed native crash (SIGABRT) during stale channel monitor recovery. The
+  `CounterpartyCommitmentSecrets` store was not reset when force-syncing the
+  monitor's `update_id`, causing `provide_secret()` to fail validation after
+  a few commitment round-trips. The failed update triggered a
+  `ChannelMonitorUpdateStatus` mode mismatch panic in the ChannelManager.
+  Fix: reset the secrets store in `force_set_latest_update_id` so new secrets
+  build a fresh, consistent tree. (rust-lightning fork change)
+- Added `BuildError::DangerousValue` variant to distinguish stale channel monitor failures from
+  the 19 other `ReadFailed` causes. Apps can now catch this specific error to trigger one-shot
+  recovery without false positives from unrelated I/O or deserialization errors.
+- Added `set_accept_stale_channel_monitors` builder API for recovery from channel monitor desync
+  (e.g., after migration overwrote newer monitors with stale backup data). When enabled,
+  force-syncs stale monitor update_ids during build, defers chain sync, and sends probes to
+  trigger commitment round-trips that heal the monitor state. Depends on a patched rust-lightning
+  fork (`synonymdev/rust-lightning#0.2.2-accept-stale-monitors`).
 - Fixed cumulative change-address derivation index leak during fee estimation and dry-run
   transaction builds. BDK's `TxBuilder::finish()` advances the internal (change) keychain index
   each time it's called; repeated fee estimations would burn through change addresses without

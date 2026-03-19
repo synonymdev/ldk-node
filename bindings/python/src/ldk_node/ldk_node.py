@@ -601,6 +601,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider() != 9090:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors() != 25727:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_address_type() != 647:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_address_types_to_monitor() != 23561:
@@ -1486,6 +1488,12 @@ _UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_header_pro
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_header_provider.restype = ctypes.c_void_p
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors.argtypes = (
+    ctypes.c_void_p,
+    ctypes.c_int8,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_builder_set_address_type.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2927,6 +2935,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_fixe
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_address_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_address_type.restype = ctypes.c_uint16
@@ -4642,6 +4653,8 @@ class BuilderProtocol(typing.Protocol):
         raise NotImplementedError
     def build_with_vss_store_and_header_provider(self, vss_url: "str",store_id: "str",header_provider: "VssHeaderProvider"):
         raise NotImplementedError
+    def set_accept_stale_channel_monitors(self, accept: "bool"):
+        raise NotImplementedError
     def set_address_type(self, address_type: "AddressType"):
         raise NotImplementedError
     def set_address_types_to_monitor(self, address_types_to_monitor: "typing.List[AddressType]"):
@@ -4795,6 +4808,17 @@ class Builder:
         _UniffiConverterString.lower(store_id),
         _UniffiConverterTypeVssHeaderProvider.lower(header_provider))
         )
+
+
+
+
+
+    def set_accept_stale_channel_monitors(self, accept: "bool") -> None:
+        _UniffiConverterBool.check_lower(accept)
+        
+        _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors,self._uniffi_clone_pointer(),
+        _UniffiConverterBool.lower(accept))
+
 
 
 
@@ -9787,6 +9811,11 @@ class BuildError:  # type: ignore
         def __repr__(self):
             return "BuildError.ReadFailed({})".format(repr(str(self)))
     _UniffiTempBuildError.ReadFailed = ReadFailed # type: ignore
+    class DangerousValue(_UniffiTempBuildError):
+
+        def __repr__(self):
+            return "BuildError.DangerousValue({})".format(repr(str(self)))
+    _UniffiTempBuildError.DangerousValue = DangerousValue # type: ignore
     class WriteFailed(_UniffiTempBuildError):
 
         def __repr__(self):
@@ -9868,30 +9897,34 @@ class _UniffiConverterTypeBuildError(_UniffiConverterRustBuffer):
                 _UniffiConverterString.read(buf),
             )
         if variant == 10:
-            return BuildError.WriteFailed(
+            return BuildError.DangerousValue(
                 _UniffiConverterString.read(buf),
             )
         if variant == 11:
-            return BuildError.StoragePathAccessFailed(
+            return BuildError.WriteFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 12:
-            return BuildError.KvStoreSetupFailed(
+            return BuildError.StoragePathAccessFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 13:
-            return BuildError.WalletSetupFailed(
+            return BuildError.KvStoreSetupFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 14:
-            return BuildError.LoggerSetupFailed(
+            return BuildError.WalletSetupFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 15:
-            return BuildError.NetworkMismatch(
+            return BuildError.LoggerSetupFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 16:
+            return BuildError.NetworkMismatch(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 17:
             return BuildError.AsyncPaymentsConfigMismatch(
                 _UniffiConverterString.read(buf),
             )
@@ -9916,6 +9949,8 @@ class _UniffiConverterTypeBuildError(_UniffiConverterRustBuffer):
         if isinstance(value, BuildError.RuntimeSetupFailed):
             return
         if isinstance(value, BuildError.ReadFailed):
+            return
+        if isinstance(value, BuildError.DangerousValue):
             return
         if isinstance(value, BuildError.WriteFailed):
             return
@@ -9952,20 +9987,22 @@ class _UniffiConverterTypeBuildError(_UniffiConverterRustBuffer):
             buf.write_i32(8)
         if isinstance(value, BuildError.ReadFailed):
             buf.write_i32(9)
-        if isinstance(value, BuildError.WriteFailed):
+        if isinstance(value, BuildError.DangerousValue):
             buf.write_i32(10)
-        if isinstance(value, BuildError.StoragePathAccessFailed):
+        if isinstance(value, BuildError.WriteFailed):
             buf.write_i32(11)
-        if isinstance(value, BuildError.KvStoreSetupFailed):
+        if isinstance(value, BuildError.StoragePathAccessFailed):
             buf.write_i32(12)
-        if isinstance(value, BuildError.WalletSetupFailed):
+        if isinstance(value, BuildError.KvStoreSetupFailed):
             buf.write_i32(13)
-        if isinstance(value, BuildError.LoggerSetupFailed):
+        if isinstance(value, BuildError.WalletSetupFailed):
             buf.write_i32(14)
-        if isinstance(value, BuildError.NetworkMismatch):
+        if isinstance(value, BuildError.LoggerSetupFailed):
             buf.write_i32(15)
-        if isinstance(value, BuildError.AsyncPaymentsConfigMismatch):
+        if isinstance(value, BuildError.NetworkMismatch):
             buf.write_i32(16)
+        if isinstance(value, BuildError.AsyncPaymentsConfigMismatch):
+            buf.write_i32(17)
 
 
 

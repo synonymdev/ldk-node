@@ -1567,6 +1567,8 @@ public protocol BuilderProtocol: AnyObject {
 
     func buildWithVssStoreAndHeaderProvider(vssUrl: String, storeId: String, headerProvider: VssHeaderProvider) throws -> Node
 
+    func setAcceptStaleChannelMonitors(accept: Bool)
+
     func setAddressType(addressType: AddressType)
 
     func setAddressTypesToMonitor(addressTypesToMonitor: [AddressType])
@@ -1717,6 +1719,13 @@ open class Builder:
                                                                                        FfiConverterString.lower(storeId),
                                                                                        FfiConverterTypeVssHeaderProvider.lower(headerProvider), $0)
         })
+    }
+
+    open func setAcceptStaleChannelMonitors(accept: Bool) {
+        try! rustCall {
+            uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors(self.uniffiClonePointer(),
+                                                                                FfiConverterBool.lower(accept), $0)
+        }
     }
 
     open func setAddressType(addressType: AddressType) {
@@ -7396,6 +7405,8 @@ public enum BuildError {
 
     case ReadFailed(message: String)
 
+    case DangerousValue(message: String)
+
     case WriteFailed(message: String)
 
     case StoragePathAccessFailed(message: String)
@@ -7456,31 +7467,35 @@ public struct FfiConverterTypeBuildError: FfiConverterRustBuffer {
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 10: return try .WriteFailed(
+        case 10: return try .DangerousValue(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 11: return try .StoragePathAccessFailed(
+        case 11: return try .WriteFailed(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 12: return try .KvStoreSetupFailed(
+        case 12: return try .StoragePathAccessFailed(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 13: return try .WalletSetupFailed(
+        case 13: return try .KvStoreSetupFailed(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 14: return try .LoggerSetupFailed(
+        case 14: return try .WalletSetupFailed(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 15: return try .NetworkMismatch(
+        case 15: return try .LoggerSetupFailed(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 16: return try .AsyncPaymentsConfigMismatch(
+        case 16: return try .NetworkMismatch(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 17: return try .AsyncPaymentsConfigMismatch(
                 message: FfiConverterString.read(from: &buf)
             )
 
@@ -7508,20 +7523,22 @@ public struct FfiConverterTypeBuildError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(8))
         case .ReadFailed(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(9))
-        case .WriteFailed(_ /* message is ignored*/ ):
+        case .DangerousValue(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(10))
-        case .StoragePathAccessFailed(_ /* message is ignored*/ ):
+        case .WriteFailed(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(11))
-        case .KvStoreSetupFailed(_ /* message is ignored*/ ):
+        case .StoragePathAccessFailed(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(12))
-        case .WalletSetupFailed(_ /* message is ignored*/ ):
+        case .KvStoreSetupFailed(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(13))
-        case .LoggerSetupFailed(_ /* message is ignored*/ ):
+        case .WalletSetupFailed(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(14))
-        case .NetworkMismatch(_ /* message is ignored*/ ):
+        case .LoggerSetupFailed(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(15))
-        case .AsyncPaymentsConfigMismatch(_ /* message is ignored*/ ):
+        case .NetworkMismatch(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(16))
+        case .AsyncPaymentsConfigMismatch(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(17))
         }
     }
 }
@@ -12361,6 +12378,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider() != 9090 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors() != 25727 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_builder_set_address_type() != 647 {

@@ -299,6 +299,8 @@ interface BuilderInterface {
     @Throws(BuildException::class)
     fun `buildWithVssStoreAndHeaderProvider`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `headerProvider`: VssHeaderProvider): Node
     
+    fun `setAcceptStaleChannelMonitors`(`accept`: kotlin.Boolean)
+    
     fun `setAddressType`(`addressType`: AddressType)
     
     fun `setAddressTypesToMonitor`(`addressTypesToMonitor`: List<AddressType>)
@@ -1293,6 +1295,8 @@ sealed class BuildException(message: String): kotlin.Exception(message) {
     class RuntimeSetupFailed(message: String) : BuildException(message)
     
     class ReadFailed(message: String) : BuildException(message)
+    
+    class DangerousValue(message: String) : BuildException(message)
     
     class WriteFailed(message: String) : BuildException(message)
     
