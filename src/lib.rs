@@ -671,6 +671,8 @@ impl Node {
 			let channel_manager = Arc::clone(&self.channel_manager);
 			let chain_monitor = Arc::clone(&self.chain_monitor);
 			let keys_manager = Arc::clone(&self.keys_manager);
+			let chain_source = Arc::clone(&self.chain_source);
+			let sync_sweeper = Arc::clone(&self.output_sweeper);
 			let heal_logger = Arc::clone(&self.logger);
 			let mut stop_healing = self.stop_sender.subscribe();
 			self.runtime.block_on(async move {
@@ -706,10 +708,39 @@ impl Node {
 					_ = tokio::time::sleep(Duration::from_secs(5)) => {}
 				}
 
+				// Sync chain tip before sending healing payments. This updates the
+				// ChannelManager's best block height so the keysend HTLC gets a current
+				// CLTV expiry. Without this, users offline >24h would get an already-expired
+				// HTLC that triggers a force-close when chain sync later catches up.
+				log_info!(heal_logger, "Stale monitor recovery: syncing chain tip...");
+				let chain_synced = match chain_source
+					.sync_lightning_wallet(
+						Arc::clone(&channel_manager),
+						Arc::clone(&chain_monitor),
+						Arc::clone(&sync_sweeper),
+					)
+					.await
+				{
+					Ok(()) => {
+						log_info!(heal_logger, "Stale monitor recovery: chain tip synced.");
+						true
+					},
+					Err(e) => {
+						log_error!(
+							heal_logger,
+							"Stale monitor recovery: chain sync failed: {}. \
+							 Skipping healing payments to avoid stale CLTV.",
+							e
+						);
+						false
+					},
+				};
+
 				// Send 1-sat keysend payments to trigger commitment round-trips.
 				// We use real payments (not probes) because LDK rejects single-hop probes.
 				// The HTLC add/fail cycle triggers commitment_signed exchanges that heal
 				// the monitor. Cost: 1 sat per counterparty if keysend succeeds.
+				// Only send if chain sync succeeded — stale CLTV would force-close.
 				let send_heal_payment = |node_id: bitcoin::secp256k1::PublicKey| {
 					let payment_id = PaymentId(keys_manager.get_secure_random_bytes());
 					let mut route_params = RouteParameters::from_payment_params_and_value(
@@ -728,29 +759,31 @@ impl Node {
 					)
 				};
 
-				// Send one healing payment per unhealed channel. Note: for multiple
-				// channels with the same peer, the router may pick the same channel for
-				// both payments. The retry loop gives multiple chances for the router to
-				// select different channels as scores and capacity shift between attempts.
-				for (_, counterparty_node_id, _) in &initial_update_ids {
-					match send_heal_payment(*counterparty_node_id) {
-						Ok(_) => {
-							log_info!(
-								heal_logger,
-								"Stale monitor recovery: sent healing payment to {}",
-								counterparty_node_id
-							);
-						},
-						Err(e) => {
-							log_error!(
+				if chain_synced {
+					// Send one healing payment per unhealed channel. Note: for multiple
+					// channels with the same peer, the router may pick the same channel for
+					// both payments. The retry loop gives multiple chances for the router to
+					// select different channels as scores and capacity shift between attempts.
+					for (_, counterparty_node_id, _) in &initial_update_ids {
+						match send_heal_payment(*counterparty_node_id) {
+							Ok(_) => {
+								log_info!(
+									heal_logger,
+									"Stale monitor recovery: sent healing payment to {}",
+									counterparty_node_id
+								);
+							},
+							Err(e) => {
+								log_error!(
 								heal_logger,
 								"Stale monitor recovery: failed to send healing payment to {}: {:?}",
 								counterparty_node_id,
 								e
 							);
-						},
+							},
+						}
 					}
-				}
+				} // chain_synced
 
 				// Poll monitor update_ids until all have advanced (healed) or timeout.
 				// Retry payments every 10s for channels that haven't healed yet (peer
@@ -804,8 +837,8 @@ impl Node {
 						break;
 					}
 
-					// Retry healing payments for each unhealed channel.
-					if last_retry_time.elapsed() >= retry_interval {
+					// Retry healing payments for each unhealed channel (only if chain synced).
+					if chain_synced && last_retry_time.elapsed() >= retry_interval {
 						last_retry_time = tokio::time::Instant::now();
 						for (ch_id, counterparty_node_id, initial_id) in &initial_update_ids {
 							let healed = chain_monitor
