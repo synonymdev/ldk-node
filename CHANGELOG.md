@@ -26,7 +26,7 @@
   (e.g., after migration overwrote newer monitors with stale backup data). When enabled,
   force-syncs stale monitor update_ids during build, defers chain sync, and sends probes to
   trigger commitment round-trips that heal the monitor state. Depends on a patched rust-lightning
-  fork (`ovitrif/rust-lightning#0.2.2-accept-stale-monitors-v2`).
+  fork (`synonymdev/rust-lightning#0.2.2-accept-stale-monitors`).
 - Fixed cumulative change-address derivation index leak during fee estimation and dry-run
   transaction builds. BDK's `TxBuilder::finish()` advances the internal (change) keychain index
   each time it's called; repeated fee estimations would burn through change addresses without
