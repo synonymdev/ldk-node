@@ -1520,6 +1520,8 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1971,6 +1973,11 @@ internal interface UniffiLib : Library {
         `headerProvider`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Pointer?
+    fun uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors(
+        `ptr`: Pointer?,
+        `accept`: Byte,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_method_builder_set_address_type(
         `ptr`: Pointer?,
         `addressType`: RustBufferByValue,
@@ -3123,6 +3130,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider(
     ): Short
+    fun uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors(
+    ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_address_type(
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_address_types_to_monitor(
@@ -3612,6 +3621,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider() != 9090.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors() != 25727.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_builder_set_address_type() != 647.toShort()) {
@@ -5778,6 +5790,18 @@ open class Builder: Disposable, BuilderInterface {
                 )
             }!!
         })
+    }
+
+    override fun `setAcceptStaleChannelMonitors`(`accept`: kotlin.Boolean) {
+        callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors(
+                    it,
+                    FfiConverterBoolean.lower(`accept`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
     }
 
     override fun `setAddressType`(`addressType`: AddressType) {
@@ -10290,13 +10314,14 @@ object FfiConverterTypeBuildError : FfiConverterRustBuffer<BuildException> {
             7 -> BuildException.InvalidNodeAlias(FfiConverterString.read(buf))
             8 -> BuildException.RuntimeSetupFailed(FfiConverterString.read(buf))
             9 -> BuildException.ReadFailed(FfiConverterString.read(buf))
-            10 -> BuildException.WriteFailed(FfiConverterString.read(buf))
-            11 -> BuildException.StoragePathAccessFailed(FfiConverterString.read(buf))
-            12 -> BuildException.KvStoreSetupFailed(FfiConverterString.read(buf))
-            13 -> BuildException.WalletSetupFailed(FfiConverterString.read(buf))
-            14 -> BuildException.LoggerSetupFailed(FfiConverterString.read(buf))
-            15 -> BuildException.NetworkMismatch(FfiConverterString.read(buf))
-            16 -> BuildException.AsyncPaymentsConfigMismatch(FfiConverterString.read(buf))
+            10 -> BuildException.DangerousValue(FfiConverterString.read(buf))
+            11 -> BuildException.WriteFailed(FfiConverterString.read(buf))
+            12 -> BuildException.StoragePathAccessFailed(FfiConverterString.read(buf))
+            13 -> BuildException.KvStoreSetupFailed(FfiConverterString.read(buf))
+            14 -> BuildException.WalletSetupFailed(FfiConverterString.read(buf))
+            15 -> BuildException.LoggerSetupFailed(FfiConverterString.read(buf))
+            16 -> BuildException.NetworkMismatch(FfiConverterString.read(buf))
+            17 -> BuildException.AsyncPaymentsConfigMismatch(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -10343,32 +10368,36 @@ object FfiConverterTypeBuildError : FfiConverterRustBuffer<BuildException> {
                 buf.putInt(9)
                 Unit
             }
-            is BuildException.WriteFailed -> {
+            is BuildException.DangerousValue -> {
                 buf.putInt(10)
                 Unit
             }
-            is BuildException.StoragePathAccessFailed -> {
+            is BuildException.WriteFailed -> {
                 buf.putInt(11)
                 Unit
             }
-            is BuildException.KvStoreSetupFailed -> {
+            is BuildException.StoragePathAccessFailed -> {
                 buf.putInt(12)
                 Unit
             }
-            is BuildException.WalletSetupFailed -> {
+            is BuildException.KvStoreSetupFailed -> {
                 buf.putInt(13)
                 Unit
             }
-            is BuildException.LoggerSetupFailed -> {
+            is BuildException.WalletSetupFailed -> {
                 buf.putInt(14)
                 Unit
             }
-            is BuildException.NetworkMismatch -> {
+            is BuildException.LoggerSetupFailed -> {
                 buf.putInt(15)
                 Unit
             }
-            is BuildException.AsyncPaymentsConfigMismatch -> {
+            is BuildException.NetworkMismatch -> {
                 buf.putInt(16)
+                Unit
+            }
+            is BuildException.AsyncPaymentsConfigMismatch -> {
+                buf.putInt(17)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
