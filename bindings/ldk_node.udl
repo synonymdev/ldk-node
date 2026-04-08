@@ -235,9 +235,9 @@ interface Bolt11Payment {
 	[Throws=NodeError]
 	PaymentId send_using_amount([ByRef]Bolt11Invoice invoice, u64 amount_msat, RouteParametersConfig? route_parameters);
 	[Throws=NodeError]
-	void send_probes([ByRef]Bolt11Invoice invoice, RouteParametersConfig? route_parameters);
+	sequence<ProbeHandle> send_probes([ByRef]Bolt11Invoice invoice, RouteParametersConfig? route_parameters);
 	[Throws=NodeError]
-	void send_probes_using_amount([ByRef]Bolt11Invoice invoice, u64 amount_msat, RouteParametersConfig? route_parameters);
+	sequence<ProbeHandle> send_probes_using_amount([ByRef]Bolt11Invoice invoice, u64 amount_msat, RouteParametersConfig? route_parameters);
 	[Throws=NodeError]
 	void claim_for_hash(PaymentHash payment_hash, u64 claimable_amount_msat, PaymentPreimage preimage);
 	[Throws=NodeError]
@@ -295,7 +295,7 @@ interface SpontaneousPayment {
 	[Throws=NodeError]
 	PaymentId send_with_preimage_and_custom_tlvs(u64 amount_msat, PublicKey node_id, sequence<CustomTlvRecord> custom_tlvs, PaymentPreimage preimage, RouteParametersConfig? route_parameters);
 	[Throws=NodeError]
-	void send_probes(u64 amount_msat, PublicKey node_id);
+	sequence<ProbeHandle> send_probes(u64 amount_msat, PublicKey node_id);
 };
 
 interface OnchainPayment {
@@ -518,6 +518,8 @@ interface Event {
 	PaymentClaimable(PaymentId payment_id, PaymentHash payment_hash, u64 claimable_amount_msat, u32? claim_deadline, sequence<CustomTlvRecord> custom_records);
 	PaymentForwarded(ChannelId prev_channel_id, ChannelId next_channel_id, UserChannelId?
 	prev_user_channel_id, UserChannelId? next_user_channel_id, PublicKey? prev_node_id, PublicKey? next_node_id, u64? total_fee_earned_msat, u64? skimmed_fee_msat, boolean claim_from_onchain_tx, u64? outbound_amount_forwarded_msat);
+	ProbeSuccessful(PaymentId payment_id, PaymentHash payment_hash);
+	ProbeFailed(PaymentId payment_id, PaymentHash payment_hash, u64? short_channel_id);
 	ChannelPending(ChannelId channel_id, UserChannelId user_channel_id, ChannelId former_temporary_channel_id, PublicKey counterparty_node_id, OutPoint funding_txo);
 	ChannelReady(ChannelId channel_id, UserChannelId user_channel_id, PublicKey? counterparty_node_id, OutPoint? funding_txo);
 	ChannelClosed(ChannelId channel_id, UserChannelId user_channel_id, PublicKey? counterparty_node_id, ClosureReason? reason);
@@ -619,6 +621,11 @@ dictionary RouteParametersConfig {
 	u32 max_total_cltv_expiry_delta;
 	u8 max_path_count;
 	u8 max_channel_saturation_power_of_half;
+};
+
+dictionary ProbeHandle {
+	PaymentHash payment_hash;
+	PaymentId payment_id;
 };
 
 dictionary CustomTlvRecord {

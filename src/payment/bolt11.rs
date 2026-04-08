@@ -38,6 +38,7 @@ use crate::payment::store::{
 use crate::peer_store::{PeerInfo, PeerStore};
 use crate::runtime::Runtime;
 use crate::types::{ChannelManager, PaymentStore, Router};
+use crate::ProbeHandle;
 #[cfg(not(feature = "uniffi"))]
 type Bolt11Invoice = LdkBolt11Invoice;
 #[cfg(feature = "uniffi")]
@@ -834,9 +835,13 @@ impl Bolt11Payment {
 	///
 	/// If `route_parameters` are provided they will override the default as well as the
 	/// node-wide parameters configured via [`Config::route_parameters`] on a per-field basis.
+	///
+	/// Returns one [`ProbeHandle`] per probe path. Use [`ProbeHandle::payment_id`] (and/or
+	/// [`ProbeHandle::payment_hash`]) to match [`crate::Event::ProbeSuccessful`] /
+	/// [`crate::Event::ProbeFailed`]. These values are **not** the invoice payment hash.
 	pub fn send_probes(
 		&self, invoice: &Bolt11Invoice, route_parameters: Option<RouteParametersConfig>,
-	) -> Result<(), Error> {
+	) -> Result<Vec<ProbeHandle>, Error> {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
@@ -870,12 +875,16 @@ impl Bolt11Payment {
 
 		self.channel_manager
 			.send_preflight_probes(route_params, liquidity_limit_multiplier)
+			.map(|pairs| {
+				pairs
+					.into_iter()
+					.map(|(payment_hash, payment_id)| ProbeHandle { payment_hash, payment_id })
+					.collect()
+			})
 			.map_err(|e| {
 				log_error!(self.logger, "Failed to send payment probes: {:?}", e);
 				Error::ProbeSendingFailed
-			})?;
-
-		Ok(())
+			})
 	}
 
 	/// Sends payment probes over all paths of a route that would be used to pay the given
@@ -887,11 +896,11 @@ impl Bolt11Payment {
 	/// If `route_parameters` are provided they will override the default as well as the
 	/// node-wide parameters configured via [`Config::route_parameters`] on a per-field basis.
 	///
-	/// See [`Self::send_probes`] for more information.
+	/// See [`Self::send_probes`] for return value semantics and correlation with probe events.
 	pub fn send_probes_using_amount(
 		&self, invoice: &Bolt11Invoice, amount_msat: u64,
 		route_parameters: Option<RouteParametersConfig>,
-	) -> Result<(), Error> {
+	) -> Result<Vec<ProbeHandle>, Error> {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
@@ -932,12 +941,16 @@ impl Bolt11Payment {
 
 		self.channel_manager
 			.send_preflight_probes(route_params, liquidity_limit_multiplier)
+			.map(|pairs| {
+				pairs
+					.into_iter()
+					.map(|(payment_hash, payment_id)| ProbeHandle { payment_hash, payment_id })
+					.collect()
+			})
 			.map_err(|e| {
 				log_error!(self.logger, "Failed to send payment probes: {:?}", e);
 				Error::ProbeSendingFailed
-			})?;
-
-		Ok(())
+			})
 	}
 
 	/// Estimates the routing fees for a given invoice.
