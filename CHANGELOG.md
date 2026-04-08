@@ -58,6 +58,12 @@
 
 ## Synonym Fork Additions
 
+- Added pre-flight probe correlation: `Event::ProbeSuccessful` and `Event::ProbeFailed` (from LDK
+  probe lifecycle), plus `ProbeHandle` (`payment_id`, synthetic `payment_hash`) returned by
+  `Bolt11Payment::send_probes`, `send_probes_using_amount`, and `SpontaneousPayment::send_probes`
+  (one handle per probe path). Match handles to events by `payment_id` (and optionally
+  `payment_hash`); these are not the BOLT11 invoice payment hash. UniFFI: `dictionary ProbeHandle`
+  in `ldk_node.udl`.
 - Added `connection_timeout_secs` field to `ElectrumSyncConfig` (default: 10 s). This bounds
   Electrum socket operations for both the BDK on-chain and LDK tx-sync clients, preventing Tokio's
   blocking thread pool from being exhausted by threads stuck on dead sockets under total packet
