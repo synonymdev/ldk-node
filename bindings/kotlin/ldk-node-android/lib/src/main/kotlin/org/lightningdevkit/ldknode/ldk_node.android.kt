@@ -1754,14 +1754,14 @@ internal interface UniffiLib : Library {
         `invoice`: Pointer?,
         `routeParameters`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
-    ): Unit
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount(
         `ptr`: Pointer?,
         `invoice`: Pointer?,
         `amountMsat`: Long,
         `routeParameters`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
-    ): Unit
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_bolt11payment_send_using_amount(
         `ptr`: Pointer?,
         `invoice`: Pointer?,
@@ -2704,7 +2704,7 @@ internal interface UniffiLib : Library {
         `amountMsat`: Long,
         `nodeId`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
-    ): Unit
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_spontaneouspayment_send_with_custom_tlvs(
         `ptr`: Pointer?,
         `amountMsat`: Long,
@@ -3512,10 +3512,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_bolt11payment_send() != 12953.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ldk_node_checksum_method_bolt11payment_send_probes() != 19286.toShort()) {
+    if (lib.uniffi_ldk_node_checksum_method_bolt11payment_send_probes() != 16067.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ldk_node_checksum_method_bolt11payment_send_probes_using_amount() != 5976.toShort()) {
+    if (lib.uniffi_ldk_node_checksum_method_bolt11payment_send_probes_using_amount() != 37281.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_bolt11payment_send_using_amount() != 42793.toShort()) {
@@ -3977,7 +3977,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send() != 27905.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send_probes() != 25937.toShort()) {
+    if (lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send_probes() != 44206.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send_with_custom_tlvs() != 17876.toShort()) {
@@ -4912,8 +4912,8 @@ open class Bolt11Payment: Disposable, Bolt11PaymentInterface {
     }
 
     @Throws(NodeException::class)
-    override fun `sendProbes`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?) {
-        callWithPointer {
+    override fun `sendProbes`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?): List<ProbeHandle> {
+        return FfiConverterSequenceTypeProbeHandle.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_bolt11payment_send_probes(
                     it,
@@ -4922,12 +4922,12 @@ open class Bolt11Payment: Disposable, Bolt11PaymentInterface {
                     uniffiRustCallStatus,
                 )
             }
-        }
+        })
     }
 
     @Throws(NodeException::class)
-    override fun `sendProbesUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?) {
-        callWithPointer {
+    override fun `sendProbesUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?): List<ProbeHandle> {
+        return FfiConverterSequenceTypeProbeHandle.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount(
                     it,
@@ -4937,7 +4937,7 @@ open class Bolt11Payment: Disposable, Bolt11PaymentInterface {
                     uniffiRustCallStatus,
                 )
             }
-        }
+        })
     }
 
     @Throws(NodeException::class)
@@ -8630,8 +8630,8 @@ open class SpontaneousPayment: Disposable, SpontaneousPaymentInterface {
     }
 
     @Throws(NodeException::class)
-    override fun `sendProbes`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey) {
-        callWithPointer {
+    override fun `sendProbes`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey): List<ProbeHandle> {
+        return FfiConverterSequenceTypeProbeHandle.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_spontaneouspayment_send_probes(
                     it,
@@ -8640,7 +8640,7 @@ open class SpontaneousPayment: Disposable, SpontaneousPaymentInterface {
                     uniffiRustCallStatus,
                 )
             }
-        }
+        })
     }
 
     @Throws(NodeException::class)
@@ -9976,6 +9976,28 @@ object FfiConverterTypePeerDetails: FfiConverterRustBuffer<PeerDetails> {
 
 
 
+object FfiConverterTypeProbeHandle: FfiConverterRustBuffer<ProbeHandle> {
+    override fun read(buf: ByteBuffer): ProbeHandle {
+        return ProbeHandle(
+            FfiConverterTypePaymentHash.read(buf),
+            FfiConverterTypePaymentId.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProbeHandle) = (
+            FfiConverterTypePaymentHash.allocationSize(value.`paymentHash`) +
+            FfiConverterTypePaymentId.allocationSize(value.`paymentId`)
+    )
+
+    override fun write(value: ProbeHandle, buf: ByteBuffer) {
+        FfiConverterTypePaymentHash.write(value.`paymentHash`, buf)
+        FfiConverterTypePaymentId.write(value.`paymentId`, buf)
+    }
+}
+
+
+
+
 object FfiConverterTypeRouteHintHop: FfiConverterRustBuffer<RouteHintHop> {
     override fun read(buf: ByteBuffer): RouteHintHop {
         return RouteHintHop(
@@ -10746,69 +10768,78 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 FfiConverterBoolean.read(buf),
                 FfiConverterOptionalULong.read(buf),
                 )
-            6 -> Event.ChannelPending(
+            6 -> Event.ProbeSuccessful(
+                FfiConverterTypePaymentId.read(buf),
+                FfiConverterTypePaymentHash.read(buf),
+                )
+            7 -> Event.ProbeFailed(
+                FfiConverterTypePaymentId.read(buf),
+                FfiConverterTypePaymentHash.read(buf),
+                FfiConverterOptionalULong.read(buf),
+                )
+            8 -> Event.ChannelPending(
                 FfiConverterTypeChannelId.read(buf),
                 FfiConverterTypeUserChannelId.read(buf),
                 FfiConverterTypeChannelId.read(buf),
                 FfiConverterTypePublicKey.read(buf),
                 FfiConverterTypeOutPoint.read(buf),
                 )
-            7 -> Event.ChannelReady(
+            9 -> Event.ChannelReady(
                 FfiConverterTypeChannelId.read(buf),
                 FfiConverterTypeUserChannelId.read(buf),
                 FfiConverterOptionalTypePublicKey.read(buf),
                 FfiConverterOptionalTypeOutPoint.read(buf),
                 )
-            8 -> Event.ChannelClosed(
+            10 -> Event.ChannelClosed(
                 FfiConverterTypeChannelId.read(buf),
                 FfiConverterTypeUserChannelId.read(buf),
                 FfiConverterOptionalTypePublicKey.read(buf),
                 FfiConverterOptionalTypeClosureReason.read(buf),
                 )
-            9 -> Event.SplicePending(
+            11 -> Event.SplicePending(
                 FfiConverterTypeChannelId.read(buf),
                 FfiConverterTypeUserChannelId.read(buf),
                 FfiConverterTypePublicKey.read(buf),
                 FfiConverterTypeOutPoint.read(buf),
                 )
-            10 -> Event.SpliceFailed(
+            12 -> Event.SpliceFailed(
                 FfiConverterTypeChannelId.read(buf),
                 FfiConverterTypeUserChannelId.read(buf),
                 FfiConverterTypePublicKey.read(buf),
                 FfiConverterOptionalTypeOutPoint.read(buf),
                 )
-            11 -> Event.OnchainTransactionConfirmed(
+            13 -> Event.OnchainTransactionConfirmed(
                 FfiConverterTypeTxid.read(buf),
                 FfiConverterTypeBlockHash.read(buf),
                 FfiConverterUInt.read(buf),
                 FfiConverterULong.read(buf),
                 FfiConverterTypeTransactionDetails.read(buf),
                 )
-            12 -> Event.OnchainTransactionReceived(
+            14 -> Event.OnchainTransactionReceived(
                 FfiConverterTypeTxid.read(buf),
                 FfiConverterTypeTransactionDetails.read(buf),
                 )
-            13 -> Event.OnchainTransactionReplaced(
+            15 -> Event.OnchainTransactionReplaced(
                 FfiConverterTypeTxid.read(buf),
                 FfiConverterSequenceTypeTxid.read(buf),
                 )
-            14 -> Event.OnchainTransactionReorged(
+            16 -> Event.OnchainTransactionReorged(
                 FfiConverterTypeTxid.read(buf),
                 )
-            15 -> Event.OnchainTransactionEvicted(
+            17 -> Event.OnchainTransactionEvicted(
                 FfiConverterTypeTxid.read(buf),
                 )
-            16 -> Event.SyncProgress(
+            18 -> Event.SyncProgress(
                 FfiConverterTypeSyncType.read(buf),
                 FfiConverterUByte.read(buf),
                 FfiConverterUInt.read(buf),
                 FfiConverterUInt.read(buf),
                 )
-            17 -> Event.SyncCompleted(
+            19 -> Event.SyncCompleted(
                 FfiConverterTypeSyncType.read(buf),
                 FfiConverterUInt.read(buf),
                 )
-            18 -> Event.BalanceChanged(
+            20 -> Event.BalanceChanged(
                 FfiConverterULong.read(buf),
                 FfiConverterULong.read(buf),
                 FfiConverterULong.read(buf),
@@ -10875,6 +10906,23 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 + FfiConverterOptionalULong.allocationSize(value.`skimmedFeeMsat`)
                 + FfiConverterBoolean.allocationSize(value.`claimFromOnchainTx`)
                 + FfiConverterOptionalULong.allocationSize(value.`outboundAmountForwardedMsat`)
+            )
+        }
+        is Event.ProbeSuccessful -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypePaymentId.allocationSize(value.`paymentId`)
+                + FfiConverterTypePaymentHash.allocationSize(value.`paymentHash`)
+            )
+        }
+        is Event.ProbeFailed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypePaymentId.allocationSize(value.`paymentId`)
+                + FfiConverterTypePaymentHash.allocationSize(value.`paymentHash`)
+                + FfiConverterOptionalULong.allocationSize(value.`shortChannelId`)
             )
         }
         is Event.ChannelPending -> {
@@ -11049,8 +11097,21 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 FfiConverterOptionalULong.write(value.`outboundAmountForwardedMsat`, buf)
                 Unit
             }
-            is Event.ChannelPending -> {
+            is Event.ProbeSuccessful -> {
                 buf.putInt(6)
+                FfiConverterTypePaymentId.write(value.`paymentId`, buf)
+                FfiConverterTypePaymentHash.write(value.`paymentHash`, buf)
+                Unit
+            }
+            is Event.ProbeFailed -> {
+                buf.putInt(7)
+                FfiConverterTypePaymentId.write(value.`paymentId`, buf)
+                FfiConverterTypePaymentHash.write(value.`paymentHash`, buf)
+                FfiConverterOptionalULong.write(value.`shortChannelId`, buf)
+                Unit
+            }
+            is Event.ChannelPending -> {
+                buf.putInt(8)
                 FfiConverterTypeChannelId.write(value.`channelId`, buf)
                 FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
                 FfiConverterTypeChannelId.write(value.`formerTemporaryChannelId`, buf)
@@ -11059,7 +11120,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
             is Event.ChannelReady -> {
-                buf.putInt(7)
+                buf.putInt(9)
                 FfiConverterTypeChannelId.write(value.`channelId`, buf)
                 FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
                 FfiConverterOptionalTypePublicKey.write(value.`counterpartyNodeId`, buf)
@@ -11067,7 +11128,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
             is Event.ChannelClosed -> {
-                buf.putInt(8)
+                buf.putInt(10)
                 FfiConverterTypeChannelId.write(value.`channelId`, buf)
                 FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
                 FfiConverterOptionalTypePublicKey.write(value.`counterpartyNodeId`, buf)
@@ -11075,7 +11136,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
             is Event.SplicePending -> {
-                buf.putInt(9)
+                buf.putInt(11)
                 FfiConverterTypeChannelId.write(value.`channelId`, buf)
                 FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
                 FfiConverterTypePublicKey.write(value.`counterpartyNodeId`, buf)
@@ -11083,7 +11144,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
             is Event.SpliceFailed -> {
-                buf.putInt(10)
+                buf.putInt(12)
                 FfiConverterTypeChannelId.write(value.`channelId`, buf)
                 FfiConverterTypeUserChannelId.write(value.`userChannelId`, buf)
                 FfiConverterTypePublicKey.write(value.`counterpartyNodeId`, buf)
@@ -11091,7 +11152,7 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
             is Event.OnchainTransactionConfirmed -> {
-                buf.putInt(11)
+                buf.putInt(13)
                 FfiConverterTypeTxid.write(value.`txid`, buf)
                 FfiConverterTypeBlockHash.write(value.`blockHash`, buf)
                 FfiConverterUInt.write(value.`blockHeight`, buf)
@@ -11100,29 +11161,29 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
             is Event.OnchainTransactionReceived -> {
-                buf.putInt(12)
+                buf.putInt(14)
                 FfiConverterTypeTxid.write(value.`txid`, buf)
                 FfiConverterTypeTransactionDetails.write(value.`details`, buf)
                 Unit
             }
             is Event.OnchainTransactionReplaced -> {
-                buf.putInt(13)
+                buf.putInt(15)
                 FfiConverterTypeTxid.write(value.`txid`, buf)
                 FfiConverterSequenceTypeTxid.write(value.`conflicts`, buf)
                 Unit
             }
             is Event.OnchainTransactionReorged -> {
-                buf.putInt(14)
+                buf.putInt(16)
                 FfiConverterTypeTxid.write(value.`txid`, buf)
                 Unit
             }
             is Event.OnchainTransactionEvicted -> {
-                buf.putInt(15)
+                buf.putInt(17)
                 FfiConverterTypeTxid.write(value.`txid`, buf)
                 Unit
             }
             is Event.SyncProgress -> {
-                buf.putInt(16)
+                buf.putInt(18)
                 FfiConverterTypeSyncType.write(value.`syncType`, buf)
                 FfiConverterUByte.write(value.`progressPercent`, buf)
                 FfiConverterUInt.write(value.`currentBlockHeight`, buf)
@@ -11130,13 +11191,13 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
             is Event.SyncCompleted -> {
-                buf.putInt(17)
+                buf.putInt(19)
                 FfiConverterTypeSyncType.write(value.`syncType`, buf)
                 FfiConverterUInt.write(value.`syncedBlockHeight`, buf)
                 Unit
             }
             is Event.BalanceChanged -> {
-                buf.putInt(18)
+                buf.putInt(20)
                 FfiConverterULong.write(value.`oldSpendableOnchainBalanceSats`, buf)
                 FfiConverterULong.write(value.`newSpendableOnchainBalanceSats`, buf)
                 FfiConverterULong.write(value.`oldTotalOnchainBalanceSats`, buf)
@@ -13764,6 +13825,31 @@ object FfiConverterSequenceTypePeerDetails: FfiConverterRustBuffer<List<PeerDeta
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypePeerDetails.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypeProbeHandle: FfiConverterRustBuffer<List<ProbeHandle>> {
+    override fun read(buf: ByteBuffer): List<ProbeHandle> {
+        val len = buf.getInt()
+        return List<ProbeHandle>(len) {
+            FfiConverterTypeProbeHandle.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ProbeHandle>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeProbeHandle.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ProbeHandle>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeProbeHandle.write(it, buf)
         }
     }
 }
