@@ -14,6 +14,9 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use lightning::ln::msgs::SocketAddress;
 use lightning::routing::gossip::NodeAlias;
+use lightning::routing::scoring::{
+	ProbabilisticScoringDecayParameters, ProbabilisticScoringFeeParameters,
+};
 use lightning::routing::router::RouteParametersConfig;
 use lightning::util::config::{
 	ChannelConfig as LdkChannelConfig, MaxDustHTLCExposure as LdkMaxDustHTLCExposure, UserConfig,
@@ -291,6 +294,14 @@ pub struct Config {
 	/// **Note:** If unset, default parameters will be used, and you will be able to override the
 	/// parameters on a per-payment basis in the corresponding method calls.
 	pub route_parameters: Option<RouteParametersConfig>,
+	/// Optional parameters for configuring routing scorer fee penalties.
+	///
+	/// If unset, defaults from [`ProbabilisticScoringFeeParameters::default`] are used.
+	pub scoring_fee_params: Option<ScoringFeeParameters>,
+	/// Optional parameters for configuring routing scorer decay behavior.
+	///
+	/// If unset, defaults from [`ProbabilisticScoringDecayParameters::default`] are used.
+	pub scoring_decay_params: Option<ScoringDecayParameters>,
 	/// Whether to include unconfirmed funds from external sources in spendable balance.
 	///
 	/// If `true`, [`BalanceDetails::spendable_onchain_balance_sats`] will include
@@ -321,10 +332,119 @@ impl Default for Config {
 			probing_liquidity_limit_multiplier: DEFAULT_PROBING_LIQUIDITY_LIMIT_MULTIPLIER,
 			anchor_channels_config: Some(AnchorChannelsConfig::default()),
 			route_parameters: None,
+			scoring_fee_params: None,
+			scoring_decay_params: None,
 			node_alias: None,
 			include_untrusted_pending_in_spendable: false,
 			address_type: AddressType::default(),
 			address_types_to_monitor: Vec::new(),
+		}
+	}
+}
+
+/// Configuration options for [`ProbabilisticScoringFeeParameters`].
+#[derive(Debug, Clone)]
+pub struct ScoringFeeParameters {
+	/// See [`ProbabilisticScoringFeeParameters::base_penalty_msat`].
+	pub base_penalty_msat: u64,
+	/// See [`ProbabilisticScoringFeeParameters::base_penalty_amount_multiplier_msat`].
+	pub base_penalty_amount_multiplier_msat: u64,
+	/// See [`ProbabilisticScoringFeeParameters::liquidity_penalty_multiplier_msat`].
+	pub liquidity_penalty_multiplier_msat: u64,
+	/// See [`ProbabilisticScoringFeeParameters::liquidity_penalty_amount_multiplier_msat`].
+	pub liquidity_penalty_amount_multiplier_msat: u64,
+	/// See [`ProbabilisticScoringFeeParameters::historical_liquidity_penalty_multiplier_msat`].
+	pub historical_liquidity_penalty_multiplier_msat: u64,
+	/// See [`ProbabilisticScoringFeeParameters::historical_liquidity_penalty_amount_multiplier_msat`].
+	pub historical_liquidity_penalty_amount_multiplier_msat: u64,
+	/// See [`ProbabilisticScoringFeeParameters::anti_probing_penalty_msat`].
+	pub anti_probing_penalty_msat: u64,
+	/// See [`ProbabilisticScoringFeeParameters::considered_impossible_penalty_msat`].
+	pub considered_impossible_penalty_msat: u64,
+	/// See [`ProbabilisticScoringFeeParameters::linear_success_probability`].
+	pub linear_success_probability: bool,
+	/// See [`ProbabilisticScoringFeeParameters::probing_diversity_penalty_msat`].
+	pub probing_diversity_penalty_msat: u64,
+}
+
+impl Default for ScoringFeeParameters {
+	fn default() -> Self {
+		let params = ProbabilisticScoringFeeParameters::default();
+		Self::from(params)
+	}
+}
+
+impl From<ProbabilisticScoringFeeParameters> for ScoringFeeParameters {
+	fn from(value: ProbabilisticScoringFeeParameters) -> Self {
+		Self {
+			base_penalty_msat: value.base_penalty_msat,
+			base_penalty_amount_multiplier_msat: value.base_penalty_amount_multiplier_msat,
+			liquidity_penalty_multiplier_msat: value.liquidity_penalty_multiplier_msat,
+			liquidity_penalty_amount_multiplier_msat: value.liquidity_penalty_amount_multiplier_msat,
+			historical_liquidity_penalty_multiplier_msat: value
+				.historical_liquidity_penalty_multiplier_msat,
+			historical_liquidity_penalty_amount_multiplier_msat: value
+				.historical_liquidity_penalty_amount_multiplier_msat,
+			anti_probing_penalty_msat: value.anti_probing_penalty_msat,
+			considered_impossible_penalty_msat: value.considered_impossible_penalty_msat,
+			linear_success_probability: value.linear_success_probability,
+			probing_diversity_penalty_msat: value.probing_diversity_penalty_msat,
+		}
+	}
+}
+
+impl From<ScoringFeeParameters> for ProbabilisticScoringFeeParameters {
+	fn from(value: ScoringFeeParameters) -> Self {
+		let mut params = ProbabilisticScoringFeeParameters::default();
+		params.base_penalty_msat = value.base_penalty_msat;
+		params.base_penalty_amount_multiplier_msat = value.base_penalty_amount_multiplier_msat;
+		params.liquidity_penalty_multiplier_msat = value.liquidity_penalty_multiplier_msat;
+		params.liquidity_penalty_amount_multiplier_msat =
+			value.liquidity_penalty_amount_multiplier_msat;
+		params.historical_liquidity_penalty_multiplier_msat =
+			value.historical_liquidity_penalty_multiplier_msat;
+		params.historical_liquidity_penalty_amount_multiplier_msat =
+			value.historical_liquidity_penalty_amount_multiplier_msat;
+		params.anti_probing_penalty_msat = value.anti_probing_penalty_msat;
+		params.considered_impossible_penalty_msat = value.considered_impossible_penalty_msat;
+		params.linear_success_probability = value.linear_success_probability;
+		params.probing_diversity_penalty_msat = value.probing_diversity_penalty_msat;
+		params
+	}
+}
+
+/// Configuration options for [`ProbabilisticScoringDecayParameters`].
+#[derive(Debug, Clone)]
+pub struct ScoringDecayParameters {
+	/// See [`ProbabilisticScoringDecayParameters::historical_no_updates_half_life`].
+	pub historical_no_updates_half_life_secs: u64,
+	/// See [`ProbabilisticScoringDecayParameters::liquidity_offset_half_life`].
+	pub liquidity_offset_half_life_secs: u64,
+}
+
+impl Default for ScoringDecayParameters {
+	fn default() -> Self {
+		let params = ProbabilisticScoringDecayParameters::default();
+		Self::from(params)
+	}
+}
+
+impl From<ProbabilisticScoringDecayParameters> for ScoringDecayParameters {
+	fn from(value: ProbabilisticScoringDecayParameters) -> Self {
+		Self {
+			historical_no_updates_half_life_secs: value.historical_no_updates_half_life.as_secs(),
+			liquidity_offset_half_life_secs: value.liquidity_offset_half_life.as_secs(),
+		}
+	}
+}
+
+impl From<ScoringDecayParameters> for ProbabilisticScoringDecayParameters {
+	fn from(value: ScoringDecayParameters) -> Self {
+		Self {
+			historical_no_updates_half_life: Duration::from_secs(
+				value.historical_no_updates_half_life_secs,
+			),
+			liquidity_offset_half_life: Duration::from_secs(value.liquidity_offset_half_life_secs),
 		}
 	}
 }
