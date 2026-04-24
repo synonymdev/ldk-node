@@ -29,6 +29,9 @@ swift.swiftdoc
 *.a
 *.d
 
+# macOS Finder metadata (icon positions, view options)
+.DS_Store
+
 # IDE and local files
 .idea
 .build

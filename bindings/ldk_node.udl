@@ -16,9 +16,29 @@ dictionary Config {
 	u64 probing_liquidity_limit_multiplier;
 	AnchorChannelsConfig? anchor_channels_config;
 	RouteParametersConfig? route_parameters;
+	ScoringFeeParameters? scoring_fee_params;
+	ScoringDecayParameters? scoring_decay_params;
 	boolean include_untrusted_pending_in_spendable;
 	AddressType address_type;
 	sequence<AddressType> address_types_to_monitor;
+};
+
+dictionary ScoringFeeParameters {
+	u64 base_penalty_msat;
+	u64 base_penalty_amount_multiplier_msat;
+	u64 liquidity_penalty_multiplier_msat;
+	u64 liquidity_penalty_amount_multiplier_msat;
+	u64 historical_liquidity_penalty_multiplier_msat;
+	u64 historical_liquidity_penalty_amount_multiplier_msat;
+	u64 anti_probing_penalty_msat;
+	u64 considered_impossible_penalty_msat;
+	boolean linear_success_probability;
+	u64 probing_diversity_penalty_msat;
+};
+
+dictionary ScoringDecayParameters {
+	u64 historical_no_updates_half_life_secs;
+	u64 liquidity_offset_half_life_secs;
 };
 
 dictionary AnchorChannelsConfig {
@@ -118,6 +138,8 @@ interface Builder {
 	void set_gossip_source_p2p();
 	void set_gossip_source_rgs(string rgs_server_url);
 	void set_pathfinding_scores_source(string url);
+	void set_scoring_fee_params(ScoringFeeParameters params);
+	void set_scoring_decay_params(ScoringDecayParameters params);
 	void set_liquidity_source_lsps1(PublicKey node_id, SocketAddress address, string? token);
 	void set_liquidity_source_lsps2(PublicKey node_id, SocketAddress address, string? token);
 	void set_storage_dir_path(string storage_dir_path);

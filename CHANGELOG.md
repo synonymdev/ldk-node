@@ -58,6 +58,12 @@
 
 ## Synonym Fork Additions
 
+- Added configurable routing scorer parameters:
+  - New config structs: `ScoringFeeParameters` and `ScoringDecayParameters`
+  - New `Config` fields: `scoring_fee_params` and `scoring_decay_params` (optional; default to
+    LDK probabilistic scorer defaults when unset)
+  - New builder APIs: `set_scoring_fee_params(...)` and `set_scoring_decay_params(...)`
+  - Exposed via UniFFI/UDL for Swift/Kotlin/Python consumers
 - Added `connection_timeout_secs` field to `ElectrumSyncConfig` (default: 10 s). This bounds
   Electrum socket operations for both the BDK on-chain and LDK tx-sync clients, preventing Tokio's
   blocking thread pool from being exhausted by threads stuck on dead sockets under total packet

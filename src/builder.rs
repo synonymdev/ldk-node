@@ -51,8 +51,8 @@ use crate::chain::ChainSource;
 use crate::config::{
 	default_user_config, may_announce_channel, AddressType, AddressTypeRuntimeConfig,
 	AnnounceError, AsyncPaymentsRole, BitcoindRestClientConfig, Config, ElectrumSyncConfig,
-	EsploraSyncConfig, RuntimeSyncIntervals, DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME,
-	DEFAULT_LOG_LEVEL, WALLET_KEYS_SEED_LEN,
+	EsploraSyncConfig, RuntimeSyncIntervals, ScoringDecayParameters, ScoringFeeParameters,
+	DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME, DEFAULT_LOG_LEVEL, WALLET_KEYS_SEED_LEN,
 };
 use crate::connection::ConnectionManager;
 use crate::event::EventQueue;
@@ -493,6 +493,18 @@ impl NodeBuilder {
 	/// The external scores are merged into the local scoring system to improve routing.
 	pub fn set_pathfinding_scores_source(&mut self, url: String) -> &mut Self {
 		self.pathfinding_scores_sync_config = Some(PathfindingScoresSyncConfig { url });
+		self
+	}
+
+	/// Sets scorer fee parameters used for pathfinding penalties.
+	pub fn set_scoring_fee_params(&mut self, params: ScoringFeeParameters) -> &mut Self {
+		self.config.scoring_fee_params = Some(params);
+		self
+	}
+
+	/// Sets scorer decay parameters used for liquidity estimate decay.
+	pub fn set_scoring_decay_params(&mut self, params: ScoringDecayParameters) -> &mut Self {
+		self.config.scoring_decay_params = Some(params);
 		self
 	}
 
@@ -1048,6 +1060,16 @@ impl ArcedNodeBuilder {
 	/// The external scores are merged into the local scoring system to improve routing.
 	pub fn set_pathfinding_scores_source(&self, url: String) {
 		self.inner.write().unwrap().set_pathfinding_scores_source(url);
+	}
+
+	/// Sets scorer fee parameters used for pathfinding penalties.
+	pub fn set_scoring_fee_params(&self, params: ScoringFeeParameters) {
+		self.inner.write().unwrap().set_scoring_fee_params(params);
+	}
+
+	/// Sets scorer decay parameters used for liquidity estimate decay.
+	pub fn set_scoring_decay_params(&self, params: ScoringDecayParameters) {
+		self.inner.write().unwrap().set_scoring_decay_params(params);
 	}
 
 	/// Configures the [`Node`] instance to source inbound liquidity from the given
@@ -1910,11 +1932,15 @@ fn build_with_store_internal(
 	));
 
 	// Deserialize scorer
+	let scoring_decay_params = config
+		.scoring_decay_params
+		.clone()
+		.map(ProbabilisticScoringDecayParameters::from)
+		.unwrap_or_else(ProbabilisticScoringDecayParameters::default);
 	let local_scorer = match scorer_data_res {
 		Ok(data) => {
-			let params = ProbabilisticScoringDecayParameters::default();
 			let mut reader = Cursor::new(data);
-			let args = (params, Arc::clone(&network_graph), Arc::clone(&logger));
+			let args = (scoring_decay_params, Arc::clone(&network_graph), Arc::clone(&logger));
 			match ProbabilisticScorer::read(&mut reader, args) {
 				Ok(scorer) => scorer,
 				Err(e) => {
@@ -1924,8 +1950,11 @@ fn build_with_store_internal(
 			}
 		},
 		Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => {
-			let params = ProbabilisticScoringDecayParameters::default();
-			ProbabilisticScorer::new(params, Arc::clone(&network_graph), Arc::clone(&logger))
+			ProbabilisticScorer::new(
+				scoring_decay_params,
+				Arc::clone(&network_graph),
+				Arc::clone(&logger),
+			)
 		},
 		Err(e) => {
 			log_error!(logger, "Failed to read scoring data from store: {}", e);
@@ -1957,7 +1986,11 @@ fn build_with_store_internal(
 		},
 	}
 
-	let scoring_fee_params = ProbabilisticScoringFeeParameters::default();
+	let scoring_fee_params = config
+		.scoring_fee_params
+		.clone()
+		.map(ProbabilisticScoringFeeParameters::from)
+		.unwrap_or_else(ProbabilisticScoringFeeParameters::default);
 	let router = Arc::new(DefaultRouter::new(
 		Arc::clone(&network_graph),
 		Arc::clone(&logger),
@@ -2521,7 +2554,8 @@ mod tests {
 	use lightning::util::ser::Writeable;
 
 	use super::{
-		apply_channel_data_migration, sanitize_alias, BuildError, ChannelDataMigration, NodeAlias,
+		apply_channel_data_migration, sanitize_alias, BuildError, ChannelDataMigration, Config,
+		NodeAlias, NodeBuilder, ScoringDecayParameters, ScoringFeeParameters,
 	};
 	use crate::io::test_utils::InMemoryStore;
 	use crate::logger::Logger;
@@ -2562,6 +2596,48 @@ mod tests {
 		let alias = "This is a string longer than thirty-two bytes!"; // 46 bytes
 		let node = sanitize_alias(alias);
 		assert_eq!(node.err().unwrap(), BuildError::InvalidNodeAlias);
+	}
+
+	#[test]
+	fn set_scoring_params_updates_builder_config() {
+		let mut builder = NodeBuilder::from_config(Config::default());
+		let fee_params = ScoringFeeParameters {
+			base_penalty_msat: 2_000,
+			base_penalty_amount_multiplier_msat: 200_000,
+			liquidity_penalty_multiplier_msat: 1,
+			liquidity_penalty_amount_multiplier_msat: 2,
+			historical_liquidity_penalty_multiplier_msat: 20_000,
+			historical_liquidity_penalty_amount_multiplier_msat: 2_500,
+			anti_probing_penalty_msat: 500,
+			considered_impossible_penalty_msat: 999_999,
+			linear_success_probability: true,
+			probing_diversity_penalty_msat: 321,
+		};
+		let decay_params = ScoringDecayParameters {
+			historical_no_updates_half_life_secs: 1_234,
+			liquidity_offset_half_life_secs: 567,
+		};
+
+		builder.set_scoring_fee_params(fee_params.clone());
+		builder.set_scoring_decay_params(decay_params.clone());
+
+		assert_eq!(
+			builder.config.scoring_fee_params.as_ref().unwrap().base_penalty_msat,
+			fee_params.base_penalty_msat
+		);
+		assert_eq!(
+			builder.config.scoring_fee_params.as_ref().unwrap().linear_success_probability,
+			fee_params.linear_success_probability
+		);
+		assert_eq!(
+			builder
+				.config
+				.scoring_decay_params
+				.as_ref()
+				.unwrap()
+				.historical_no_updates_half_life_secs,
+			decay_params.historical_no_updates_half_life_secs
+		);
 	}
 
 	/// Creates valid serialized (BlockHash, ChannelMonitor) bytes for testing.
