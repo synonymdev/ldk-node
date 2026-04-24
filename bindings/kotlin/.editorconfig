@@ -1,0 +1,9 @@
+root = true
+
+[*.kt]
+indent_style = space
+indent_size = 4
+
+[*.kts]
+indent_style = space
+indent_size = 4
