@@ -1615,6 +1615,10 @@ public protocol BuilderProtocol: AnyObject {
 
     func setPathfindingScoresSource(url: String)
 
+    func setScoringDecayParams(params: ScoringDecayParameters)
+
+    func setScoringFeeParams(params: ScoringFeeParameters)
+
     func setStorageDirPath(storageDirPath: String)
 }
 
@@ -1900,6 +1904,20 @@ open class Builder:
         try! rustCall {
             uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source(self.uniffiClonePointer(),
                                                                             FfiConverterString.lower(url), $0)
+        }
+    }
+
+    open func setScoringDecayParams(params: ScoringDecayParameters) {
+        try! rustCall {
+            uniffi_ldk_node_fn_method_builder_set_scoring_decay_params(self.uniffiClonePointer(),
+                                                                       FfiConverterTypeScoringDecayParameters.lower(params), $0)
+        }
+    }
+
+    open func setScoringFeeParams(params: ScoringFeeParameters) {
+        try! rustCall {
+            uniffi_ldk_node_fn_method_builder_set_scoring_fee_params(self.uniffiClonePointer(),
+                                                                     FfiConverterTypeScoringFeeParameters.lower(params), $0)
         }
     }
 
@@ -5107,13 +5125,15 @@ public struct Config {
     public var probingLiquidityLimitMultiplier: UInt64
     public var anchorChannelsConfig: AnchorChannelsConfig?
     public var routeParameters: RouteParametersConfig?
+    public var scoringFeeParams: ScoringFeeParameters?
+    public var scoringDecayParams: ScoringDecayParameters?
     public var includeUntrustedPendingInSpendable: Bool
     public var addressType: AddressType
     public var addressTypesToMonitor: [AddressType]
 
     /// Default memberwise initializers are never public by default, so we
     /// declare one manually.
-    public init(storageDirPath: String, network: Network, listeningAddresses: [SocketAddress]?, announcementAddresses: [SocketAddress]?, nodeAlias: NodeAlias?, trustedPeers0conf: [PublicKey], probingLiquidityLimitMultiplier: UInt64, anchorChannelsConfig: AnchorChannelsConfig?, routeParameters: RouteParametersConfig?, includeUntrustedPendingInSpendable: Bool, addressType: AddressType, addressTypesToMonitor: [AddressType]) {
+    public init(storageDirPath: String, network: Network, listeningAddresses: [SocketAddress]?, announcementAddresses: [SocketAddress]?, nodeAlias: NodeAlias?, trustedPeers0conf: [PublicKey], probingLiquidityLimitMultiplier: UInt64, anchorChannelsConfig: AnchorChannelsConfig?, routeParameters: RouteParametersConfig?, scoringFeeParams: ScoringFeeParameters?, scoringDecayParams: ScoringDecayParameters?, includeUntrustedPendingInSpendable: Bool, addressType: AddressType, addressTypesToMonitor: [AddressType]) {
         self.storageDirPath = storageDirPath
         self.network = network
         self.listeningAddresses = listeningAddresses
@@ -5123,6 +5143,8 @@ public struct Config {
         self.probingLiquidityLimitMultiplier = probingLiquidityLimitMultiplier
         self.anchorChannelsConfig = anchorChannelsConfig
         self.routeParameters = routeParameters
+        self.scoringFeeParams = scoringFeeParams
+        self.scoringDecayParams = scoringDecayParams
         self.includeUntrustedPendingInSpendable = includeUntrustedPendingInSpendable
         self.addressType = addressType
         self.addressTypesToMonitor = addressTypesToMonitor
@@ -5158,6 +5180,12 @@ extension Config: Equatable, Hashable {
         if lhs.routeParameters != rhs.routeParameters {
             return false
         }
+        if lhs.scoringFeeParams != rhs.scoringFeeParams {
+            return false
+        }
+        if lhs.scoringDecayParams != rhs.scoringDecayParams {
+            return false
+        }
         if lhs.includeUntrustedPendingInSpendable != rhs.includeUntrustedPendingInSpendable {
             return false
         }
@@ -5180,6 +5208,8 @@ extension Config: Equatable, Hashable {
         hasher.combine(probingLiquidityLimitMultiplier)
         hasher.combine(anchorChannelsConfig)
         hasher.combine(routeParameters)
+        hasher.combine(scoringFeeParams)
+        hasher.combine(scoringDecayParams)
         hasher.combine(includeUntrustedPendingInSpendable)
         hasher.combine(addressType)
         hasher.combine(addressTypesToMonitor)
@@ -5202,6 +5232,8 @@ public struct FfiConverterTypeConfig: FfiConverterRustBuffer {
                 probingLiquidityLimitMultiplier: FfiConverterUInt64.read(from: &buf),
                 anchorChannelsConfig: FfiConverterOptionTypeAnchorChannelsConfig.read(from: &buf),
                 routeParameters: FfiConverterOptionTypeRouteParametersConfig.read(from: &buf),
+                scoringFeeParams: FfiConverterOptionTypeScoringFeeParameters.read(from: &buf),
+                scoringDecayParams: FfiConverterOptionTypeScoringDecayParameters.read(from: &buf),
                 includeUntrustedPendingInSpendable: FfiConverterBool.read(from: &buf),
                 addressType: FfiConverterTypeAddressType.read(from: &buf),
                 addressTypesToMonitor: FfiConverterSequenceTypeAddressType.read(from: &buf)
@@ -5218,6 +5250,8 @@ public struct FfiConverterTypeConfig: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.probingLiquidityLimitMultiplier, into: &buf)
         FfiConverterOptionTypeAnchorChannelsConfig.write(value.anchorChannelsConfig, into: &buf)
         FfiConverterOptionTypeRouteParametersConfig.write(value.routeParameters, into: &buf)
+        FfiConverterOptionTypeScoringFeeParameters.write(value.scoringFeeParams, into: &buf)
+        FfiConverterOptionTypeScoringDecayParameters.write(value.scoringDecayParams, into: &buf)
         FfiConverterBool.write(value.includeUntrustedPendingInSpendable, into: &buf)
         FfiConverterTypeAddressType.write(value.addressType, into: &buf)
         FfiConverterSequenceTypeAddressType.write(value.addressTypesToMonitor, into: &buf)
@@ -6850,6 +6884,192 @@ public func FfiConverterTypeRuntimeSyncIntervals_lift(_ buf: RustBuffer) throws 
 #endif
 public func FfiConverterTypeRuntimeSyncIntervals_lower(_ value: RuntimeSyncIntervals) -> RustBuffer {
     return FfiConverterTypeRuntimeSyncIntervals.lower(value)
+}
+
+public struct ScoringDecayParameters {
+    public var historicalNoUpdatesHalfLifeSecs: UInt64
+    public var liquidityOffsetHalfLifeSecs: UInt64
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(historicalNoUpdatesHalfLifeSecs: UInt64, liquidityOffsetHalfLifeSecs: UInt64) {
+        self.historicalNoUpdatesHalfLifeSecs = historicalNoUpdatesHalfLifeSecs
+        self.liquidityOffsetHalfLifeSecs = liquidityOffsetHalfLifeSecs
+    }
+}
+
+extension ScoringDecayParameters: Equatable, Hashable {
+    public static func == (lhs: ScoringDecayParameters, rhs: ScoringDecayParameters) -> Bool {
+        if lhs.historicalNoUpdatesHalfLifeSecs != rhs.historicalNoUpdatesHalfLifeSecs {
+            return false
+        }
+        if lhs.liquidityOffsetHalfLifeSecs != rhs.liquidityOffsetHalfLifeSecs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(historicalNoUpdatesHalfLifeSecs)
+        hasher.combine(liquidityOffsetHalfLifeSecs)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeScoringDecayParameters: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ScoringDecayParameters {
+        return
+            try ScoringDecayParameters(
+                historicalNoUpdatesHalfLifeSecs: FfiConverterUInt64.read(from: &buf),
+                liquidityOffsetHalfLifeSecs: FfiConverterUInt64.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: ScoringDecayParameters, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.historicalNoUpdatesHalfLifeSecs, into: &buf)
+        FfiConverterUInt64.write(value.liquidityOffsetHalfLifeSecs, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScoringDecayParameters_lift(_ buf: RustBuffer) throws -> ScoringDecayParameters {
+    return try FfiConverterTypeScoringDecayParameters.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScoringDecayParameters_lower(_ value: ScoringDecayParameters) -> RustBuffer {
+    return FfiConverterTypeScoringDecayParameters.lower(value)
+}
+
+public struct ScoringFeeParameters {
+    public var basePenaltyMsat: UInt64
+    public var basePenaltyAmountMultiplierMsat: UInt64
+    public var liquidityPenaltyMultiplierMsat: UInt64
+    public var liquidityPenaltyAmountMultiplierMsat: UInt64
+    public var historicalLiquidityPenaltyMultiplierMsat: UInt64
+    public var historicalLiquidityPenaltyAmountMultiplierMsat: UInt64
+    public var antiProbingPenaltyMsat: UInt64
+    public var consideredImpossiblePenaltyMsat: UInt64
+    public var linearSuccessProbability: Bool
+    public var probingDiversityPenaltyMsat: UInt64
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(basePenaltyMsat: UInt64, basePenaltyAmountMultiplierMsat: UInt64, liquidityPenaltyMultiplierMsat: UInt64, liquidityPenaltyAmountMultiplierMsat: UInt64, historicalLiquidityPenaltyMultiplierMsat: UInt64, historicalLiquidityPenaltyAmountMultiplierMsat: UInt64, antiProbingPenaltyMsat: UInt64, consideredImpossiblePenaltyMsat: UInt64, linearSuccessProbability: Bool, probingDiversityPenaltyMsat: UInt64) {
+        self.basePenaltyMsat = basePenaltyMsat
+        self.basePenaltyAmountMultiplierMsat = basePenaltyAmountMultiplierMsat
+        self.liquidityPenaltyMultiplierMsat = liquidityPenaltyMultiplierMsat
+        self.liquidityPenaltyAmountMultiplierMsat = liquidityPenaltyAmountMultiplierMsat
+        self.historicalLiquidityPenaltyMultiplierMsat = historicalLiquidityPenaltyMultiplierMsat
+        self.historicalLiquidityPenaltyAmountMultiplierMsat = historicalLiquidityPenaltyAmountMultiplierMsat
+        self.antiProbingPenaltyMsat = antiProbingPenaltyMsat
+        self.consideredImpossiblePenaltyMsat = consideredImpossiblePenaltyMsat
+        self.linearSuccessProbability = linearSuccessProbability
+        self.probingDiversityPenaltyMsat = probingDiversityPenaltyMsat
+    }
+}
+
+extension ScoringFeeParameters: Equatable, Hashable {
+    public static func == (lhs: ScoringFeeParameters, rhs: ScoringFeeParameters) -> Bool {
+        if lhs.basePenaltyMsat != rhs.basePenaltyMsat {
+            return false
+        }
+        if lhs.basePenaltyAmountMultiplierMsat != rhs.basePenaltyAmountMultiplierMsat {
+            return false
+        }
+        if lhs.liquidityPenaltyMultiplierMsat != rhs.liquidityPenaltyMultiplierMsat {
+            return false
+        }
+        if lhs.liquidityPenaltyAmountMultiplierMsat != rhs.liquidityPenaltyAmountMultiplierMsat {
+            return false
+        }
+        if lhs.historicalLiquidityPenaltyMultiplierMsat != rhs.historicalLiquidityPenaltyMultiplierMsat {
+            return false
+        }
+        if lhs.historicalLiquidityPenaltyAmountMultiplierMsat != rhs.historicalLiquidityPenaltyAmountMultiplierMsat {
+            return false
+        }
+        if lhs.antiProbingPenaltyMsat != rhs.antiProbingPenaltyMsat {
+            return false
+        }
+        if lhs.consideredImpossiblePenaltyMsat != rhs.consideredImpossiblePenaltyMsat {
+            return false
+        }
+        if lhs.linearSuccessProbability != rhs.linearSuccessProbability {
+            return false
+        }
+        if lhs.probingDiversityPenaltyMsat != rhs.probingDiversityPenaltyMsat {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(basePenaltyMsat)
+        hasher.combine(basePenaltyAmountMultiplierMsat)
+        hasher.combine(liquidityPenaltyMultiplierMsat)
+        hasher.combine(liquidityPenaltyAmountMultiplierMsat)
+        hasher.combine(historicalLiquidityPenaltyMultiplierMsat)
+        hasher.combine(historicalLiquidityPenaltyAmountMultiplierMsat)
+        hasher.combine(antiProbingPenaltyMsat)
+        hasher.combine(consideredImpossiblePenaltyMsat)
+        hasher.combine(linearSuccessProbability)
+        hasher.combine(probingDiversityPenaltyMsat)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeScoringFeeParameters: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ScoringFeeParameters {
+        return
+            try ScoringFeeParameters(
+                basePenaltyMsat: FfiConverterUInt64.read(from: &buf),
+                basePenaltyAmountMultiplierMsat: FfiConverterUInt64.read(from: &buf),
+                liquidityPenaltyMultiplierMsat: FfiConverterUInt64.read(from: &buf),
+                liquidityPenaltyAmountMultiplierMsat: FfiConverterUInt64.read(from: &buf),
+                historicalLiquidityPenaltyMultiplierMsat: FfiConverterUInt64.read(from: &buf),
+                historicalLiquidityPenaltyAmountMultiplierMsat: FfiConverterUInt64.read(from: &buf),
+                antiProbingPenaltyMsat: FfiConverterUInt64.read(from: &buf),
+                consideredImpossiblePenaltyMsat: FfiConverterUInt64.read(from: &buf),
+                linearSuccessProbability: FfiConverterBool.read(from: &buf),
+                probingDiversityPenaltyMsat: FfiConverterUInt64.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: ScoringFeeParameters, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.basePenaltyMsat, into: &buf)
+        FfiConverterUInt64.write(value.basePenaltyAmountMultiplierMsat, into: &buf)
+        FfiConverterUInt64.write(value.liquidityPenaltyMultiplierMsat, into: &buf)
+        FfiConverterUInt64.write(value.liquidityPenaltyAmountMultiplierMsat, into: &buf)
+        FfiConverterUInt64.write(value.historicalLiquidityPenaltyMultiplierMsat, into: &buf)
+        FfiConverterUInt64.write(value.historicalLiquidityPenaltyAmountMultiplierMsat, into: &buf)
+        FfiConverterUInt64.write(value.antiProbingPenaltyMsat, into: &buf)
+        FfiConverterUInt64.write(value.consideredImpossiblePenaltyMsat, into: &buf)
+        FfiConverterBool.write(value.linearSuccessProbability, into: &buf)
+        FfiConverterUInt64.write(value.probingDiversityPenaltyMsat, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScoringFeeParameters_lift(_ buf: RustBuffer) throws -> ScoringFeeParameters {
+    return try FfiConverterTypeScoringFeeParameters.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScoringFeeParameters_lower(_ value: ScoringFeeParameters) -> RustBuffer {
+    return FfiConverterTypeScoringFeeParameters.lower(value)
 }
 
 public struct SpendableUtxo {
@@ -10215,6 +10435,54 @@ private struct FfiConverterOptionTypeRouteParametersConfig: FfiConverterRustBuff
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterOptionTypeScoringDecayParameters: FfiConverterRustBuffer {
+    typealias SwiftType = ScoringDecayParameters?
+
+    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeScoringDecayParameters.write(value, into: &buf)
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeScoringDecayParameters.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+private struct FfiConverterOptionTypeScoringFeeParameters: FfiConverterRustBuffer {
+    typealias SwiftType = ScoringFeeParameters?
+
+    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeScoringFeeParameters.write(value, into: &buf)
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeScoringFeeParameters.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterOptionTypeTransactionDetails: FfiConverterRustBuffer {
     typealias SwiftType = TransactionDetails?
 
@@ -12450,6 +12718,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source() != 63501 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_builder_set_scoring_decay_params() != 19869 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_builder_set_scoring_fee_params() != 11588 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_builder_set_storage_dir_path() != 59019 {

@@ -649,6 +649,10 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source() != 63501:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_builder_set_scoring_decay_params() != 19869:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_builder_set_scoring_fee_params() != 11588:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_storage_dir_path() != 59019:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_feerate_to_sat_per_kwu() != 58911:
@@ -1646,6 +1650,18 @@ _UniffiLib.uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source.argty
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_scoring_decay_params.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_scoring_decay_params.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_scoring_fee_params.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_builder_set_scoring_fee_params.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_builder_set_storage_dir_path.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -3007,6 +3023,12 @@ _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_node_alias.restype = ctyp
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_scoring_decay_params.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_scoring_decay_params.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_scoring_fee_params.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_set_scoring_fee_params.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_storage_dir_path.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_storage_dir_path.restype = ctypes.c_uint16
@@ -4701,6 +4723,10 @@ class BuilderProtocol(typing.Protocol):
         raise NotImplementedError
     def set_pathfinding_scores_source(self, url: "str"):
         raise NotImplementedError
+    def set_scoring_decay_params(self, params: "ScoringDecayParameters"):
+        raise NotImplementedError
+    def set_scoring_fee_params(self, params: "ScoringFeeParameters"):
+        raise NotImplementedError
     def set_storage_dir_path(self, storage_dir_path: "str"):
         raise NotImplementedError
 
@@ -5113,6 +5139,28 @@ class Builder:
         
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(url))
+
+
+
+
+
+
+    def set_scoring_decay_params(self, params: "ScoringDecayParameters") -> None:
+        _UniffiConverterTypeScoringDecayParameters.check_lower(params)
+        
+        _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_scoring_decay_params,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeScoringDecayParameters.lower(params))
+
+
+
+
+
+
+    def set_scoring_fee_params(self, params: "ScoringFeeParameters") -> None:
+        _UniffiConverterTypeScoringFeeParameters.check_lower(params)
+        
+        _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_scoring_fee_params,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeScoringFeeParameters.lower(params))
 
 
 
@@ -8096,10 +8144,12 @@ class Config:
     probing_liquidity_limit_multiplier: "int"
     anchor_channels_config: "typing.Optional[AnchorChannelsConfig]"
     route_parameters: "typing.Optional[RouteParametersConfig]"
+    scoring_fee_params: "typing.Optional[ScoringFeeParameters]"
+    scoring_decay_params: "typing.Optional[ScoringDecayParameters]"
     include_untrusted_pending_in_spendable: "bool"
     address_type: "AddressType"
     address_types_to_monitor: "typing.List[AddressType]"
-    def __init__(self, *, storage_dir_path: "str", network: "Network", listening_addresses: "typing.Optional[typing.List[SocketAddress]]", announcement_addresses: "typing.Optional[typing.List[SocketAddress]]", node_alias: "typing.Optional[NodeAlias]", trusted_peers_0conf: "typing.List[PublicKey]", probing_liquidity_limit_multiplier: "int", anchor_channels_config: "typing.Optional[AnchorChannelsConfig]", route_parameters: "typing.Optional[RouteParametersConfig]", include_untrusted_pending_in_spendable: "bool", address_type: "AddressType", address_types_to_monitor: "typing.List[AddressType]"):
+    def __init__(self, *, storage_dir_path: "str", network: "Network", listening_addresses: "typing.Optional[typing.List[SocketAddress]]", announcement_addresses: "typing.Optional[typing.List[SocketAddress]]", node_alias: "typing.Optional[NodeAlias]", trusted_peers_0conf: "typing.List[PublicKey]", probing_liquidity_limit_multiplier: "int", anchor_channels_config: "typing.Optional[AnchorChannelsConfig]", route_parameters: "typing.Optional[RouteParametersConfig]", scoring_fee_params: "typing.Optional[ScoringFeeParameters]", scoring_decay_params: "typing.Optional[ScoringDecayParameters]", include_untrusted_pending_in_spendable: "bool", address_type: "AddressType", address_types_to_monitor: "typing.List[AddressType]"):
         self.storage_dir_path = storage_dir_path
         self.network = network
         self.listening_addresses = listening_addresses
@@ -8109,12 +8159,14 @@ class Config:
         self.probing_liquidity_limit_multiplier = probing_liquidity_limit_multiplier
         self.anchor_channels_config = anchor_channels_config
         self.route_parameters = route_parameters
+        self.scoring_fee_params = scoring_fee_params
+        self.scoring_decay_params = scoring_decay_params
         self.include_untrusted_pending_in_spendable = include_untrusted_pending_in_spendable
         self.address_type = address_type
         self.address_types_to_monitor = address_types_to_monitor
 
     def __str__(self):
-        return "Config(storage_dir_path={}, network={}, listening_addresses={}, announcement_addresses={}, node_alias={}, trusted_peers_0conf={}, probing_liquidity_limit_multiplier={}, anchor_channels_config={}, route_parameters={}, include_untrusted_pending_in_spendable={}, address_type={}, address_types_to_monitor={})".format(self.storage_dir_path, self.network, self.listening_addresses, self.announcement_addresses, self.node_alias, self.trusted_peers_0conf, self.probing_liquidity_limit_multiplier, self.anchor_channels_config, self.route_parameters, self.include_untrusted_pending_in_spendable, self.address_type, self.address_types_to_monitor)
+        return "Config(storage_dir_path={}, network={}, listening_addresses={}, announcement_addresses={}, node_alias={}, trusted_peers_0conf={}, probing_liquidity_limit_multiplier={}, anchor_channels_config={}, route_parameters={}, scoring_fee_params={}, scoring_decay_params={}, include_untrusted_pending_in_spendable={}, address_type={}, address_types_to_monitor={})".format(self.storage_dir_path, self.network, self.listening_addresses, self.announcement_addresses, self.node_alias, self.trusted_peers_0conf, self.probing_liquidity_limit_multiplier, self.anchor_channels_config, self.route_parameters, self.scoring_fee_params, self.scoring_decay_params, self.include_untrusted_pending_in_spendable, self.address_type, self.address_types_to_monitor)
 
     def __eq__(self, other):
         if self.storage_dir_path != other.storage_dir_path:
@@ -8134,6 +8186,10 @@ class Config:
         if self.anchor_channels_config != other.anchor_channels_config:
             return False
         if self.route_parameters != other.route_parameters:
+            return False
+        if self.scoring_fee_params != other.scoring_fee_params:
+            return False
+        if self.scoring_decay_params != other.scoring_decay_params:
             return False
         if self.include_untrusted_pending_in_spendable != other.include_untrusted_pending_in_spendable:
             return False
@@ -8156,6 +8212,8 @@ class _UniffiConverterTypeConfig(_UniffiConverterRustBuffer):
             probing_liquidity_limit_multiplier=_UniffiConverterUInt64.read(buf),
             anchor_channels_config=_UniffiConverterOptionalTypeAnchorChannelsConfig.read(buf),
             route_parameters=_UniffiConverterOptionalTypeRouteParametersConfig.read(buf),
+            scoring_fee_params=_UniffiConverterOptionalTypeScoringFeeParameters.read(buf),
+            scoring_decay_params=_UniffiConverterOptionalTypeScoringDecayParameters.read(buf),
             include_untrusted_pending_in_spendable=_UniffiConverterBool.read(buf),
             address_type=_UniffiConverterTypeAddressType.read(buf),
             address_types_to_monitor=_UniffiConverterSequenceTypeAddressType.read(buf),
@@ -8172,6 +8230,8 @@ class _UniffiConverterTypeConfig(_UniffiConverterRustBuffer):
         _UniffiConverterUInt64.check_lower(value.probing_liquidity_limit_multiplier)
         _UniffiConverterOptionalTypeAnchorChannelsConfig.check_lower(value.anchor_channels_config)
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(value.route_parameters)
+        _UniffiConverterOptionalTypeScoringFeeParameters.check_lower(value.scoring_fee_params)
+        _UniffiConverterOptionalTypeScoringDecayParameters.check_lower(value.scoring_decay_params)
         _UniffiConverterBool.check_lower(value.include_untrusted_pending_in_spendable)
         _UniffiConverterTypeAddressType.check_lower(value.address_type)
         _UniffiConverterSequenceTypeAddressType.check_lower(value.address_types_to_monitor)
@@ -8187,6 +8247,8 @@ class _UniffiConverterTypeConfig(_UniffiConverterRustBuffer):
         _UniffiConverterUInt64.write(value.probing_liquidity_limit_multiplier, buf)
         _UniffiConverterOptionalTypeAnchorChannelsConfig.write(value.anchor_channels_config, buf)
         _UniffiConverterOptionalTypeRouteParametersConfig.write(value.route_parameters, buf)
+        _UniffiConverterOptionalTypeScoringFeeParameters.write(value.scoring_fee_params, buf)
+        _UniffiConverterOptionalTypeScoringDecayParameters.write(value.scoring_decay_params, buf)
         _UniffiConverterBool.write(value.include_untrusted_pending_in_spendable, buf)
         _UniffiConverterTypeAddressType.write(value.address_type, buf)
         _UniffiConverterSequenceTypeAddressType.write(value.address_types_to_monitor, buf)
@@ -9318,6 +9380,134 @@ class _UniffiConverterTypeRuntimeSyncIntervals(_UniffiConverterRustBuffer):
         _UniffiConverterUInt64.write(value.onchain_wallet_sync_interval_secs, buf)
         _UniffiConverterUInt64.write(value.lightning_wallet_sync_interval_secs, buf)
         _UniffiConverterUInt64.write(value.fee_rate_cache_update_interval_secs, buf)
+
+
+class ScoringDecayParameters:
+    historical_no_updates_half_life_secs: "int"
+    liquidity_offset_half_life_secs: "int"
+    def __init__(self, *, historical_no_updates_half_life_secs: "int", liquidity_offset_half_life_secs: "int"):
+        self.historical_no_updates_half_life_secs = historical_no_updates_half_life_secs
+        self.liquidity_offset_half_life_secs = liquidity_offset_half_life_secs
+
+    def __str__(self):
+        return "ScoringDecayParameters(historical_no_updates_half_life_secs={}, liquidity_offset_half_life_secs={})".format(self.historical_no_updates_half_life_secs, self.liquidity_offset_half_life_secs)
+
+    def __eq__(self, other):
+        if self.historical_no_updates_half_life_secs != other.historical_no_updates_half_life_secs:
+            return False
+        if self.liquidity_offset_half_life_secs != other.liquidity_offset_half_life_secs:
+            return False
+        return True
+
+class _UniffiConverterTypeScoringDecayParameters(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return ScoringDecayParameters(
+            historical_no_updates_half_life_secs=_UniffiConverterUInt64.read(buf),
+            liquidity_offset_half_life_secs=_UniffiConverterUInt64.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterUInt64.check_lower(value.historical_no_updates_half_life_secs)
+        _UniffiConverterUInt64.check_lower(value.liquidity_offset_half_life_secs)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterUInt64.write(value.historical_no_updates_half_life_secs, buf)
+        _UniffiConverterUInt64.write(value.liquidity_offset_half_life_secs, buf)
+
+
+class ScoringFeeParameters:
+    base_penalty_msat: "int"
+    base_penalty_amount_multiplier_msat: "int"
+    liquidity_penalty_multiplier_msat: "int"
+    liquidity_penalty_amount_multiplier_msat: "int"
+    historical_liquidity_penalty_multiplier_msat: "int"
+    historical_liquidity_penalty_amount_multiplier_msat: "int"
+    anti_probing_penalty_msat: "int"
+    considered_impossible_penalty_msat: "int"
+    linear_success_probability: "bool"
+    probing_diversity_penalty_msat: "int"
+    def __init__(self, *, base_penalty_msat: "int", base_penalty_amount_multiplier_msat: "int", liquidity_penalty_multiplier_msat: "int", liquidity_penalty_amount_multiplier_msat: "int", historical_liquidity_penalty_multiplier_msat: "int", historical_liquidity_penalty_amount_multiplier_msat: "int", anti_probing_penalty_msat: "int", considered_impossible_penalty_msat: "int", linear_success_probability: "bool", probing_diversity_penalty_msat: "int"):
+        self.base_penalty_msat = base_penalty_msat
+        self.base_penalty_amount_multiplier_msat = base_penalty_amount_multiplier_msat
+        self.liquidity_penalty_multiplier_msat = liquidity_penalty_multiplier_msat
+        self.liquidity_penalty_amount_multiplier_msat = liquidity_penalty_amount_multiplier_msat
+        self.historical_liquidity_penalty_multiplier_msat = historical_liquidity_penalty_multiplier_msat
+        self.historical_liquidity_penalty_amount_multiplier_msat = historical_liquidity_penalty_amount_multiplier_msat
+        self.anti_probing_penalty_msat = anti_probing_penalty_msat
+        self.considered_impossible_penalty_msat = considered_impossible_penalty_msat
+        self.linear_success_probability = linear_success_probability
+        self.probing_diversity_penalty_msat = probing_diversity_penalty_msat
+
+    def __str__(self):
+        return "ScoringFeeParameters(base_penalty_msat={}, base_penalty_amount_multiplier_msat={}, liquidity_penalty_multiplier_msat={}, liquidity_penalty_amount_multiplier_msat={}, historical_liquidity_penalty_multiplier_msat={}, historical_liquidity_penalty_amount_multiplier_msat={}, anti_probing_penalty_msat={}, considered_impossible_penalty_msat={}, linear_success_probability={}, probing_diversity_penalty_msat={})".format(self.base_penalty_msat, self.base_penalty_amount_multiplier_msat, self.liquidity_penalty_multiplier_msat, self.liquidity_penalty_amount_multiplier_msat, self.historical_liquidity_penalty_multiplier_msat, self.historical_liquidity_penalty_amount_multiplier_msat, self.anti_probing_penalty_msat, self.considered_impossible_penalty_msat, self.linear_success_probability, self.probing_diversity_penalty_msat)
+
+    def __eq__(self, other):
+        if self.base_penalty_msat != other.base_penalty_msat:
+            return False
+        if self.base_penalty_amount_multiplier_msat != other.base_penalty_amount_multiplier_msat:
+            return False
+        if self.liquidity_penalty_multiplier_msat != other.liquidity_penalty_multiplier_msat:
+            return False
+        if self.liquidity_penalty_amount_multiplier_msat != other.liquidity_penalty_amount_multiplier_msat:
+            return False
+        if self.historical_liquidity_penalty_multiplier_msat != other.historical_liquidity_penalty_multiplier_msat:
+            return False
+        if self.historical_liquidity_penalty_amount_multiplier_msat != other.historical_liquidity_penalty_amount_multiplier_msat:
+            return False
+        if self.anti_probing_penalty_msat != other.anti_probing_penalty_msat:
+            return False
+        if self.considered_impossible_penalty_msat != other.considered_impossible_penalty_msat:
+            return False
+        if self.linear_success_probability != other.linear_success_probability:
+            return False
+        if self.probing_diversity_penalty_msat != other.probing_diversity_penalty_msat:
+            return False
+        return True
+
+class _UniffiConverterTypeScoringFeeParameters(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return ScoringFeeParameters(
+            base_penalty_msat=_UniffiConverterUInt64.read(buf),
+            base_penalty_amount_multiplier_msat=_UniffiConverterUInt64.read(buf),
+            liquidity_penalty_multiplier_msat=_UniffiConverterUInt64.read(buf),
+            liquidity_penalty_amount_multiplier_msat=_UniffiConverterUInt64.read(buf),
+            historical_liquidity_penalty_multiplier_msat=_UniffiConverterUInt64.read(buf),
+            historical_liquidity_penalty_amount_multiplier_msat=_UniffiConverterUInt64.read(buf),
+            anti_probing_penalty_msat=_UniffiConverterUInt64.read(buf),
+            considered_impossible_penalty_msat=_UniffiConverterUInt64.read(buf),
+            linear_success_probability=_UniffiConverterBool.read(buf),
+            probing_diversity_penalty_msat=_UniffiConverterUInt64.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterUInt64.check_lower(value.base_penalty_msat)
+        _UniffiConverterUInt64.check_lower(value.base_penalty_amount_multiplier_msat)
+        _UniffiConverterUInt64.check_lower(value.liquidity_penalty_multiplier_msat)
+        _UniffiConverterUInt64.check_lower(value.liquidity_penalty_amount_multiplier_msat)
+        _UniffiConverterUInt64.check_lower(value.historical_liquidity_penalty_multiplier_msat)
+        _UniffiConverterUInt64.check_lower(value.historical_liquidity_penalty_amount_multiplier_msat)
+        _UniffiConverterUInt64.check_lower(value.anti_probing_penalty_msat)
+        _UniffiConverterUInt64.check_lower(value.considered_impossible_penalty_msat)
+        _UniffiConverterBool.check_lower(value.linear_success_probability)
+        _UniffiConverterUInt64.check_lower(value.probing_diversity_penalty_msat)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterUInt64.write(value.base_penalty_msat, buf)
+        _UniffiConverterUInt64.write(value.base_penalty_amount_multiplier_msat, buf)
+        _UniffiConverterUInt64.write(value.liquidity_penalty_multiplier_msat, buf)
+        _UniffiConverterUInt64.write(value.liquidity_penalty_amount_multiplier_msat, buf)
+        _UniffiConverterUInt64.write(value.historical_liquidity_penalty_multiplier_msat, buf)
+        _UniffiConverterUInt64.write(value.historical_liquidity_penalty_amount_multiplier_msat, buf)
+        _UniffiConverterUInt64.write(value.anti_probing_penalty_msat, buf)
+        _UniffiConverterUInt64.write(value.considered_impossible_penalty_msat, buf)
+        _UniffiConverterBool.write(value.linear_success_probability, buf)
+        _UniffiConverterUInt64.write(value.probing_diversity_penalty_msat, buf)
 
 
 class SpendableUtxo:
@@ -14847,6 +15037,60 @@ class _UniffiConverterOptionalTypeRouteParametersConfig(_UniffiConverterRustBuff
 
 
 
+class _UniffiConverterOptionalTypeScoringDecayParameters(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        if value is not None:
+            _UniffiConverterTypeScoringDecayParameters.check_lower(value)
+
+    @classmethod
+    def write(cls, value, buf):
+        if value is None:
+            buf.write_u8(0)
+            return
+
+        buf.write_u8(1)
+        _UniffiConverterTypeScoringDecayParameters.write(value, buf)
+
+    @classmethod
+    def read(cls, buf):
+        flag = buf.read_u8()
+        if flag == 0:
+            return None
+        elif flag == 1:
+            return _UniffiConverterTypeScoringDecayParameters.read(buf)
+        else:
+            raise InternalError("Unexpected flag byte for optional type")
+
+
+
+class _UniffiConverterOptionalTypeScoringFeeParameters(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        if value is not None:
+            _UniffiConverterTypeScoringFeeParameters.check_lower(value)
+
+    @classmethod
+    def write(cls, value, buf):
+        if value is None:
+            buf.write_u8(0)
+            return
+
+        buf.write_u8(1)
+        _UniffiConverterTypeScoringFeeParameters.write(value, buf)
+
+    @classmethod
+    def read(cls, buf):
+        flag = buf.read_u8()
+        if flag == 0:
+            return None
+        elif flag == 1:
+            return _UniffiConverterTypeScoringFeeParameters.read(buf)
+        else:
+            raise InternalError("Unexpected flag byte for optional type")
+
+
+
 class _UniffiConverterOptionalTypeTransactionDetails(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -16613,6 +16857,8 @@ __all__ = [
     "RouteParametersConfig",
     "RoutingFees",
     "RuntimeSyncIntervals",
+    "ScoringDecayParameters",
+    "ScoringFeeParameters",
     "SpendableUtxo",
     "TransactionDetails",
     "TxInput",

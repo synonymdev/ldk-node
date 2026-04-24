@@ -1522,6 +1522,10 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2105,6 +2109,16 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source(
         `ptr`: Pointer?,
         `url`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_ldk_node_fn_method_builder_set_scoring_decay_params(
+        `ptr`: Pointer?,
+        `params`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_ldk_node_fn_method_builder_set_scoring_fee_params(
+        `ptr`: Pointer?,
+        `params`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
     fun uniffi_ldk_node_fn_method_builder_set_storage_dir_path(
@@ -3178,6 +3192,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source(
     ): Short
+    fun uniffi_ldk_node_checksum_method_builder_set_scoring_decay_params(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_builder_set_scoring_fee_params(
+    ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_storage_dir_path(
     ): Short
     fun uniffi_ldk_node_checksum_method_feerate_to_sat_per_kwu(
@@ -3693,6 +3711,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source() != 63501.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_builder_set_scoring_decay_params() != 19869.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_builder_set_scoring_fee_params() != 11588.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_builder_set_storage_dir_path() != 59019.toShort()) {
@@ -6093,6 +6117,30 @@ open class Builder: Disposable, BuilderInterface {
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source(
                     it,
                     FfiConverterString.lower(`url`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+    override fun `setScoringDecayParams`(`params`: ScoringDecayParameters) {
+        callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_set_scoring_decay_params(
+                    it,
+                    FfiConverterTypeScoringDecayParameters.lower(`params`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+    override fun `setScoringFeeParams`(`params`: ScoringFeeParameters) {
+        callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_set_scoring_fee_params(
+                    it,
+                    FfiConverterTypeScoringFeeParameters.lower(`params`),
                     uniffiRustCallStatus,
                 )
             }
@@ -9417,6 +9465,8 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
             FfiConverterULong.read(buf),
             FfiConverterOptionalTypeAnchorChannelsConfig.read(buf),
             FfiConverterOptionalTypeRouteParametersConfig.read(buf),
+            FfiConverterOptionalTypeScoringFeeParameters.read(buf),
+            FfiConverterOptionalTypeScoringDecayParameters.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterTypeAddressType.read(buf),
             FfiConverterSequenceTypeAddressType.read(buf),
@@ -9433,6 +9483,8 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
             FfiConverterULong.allocationSize(value.`probingLiquidityLimitMultiplier`) +
             FfiConverterOptionalTypeAnchorChannelsConfig.allocationSize(value.`anchorChannelsConfig`) +
             FfiConverterOptionalTypeRouteParametersConfig.allocationSize(value.`routeParameters`) +
+            FfiConverterOptionalTypeScoringFeeParameters.allocationSize(value.`scoringFeeParams`) +
+            FfiConverterOptionalTypeScoringDecayParameters.allocationSize(value.`scoringDecayParams`) +
             FfiConverterBoolean.allocationSize(value.`includeUntrustedPendingInSpendable`) +
             FfiConverterTypeAddressType.allocationSize(value.`addressType`) +
             FfiConverterSequenceTypeAddressType.allocationSize(value.`addressTypesToMonitor`)
@@ -9448,6 +9500,8 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
         FfiConverterULong.write(value.`probingLiquidityLimitMultiplier`, buf)
         FfiConverterOptionalTypeAnchorChannelsConfig.write(value.`anchorChannelsConfig`, buf)
         FfiConverterOptionalTypeRouteParametersConfig.write(value.`routeParameters`, buf)
+        FfiConverterOptionalTypeScoringFeeParameters.write(value.`scoringFeeParams`, buf)
+        FfiConverterOptionalTypeScoringDecayParameters.write(value.`scoringDecayParams`, buf)
         FfiConverterBoolean.write(value.`includeUntrustedPendingInSpendable`, buf)
         FfiConverterTypeAddressType.write(value.`addressType`, buf)
         FfiConverterSequenceTypeAddressType.write(value.`addressTypesToMonitor`, buf)
@@ -10079,6 +10133,74 @@ object FfiConverterTypeRuntimeSyncIntervals: FfiConverterRustBuffer<RuntimeSyncI
         FfiConverterULong.write(value.`onchainWalletSyncIntervalSecs`, buf)
         FfiConverterULong.write(value.`lightningWalletSyncIntervalSecs`, buf)
         FfiConverterULong.write(value.`feeRateCacheUpdateIntervalSecs`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypeScoringDecayParameters: FfiConverterRustBuffer<ScoringDecayParameters> {
+    override fun read(buf: ByteBuffer): ScoringDecayParameters {
+        return ScoringDecayParameters(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ScoringDecayParameters) = (
+            FfiConverterULong.allocationSize(value.`historicalNoUpdatesHalfLifeSecs`) +
+            FfiConverterULong.allocationSize(value.`liquidityOffsetHalfLifeSecs`)
+    )
+
+    override fun write(value: ScoringDecayParameters, buf: ByteBuffer) {
+        FfiConverterULong.write(value.`historicalNoUpdatesHalfLifeSecs`, buf)
+        FfiConverterULong.write(value.`liquidityOffsetHalfLifeSecs`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypeScoringFeeParameters: FfiConverterRustBuffer<ScoringFeeParameters> {
+    override fun read(buf: ByteBuffer): ScoringFeeParameters {
+        return ScoringFeeParameters(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ScoringFeeParameters) = (
+            FfiConverterULong.allocationSize(value.`basePenaltyMsat`) +
+            FfiConverterULong.allocationSize(value.`basePenaltyAmountMultiplierMsat`) +
+            FfiConverterULong.allocationSize(value.`liquidityPenaltyMultiplierMsat`) +
+            FfiConverterULong.allocationSize(value.`liquidityPenaltyAmountMultiplierMsat`) +
+            FfiConverterULong.allocationSize(value.`historicalLiquidityPenaltyMultiplierMsat`) +
+            FfiConverterULong.allocationSize(value.`historicalLiquidityPenaltyAmountMultiplierMsat`) +
+            FfiConverterULong.allocationSize(value.`antiProbingPenaltyMsat`) +
+            FfiConverterULong.allocationSize(value.`consideredImpossiblePenaltyMsat`) +
+            FfiConverterBoolean.allocationSize(value.`linearSuccessProbability`) +
+            FfiConverterULong.allocationSize(value.`probingDiversityPenaltyMsat`)
+    )
+
+    override fun write(value: ScoringFeeParameters, buf: ByteBuffer) {
+        FfiConverterULong.write(value.`basePenaltyMsat`, buf)
+        FfiConverterULong.write(value.`basePenaltyAmountMultiplierMsat`, buf)
+        FfiConverterULong.write(value.`liquidityPenaltyMultiplierMsat`, buf)
+        FfiConverterULong.write(value.`liquidityPenaltyAmountMultiplierMsat`, buf)
+        FfiConverterULong.write(value.`historicalLiquidityPenaltyMultiplierMsat`, buf)
+        FfiConverterULong.write(value.`historicalLiquidityPenaltyAmountMultiplierMsat`, buf)
+        FfiConverterULong.write(value.`antiProbingPenaltyMsat`, buf)
+        FfiConverterULong.write(value.`consideredImpossiblePenaltyMsat`, buf)
+        FfiConverterBoolean.write(value.`linearSuccessProbability`, buf)
+        FfiConverterULong.write(value.`probingDiversityPenaltyMsat`, buf)
     }
 }
 
@@ -12922,6 +13044,64 @@ object FfiConverterOptionalTypeRouteParametersConfig: FfiConverterRustBuffer<Rou
         } else {
             buf.put(1)
             FfiConverterTypeRouteParametersConfig.write(value, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterOptionalTypeScoringDecayParameters: FfiConverterRustBuffer<ScoringDecayParameters?> {
+    override fun read(buf: ByteBuffer): ScoringDecayParameters? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeScoringDecayParameters.read(buf)
+    }
+
+    override fun allocationSize(value: ScoringDecayParameters?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeScoringDecayParameters.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ScoringDecayParameters?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeScoringDecayParameters.write(value, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterOptionalTypeScoringFeeParameters: FfiConverterRustBuffer<ScoringFeeParameters?> {
+    override fun read(buf: ByteBuffer): ScoringFeeParameters? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeScoringFeeParameters.read(buf)
+    }
+
+    override fun allocationSize(value: ScoringFeeParameters?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeScoringFeeParameters.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ScoringFeeParameters?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeScoringFeeParameters.write(value, buf)
         }
     }
 }
