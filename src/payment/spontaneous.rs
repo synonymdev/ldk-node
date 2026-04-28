@@ -195,7 +195,7 @@ impl SpontaneousPayment {
 	/// See [`Bolt11Payment::send_probes`] for semantics and how returned [`ProbeHandle`] values
 	/// correlate with [`crate::Event::ProbeSuccessful`] / [`crate::Event::ProbeFailed`].
 	///
-	/// [`Bolt11Payment::send_probes`]: crate::payment::Bolt11Payment
+	/// [`Bolt11Payment::send_probes`]: crate::payment::Bolt11Payment::send_probes
 	pub fn send_probes(
 		&self, amount_msat: u64, node_id: PublicKey,
 	) -> Result<Vec<ProbeHandle>, Error> {
