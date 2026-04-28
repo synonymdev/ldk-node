@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/bdk-wallet-aggregate"]
+members = [".", "crates/bdk-wallet-aggregate", "crates/scorer-inspect"]
 exclude = ["bindings/uniffi-bindgen"]
 
 [package]
