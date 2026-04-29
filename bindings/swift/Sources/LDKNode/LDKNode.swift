@@ -850,9 +850,9 @@ public protocol Bolt11PaymentProtocol: AnyObject {
 
     func send(invoice: Bolt11Invoice, routeParameters: RouteParametersConfig?) throws -> PaymentId
 
-    func sendProbes(invoice: Bolt11Invoice, routeParameters: RouteParametersConfig?) throws
+    func sendProbes(invoice: Bolt11Invoice, routeParameters: RouteParametersConfig?) throws -> [ProbeHandle]
 
-    func sendProbesUsingAmount(invoice: Bolt11Invoice, amountMsat: UInt64, routeParameters: RouteParametersConfig?) throws
+    func sendProbesUsingAmount(invoice: Bolt11Invoice, amountMsat: UInt64, routeParameters: RouteParametersConfig?) throws -> [ProbeHandle]
 
     func sendUsingAmount(invoice: Bolt11Invoice, amountMsat: UInt64, routeParameters: RouteParametersConfig?) throws -> PaymentId
 }
@@ -1021,21 +1021,21 @@ open class Bolt11Payment:
         })
     }
 
-    open func sendProbes(invoice: Bolt11Invoice, routeParameters: RouteParametersConfig?) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
+    open func sendProbes(invoice: Bolt11Invoice, routeParameters: RouteParametersConfig?) throws -> [ProbeHandle] {
+        return try FfiConverterSequenceTypeProbeHandle.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_bolt11payment_send_probes(self.uniffiClonePointer(),
                                                                 FfiConverterTypeBolt11Invoice.lower(invoice),
                                                                 FfiConverterOptionTypeRouteParametersConfig.lower(routeParameters), $0)
-        }
+        })
     }
 
-    open func sendProbesUsingAmount(invoice: Bolt11Invoice, amountMsat: UInt64, routeParameters: RouteParametersConfig?) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
+    open func sendProbesUsingAmount(invoice: Bolt11Invoice, amountMsat: UInt64, routeParameters: RouteParametersConfig?) throws -> [ProbeHandle] {
+        return try FfiConverterSequenceTypeProbeHandle.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount(self.uniffiClonePointer(),
                                                                              FfiConverterTypeBolt11Invoice.lower(invoice),
                                                                              FfiConverterUInt64.lower(amountMsat),
                                                                              FfiConverterOptionTypeRouteParametersConfig.lower(routeParameters), $0)
-        }
+        })
     }
 
     open func sendUsingAmount(invoice: Bolt11Invoice, amountMsat: UInt64, routeParameters: RouteParametersConfig?) throws -> PaymentId {
@@ -3727,7 +3727,7 @@ public func FfiConverterTypeRefund_lower(_ value: Refund) -> UnsafeMutableRawPoi
 public protocol SpontaneousPaymentProtocol: AnyObject {
     func send(amountMsat: UInt64, nodeId: PublicKey, routeParameters: RouteParametersConfig?) throws -> PaymentId
 
-    func sendProbes(amountMsat: UInt64, nodeId: PublicKey) throws
+    func sendProbes(amountMsat: UInt64, nodeId: PublicKey) throws -> [ProbeHandle]
 
     func sendWithCustomTlvs(amountMsat: UInt64, nodeId: PublicKey, routeParameters: RouteParametersConfig?, customTlvs: [CustomTlvRecord]) throws -> PaymentId
 
@@ -3794,12 +3794,12 @@ open class SpontaneousPayment:
         })
     }
 
-    open func sendProbes(amountMsat: UInt64, nodeId: PublicKey) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
+    open func sendProbes(amountMsat: UInt64, nodeId: PublicKey) throws -> [ProbeHandle] {
+        return try FfiConverterSequenceTypeProbeHandle.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_spontaneouspayment_send_probes(self.uniffiClonePointer(),
                                                                      FfiConverterUInt64.lower(amountMsat),
                                                                      FfiConverterTypePublicKey.lower(nodeId), $0)
-        }
+        })
     }
 
     open func sendWithCustomTlvs(amountMsat: UInt64, nodeId: PublicKey, routeParameters: RouteParametersConfig?, customTlvs: [CustomTlvRecord]) throws -> PaymentId {
@@ -6552,6 +6552,67 @@ public func FfiConverterTypePeerDetails_lower(_ value: PeerDetails) -> RustBuffe
     return FfiConverterTypePeerDetails.lower(value)
 }
 
+public struct ProbeHandle {
+    public var paymentHash: PaymentHash
+    public var paymentId: PaymentId
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(paymentHash: PaymentHash, paymentId: PaymentId) {
+        self.paymentHash = paymentHash
+        self.paymentId = paymentId
+    }
+}
+
+extension ProbeHandle: Equatable, Hashable {
+    public static func == (lhs: ProbeHandle, rhs: ProbeHandle) -> Bool {
+        if lhs.paymentHash != rhs.paymentHash {
+            return false
+        }
+        if lhs.paymentId != rhs.paymentId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(paymentHash)
+        hasher.combine(paymentId)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProbeHandle: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProbeHandle {
+        return
+            try ProbeHandle(
+                paymentHash: FfiConverterTypePaymentHash.read(from: &buf),
+                paymentId: FfiConverterTypePaymentId.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: ProbeHandle, into buf: inout [UInt8]) {
+        FfiConverterTypePaymentHash.write(value.paymentHash, into: &buf)
+        FfiConverterTypePaymentId.write(value.paymentId, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProbeHandle_lift(_ buf: RustBuffer) throws -> ProbeHandle {
+    return try FfiConverterTypeProbeHandle.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProbeHandle_lower(_ value: ProbeHandle) -> RustBuffer {
+    return FfiConverterTypeProbeHandle.lower(value)
+}
+
 public struct RouteHintHop {
     public var srcNodeId: PublicKey
     public var shortChannelId: UInt64
@@ -7886,6 +7947,8 @@ public enum Event {
     case paymentReceived(paymentId: PaymentId?, paymentHash: PaymentHash, amountMsat: UInt64, customRecords: [CustomTlvRecord])
     case paymentClaimable(paymentId: PaymentId, paymentHash: PaymentHash, claimableAmountMsat: UInt64, claimDeadline: UInt32?, customRecords: [CustomTlvRecord])
     case paymentForwarded(prevChannelId: ChannelId, nextChannelId: ChannelId, prevUserChannelId: UserChannelId?, nextUserChannelId: UserChannelId?, prevNodeId: PublicKey?, nextNodeId: PublicKey?, totalFeeEarnedMsat: UInt64?, skimmedFeeMsat: UInt64?, claimFromOnchainTx: Bool, outboundAmountForwardedMsat: UInt64?)
+    case probeSuccessful(paymentId: PaymentId, paymentHash: PaymentHash)
+    case probeFailed(paymentId: PaymentId, paymentHash: PaymentHash, shortChannelId: UInt64?)
     case channelPending(channelId: ChannelId, userChannelId: UserChannelId, formerTemporaryChannelId: ChannelId, counterpartyNodeId: PublicKey, fundingTxo: OutPoint)
     case channelReady(channelId: ChannelId, userChannelId: UserChannelId, counterpartyNodeId: PublicKey?, fundingTxo: OutPoint?)
     case channelClosed(channelId: ChannelId, userChannelId: UserChannelId, counterpartyNodeId: PublicKey?, reason: ClosureReason?)
@@ -7920,31 +7983,35 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
 
         case 5: return try .paymentForwarded(prevChannelId: FfiConverterTypeChannelId.read(from: &buf), nextChannelId: FfiConverterTypeChannelId.read(from: &buf), prevUserChannelId: FfiConverterOptionTypeUserChannelId.read(from: &buf), nextUserChannelId: FfiConverterOptionTypeUserChannelId.read(from: &buf), prevNodeId: FfiConverterOptionTypePublicKey.read(from: &buf), nextNodeId: FfiConverterOptionTypePublicKey.read(from: &buf), totalFeeEarnedMsat: FfiConverterOptionUInt64.read(from: &buf), skimmedFeeMsat: FfiConverterOptionUInt64.read(from: &buf), claimFromOnchainTx: FfiConverterBool.read(from: &buf), outboundAmountForwardedMsat: FfiConverterOptionUInt64.read(from: &buf))
 
-        case 6: return try .channelPending(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), formerTemporaryChannelId: FfiConverterTypeChannelId.read(from: &buf), counterpartyNodeId: FfiConverterTypePublicKey.read(from: &buf), fundingTxo: FfiConverterTypeOutPoint.read(from: &buf))
+        case 6: return try .probeSuccessful(paymentId: FfiConverterTypePaymentId.read(from: &buf), paymentHash: FfiConverterTypePaymentHash.read(from: &buf))
 
-        case 7: return try .channelReady(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterOptionTypePublicKey.read(from: &buf), fundingTxo: FfiConverterOptionTypeOutPoint.read(from: &buf))
+        case 7: return try .probeFailed(paymentId: FfiConverterTypePaymentId.read(from: &buf), paymentHash: FfiConverterTypePaymentHash.read(from: &buf), shortChannelId: FfiConverterOptionUInt64.read(from: &buf))
 
-        case 8: return try .channelClosed(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterOptionTypePublicKey.read(from: &buf), reason: FfiConverterOptionTypeClosureReason.read(from: &buf))
+        case 8: return try .channelPending(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), formerTemporaryChannelId: FfiConverterTypeChannelId.read(from: &buf), counterpartyNodeId: FfiConverterTypePublicKey.read(from: &buf), fundingTxo: FfiConverterTypeOutPoint.read(from: &buf))
 
-        case 9: return try .splicePending(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterTypePublicKey.read(from: &buf), newFundingTxo: FfiConverterTypeOutPoint.read(from: &buf))
+        case 9: return try .channelReady(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterOptionTypePublicKey.read(from: &buf), fundingTxo: FfiConverterOptionTypeOutPoint.read(from: &buf))
 
-        case 10: return try .spliceFailed(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterTypePublicKey.read(from: &buf), abandonedFundingTxo: FfiConverterOptionTypeOutPoint.read(from: &buf))
+        case 10: return try .channelClosed(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterOptionTypePublicKey.read(from: &buf), reason: FfiConverterOptionTypeClosureReason.read(from: &buf))
 
-        case 11: return try .onchainTransactionConfirmed(txid: FfiConverterTypeTxid.read(from: &buf), blockHash: FfiConverterTypeBlockHash.read(from: &buf), blockHeight: FfiConverterUInt32.read(from: &buf), confirmationTime: FfiConverterUInt64.read(from: &buf), details: FfiConverterTypeTransactionDetails.read(from: &buf))
+        case 11: return try .splicePending(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterTypePublicKey.read(from: &buf), newFundingTxo: FfiConverterTypeOutPoint.read(from: &buf))
 
-        case 12: return try .onchainTransactionReceived(txid: FfiConverterTypeTxid.read(from: &buf), details: FfiConverterTypeTransactionDetails.read(from: &buf))
+        case 12: return try .spliceFailed(channelId: FfiConverterTypeChannelId.read(from: &buf), userChannelId: FfiConverterTypeUserChannelId.read(from: &buf), counterpartyNodeId: FfiConverterTypePublicKey.read(from: &buf), abandonedFundingTxo: FfiConverterOptionTypeOutPoint.read(from: &buf))
 
-        case 13: return try .onchainTransactionReplaced(txid: FfiConverterTypeTxid.read(from: &buf), conflicts: FfiConverterSequenceTypeTxid.read(from: &buf))
+        case 13: return try .onchainTransactionConfirmed(txid: FfiConverterTypeTxid.read(from: &buf), blockHash: FfiConverterTypeBlockHash.read(from: &buf), blockHeight: FfiConverterUInt32.read(from: &buf), confirmationTime: FfiConverterUInt64.read(from: &buf), details: FfiConverterTypeTransactionDetails.read(from: &buf))
 
-        case 14: return try .onchainTransactionReorged(txid: FfiConverterTypeTxid.read(from: &buf))
+        case 14: return try .onchainTransactionReceived(txid: FfiConverterTypeTxid.read(from: &buf), details: FfiConverterTypeTransactionDetails.read(from: &buf))
 
-        case 15: return try .onchainTransactionEvicted(txid: FfiConverterTypeTxid.read(from: &buf))
+        case 15: return try .onchainTransactionReplaced(txid: FfiConverterTypeTxid.read(from: &buf), conflicts: FfiConverterSequenceTypeTxid.read(from: &buf))
 
-        case 16: return try .syncProgress(syncType: FfiConverterTypeSyncType.read(from: &buf), progressPercent: FfiConverterUInt8.read(from: &buf), currentBlockHeight: FfiConverterUInt32.read(from: &buf), targetBlockHeight: FfiConverterUInt32.read(from: &buf))
+        case 16: return try .onchainTransactionReorged(txid: FfiConverterTypeTxid.read(from: &buf))
 
-        case 17: return try .syncCompleted(syncType: FfiConverterTypeSyncType.read(from: &buf), syncedBlockHeight: FfiConverterUInt32.read(from: &buf))
+        case 17: return try .onchainTransactionEvicted(txid: FfiConverterTypeTxid.read(from: &buf))
 
-        case 18: return try .balanceChanged(oldSpendableOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), newSpendableOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), oldTotalOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), newTotalOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), oldTotalLightningBalanceSats: FfiConverterUInt64.read(from: &buf), newTotalLightningBalanceSats: FfiConverterUInt64.read(from: &buf))
+        case 18: return try .syncProgress(syncType: FfiConverterTypeSyncType.read(from: &buf), progressPercent: FfiConverterUInt8.read(from: &buf), currentBlockHeight: FfiConverterUInt32.read(from: &buf), targetBlockHeight: FfiConverterUInt32.read(from: &buf))
+
+        case 19: return try .syncCompleted(syncType: FfiConverterTypeSyncType.read(from: &buf), syncedBlockHeight: FfiConverterUInt32.read(from: &buf))
+
+        case 20: return try .balanceChanged(oldSpendableOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), newSpendableOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), oldTotalOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), newTotalOnchainBalanceSats: FfiConverterUInt64.read(from: &buf), oldTotalLightningBalanceSats: FfiConverterUInt64.read(from: &buf), newTotalLightningBalanceSats: FfiConverterUInt64.read(from: &buf))
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -7993,8 +8060,19 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
             FfiConverterBool.write(claimFromOnchainTx, into: &buf)
             FfiConverterOptionUInt64.write(outboundAmountForwardedMsat, into: &buf)
 
-        case let .channelPending(channelId, userChannelId, formerTemporaryChannelId, counterpartyNodeId, fundingTxo):
+        case let .probeSuccessful(paymentId, paymentHash):
             writeInt(&buf, Int32(6))
+            FfiConverterTypePaymentId.write(paymentId, into: &buf)
+            FfiConverterTypePaymentHash.write(paymentHash, into: &buf)
+
+        case let .probeFailed(paymentId, paymentHash, shortChannelId):
+            writeInt(&buf, Int32(7))
+            FfiConverterTypePaymentId.write(paymentId, into: &buf)
+            FfiConverterTypePaymentHash.write(paymentHash, into: &buf)
+            FfiConverterOptionUInt64.write(shortChannelId, into: &buf)
+
+        case let .channelPending(channelId, userChannelId, formerTemporaryChannelId, counterpartyNodeId, fundingTxo):
+            writeInt(&buf, Int32(8))
             FfiConverterTypeChannelId.write(channelId, into: &buf)
             FfiConverterTypeUserChannelId.write(userChannelId, into: &buf)
             FfiConverterTypeChannelId.write(formerTemporaryChannelId, into: &buf)
@@ -8002,35 +8080,35 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
             FfiConverterTypeOutPoint.write(fundingTxo, into: &buf)
 
         case let .channelReady(channelId, userChannelId, counterpartyNodeId, fundingTxo):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(9))
             FfiConverterTypeChannelId.write(channelId, into: &buf)
             FfiConverterTypeUserChannelId.write(userChannelId, into: &buf)
             FfiConverterOptionTypePublicKey.write(counterpartyNodeId, into: &buf)
             FfiConverterOptionTypeOutPoint.write(fundingTxo, into: &buf)
 
         case let .channelClosed(channelId, userChannelId, counterpartyNodeId, reason):
-            writeInt(&buf, Int32(8))
+            writeInt(&buf, Int32(10))
             FfiConverterTypeChannelId.write(channelId, into: &buf)
             FfiConverterTypeUserChannelId.write(userChannelId, into: &buf)
             FfiConverterOptionTypePublicKey.write(counterpartyNodeId, into: &buf)
             FfiConverterOptionTypeClosureReason.write(reason, into: &buf)
 
         case let .splicePending(channelId, userChannelId, counterpartyNodeId, newFundingTxo):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(11))
             FfiConverterTypeChannelId.write(channelId, into: &buf)
             FfiConverterTypeUserChannelId.write(userChannelId, into: &buf)
             FfiConverterTypePublicKey.write(counterpartyNodeId, into: &buf)
             FfiConverterTypeOutPoint.write(newFundingTxo, into: &buf)
 
         case let .spliceFailed(channelId, userChannelId, counterpartyNodeId, abandonedFundingTxo):
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(12))
             FfiConverterTypeChannelId.write(channelId, into: &buf)
             FfiConverterTypeUserChannelId.write(userChannelId, into: &buf)
             FfiConverterTypePublicKey.write(counterpartyNodeId, into: &buf)
             FfiConverterOptionTypeOutPoint.write(abandonedFundingTxo, into: &buf)
 
         case let .onchainTransactionConfirmed(txid, blockHash, blockHeight, confirmationTime, details):
-            writeInt(&buf, Int32(11))
+            writeInt(&buf, Int32(13))
             FfiConverterTypeTxid.write(txid, into: &buf)
             FfiConverterTypeBlockHash.write(blockHash, into: &buf)
             FfiConverterUInt32.write(blockHeight, into: &buf)
@@ -8038,37 +8116,37 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
             FfiConverterTypeTransactionDetails.write(details, into: &buf)
 
         case let .onchainTransactionReceived(txid, details):
-            writeInt(&buf, Int32(12))
+            writeInt(&buf, Int32(14))
             FfiConverterTypeTxid.write(txid, into: &buf)
             FfiConverterTypeTransactionDetails.write(details, into: &buf)
 
         case let .onchainTransactionReplaced(txid, conflicts):
-            writeInt(&buf, Int32(13))
+            writeInt(&buf, Int32(15))
             FfiConverterTypeTxid.write(txid, into: &buf)
             FfiConverterSequenceTypeTxid.write(conflicts, into: &buf)
 
         case let .onchainTransactionReorged(txid):
-            writeInt(&buf, Int32(14))
+            writeInt(&buf, Int32(16))
             FfiConverterTypeTxid.write(txid, into: &buf)
 
         case let .onchainTransactionEvicted(txid):
-            writeInt(&buf, Int32(15))
+            writeInt(&buf, Int32(17))
             FfiConverterTypeTxid.write(txid, into: &buf)
 
         case let .syncProgress(syncType, progressPercent, currentBlockHeight, targetBlockHeight):
-            writeInt(&buf, Int32(16))
+            writeInt(&buf, Int32(18))
             FfiConverterTypeSyncType.write(syncType, into: &buf)
             FfiConverterUInt8.write(progressPercent, into: &buf)
             FfiConverterUInt32.write(currentBlockHeight, into: &buf)
             FfiConverterUInt32.write(targetBlockHeight, into: &buf)
 
         case let .syncCompleted(syncType, syncedBlockHeight):
-            writeInt(&buf, Int32(17))
+            writeInt(&buf, Int32(19))
             FfiConverterTypeSyncType.write(syncType, into: &buf)
             FfiConverterUInt32.write(syncedBlockHeight, into: &buf)
 
         case let .balanceChanged(oldSpendableOnchainBalanceSats, newSpendableOnchainBalanceSats, oldTotalOnchainBalanceSats, newTotalOnchainBalanceSats, oldTotalLightningBalanceSats, newTotalLightningBalanceSats):
-            writeInt(&buf, Int32(18))
+            writeInt(&buf, Int32(20))
             FfiConverterUInt64.write(oldSpendableOnchainBalanceSats, into: &buf)
             FfiConverterUInt64.write(newSpendableOnchainBalanceSats, into: &buf)
             FfiConverterUInt64.write(oldTotalOnchainBalanceSats, into: &buf)
@@ -10942,6 +11020,31 @@ private struct FfiConverterSequenceTypePeerDetails: FfiConverterRustBuffer {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterSequenceTypeProbeHandle: FfiConverterRustBuffer {
+    typealias SwiftType = [ProbeHandle]
+
+    static func write(_ value: [ProbeHandle], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeProbeHandle.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ProbeHandle] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ProbeHandle]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeProbeHandle.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceTypeRouteHintHop: FfiConverterRustBuffer {
     typealias SwiftType = [RouteHintHop]
 
@@ -12269,10 +12372,10 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_bolt11payment_send() != 12953 {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_ldk_node_checksum_method_bolt11payment_send_probes() != 19286 {
+    if uniffi_ldk_node_checksum_method_bolt11payment_send_probes() != 16067 {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_ldk_node_checksum_method_bolt11payment_send_probes_using_amount() != 5976 {
+    if uniffi_ldk_node_checksum_method_bolt11payment_send_probes_using_amount() != 37281 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_bolt11payment_send_using_amount() != 42793 {
@@ -12734,7 +12837,7 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_spontaneouspayment_send() != 27905 {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_ldk_node_checksum_method_spontaneouspayment_send_probes() != 25937 {
+    if uniffi_ldk_node_checksum_method_spontaneouspayment_send_probes() != 44206 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_spontaneouspayment_send_with_custom_tlvs() != 17876 {

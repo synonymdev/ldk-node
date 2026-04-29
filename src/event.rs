@@ -418,6 +418,22 @@ pub enum Event {
 		/// Custom TLV records attached to the payment
 		custom_records: Vec<CustomTlvRecord>,
 	},
+	/// A sent payment probe was successful.
+	ProbeSuccessful {
+		/// A local identifier used to track the probe.
+		payment_id: PaymentId,
+		/// The hash of the probe payment.
+		payment_hash: PaymentHash,
+	},
+	/// A sent payment probe has failed.
+	ProbeFailed {
+		/// A local identifier used to track the probe.
+		payment_id: PaymentId,
+		/// The hash of the probe payment.
+		payment_hash: PaymentHash,
+		/// The channel responsible for the failed probe, if known.
+		short_channel_id: Option<u64>,
+	},
 	/// A channel has been created and is pending confirmation on-chain.
 	ChannelPending {
 		/// The `channel_id` of the channel.
@@ -944,6 +960,15 @@ impl_writeable_tlv_based_enum!(Event,
 		(6, new_total_onchain_balance_sats, required),
 		(8, old_total_lightning_balance_sats, required),
 		(10, new_total_lightning_balance_sats, required),
+	},
+	(18, ProbeSuccessful) => {
+		(0, payment_hash, required),
+		(2, payment_id, required),
+	},
+	(19, ProbeFailed) => {
+		(0, payment_hash, required),
+		(1, short_channel_id, option),
+		(3, payment_id, required),
 	}
 );
 
@@ -1779,8 +1804,26 @@ where
 
 			LdkEvent::PaymentPathSuccessful { .. } => {},
 			LdkEvent::PaymentPathFailed { .. } => {},
-			LdkEvent::ProbeSuccessful { .. } => {},
-			LdkEvent::ProbeFailed { .. } => {},
+			LdkEvent::ProbeSuccessful { payment_id, payment_hash, .. } => {
+				let event = Event::ProbeSuccessful { payment_id, payment_hash };
+				match self.event_queue.add_event(event).await {
+					Ok(_) => {},
+					Err(e) => {
+						log_error!(self.logger, "Failed to push probe event: {}", e);
+						return Err(ReplayEvent());
+					},
+				}
+			},
+			LdkEvent::ProbeFailed { payment_id, payment_hash, short_channel_id, .. } => {
+				let event = Event::ProbeFailed { payment_id, payment_hash, short_channel_id };
+				match self.event_queue.add_event(event).await {
+					Ok(_) => {},
+					Err(e) => {
+						log_error!(self.logger, "Failed to push probe event: {}", e);
+						return Err(ReplayEvent());
+					},
+				}
+			},
 			LdkEvent::HTLCHandlingFailed { failure_type, .. } => {
 				if let Some(liquidity_source) = self.liquidity_source.as_ref() {
 					liquidity_source.handle_htlc_handling_failed(failure_type).await;
@@ -2571,6 +2614,60 @@ mod tests {
 				break;
 			}
 		}
+		assert_eq!(event_queue.next_event(), None);
+	}
+
+	#[tokio::test]
+	async fn probe_events_persistence_roundtrip() {
+		let events = [
+			Event::ProbeSuccessful {
+				payment_id: PaymentId([1u8; 32]),
+				payment_hash: PaymentHash([2u8; 32]),
+			},
+			Event::ProbeFailed {
+				payment_id: PaymentId([3u8; 32]),
+				payment_hash: PaymentHash([4u8; 32]),
+				short_channel_id: Some(42),
+			},
+			Event::ProbeFailed {
+				payment_id: PaymentId([5u8; 32]),
+				payment_hash: PaymentHash([6u8; 32]),
+				short_channel_id: None,
+			},
+		];
+
+		for expected_event in events {
+			assert_probe_event_persistence_roundtrip(expected_event).await;
+		}
+	}
+
+	async fn assert_probe_event_persistence_roundtrip(expected_event: Event) {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let event_queue = Arc::new(EventQueue::new(Arc::clone(&store), Arc::clone(&logger)));
+
+		assert_eq!(event_queue.next_event(), None);
+
+		event_queue.add_event(expected_event.clone()).await.unwrap();
+
+		// Check we get the expected event and that it is returned until handled.
+		assert_eq!(event_queue.next_event_async().await, expected_event);
+		assert_eq!(event_queue.next_event(), Some(expected_event.clone()));
+
+		// Check we can read back what we persisted.
+		let persisted_bytes = KVStore::read(
+			&*store,
+			EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_KEY,
+		)
+		.await
+		.unwrap();
+		let deser_event_queue =
+			EventQueue::read(&mut &persisted_bytes[..], (Arc::clone(&store), logger)).unwrap();
+		assert_eq!(deser_event_queue.next_event_async().await, expected_event);
+
+		event_queue.event_handled().await.unwrap();
 		assert_eq!(event_queue.next_event(), None);
 	}
 }

@@ -20,6 +20,7 @@ use crate::error::Error;
 use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::payment::store::{PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus};
 use crate::types::{ChannelManager, CustomTlvRecord, KeysManager, PaymentStore};
+use crate::ProbeHandle;
 
 // The default `final_cltv_expiry_delta` we apply when not set.
 const LDK_DEFAULT_FINAL_CLTV_EXPIRY_DELTA: u32 = 144;
@@ -191,10 +192,13 @@ impl SpontaneousPayment {
 	/// Sends payment probes over all paths of a route that would be used to pay the given
 	/// amount to the given `node_id`.
 	///
-	/// See [`Bolt11Payment::send_probes`] for more information.
+	/// See [`Bolt11Payment::send_probes`] for semantics and how returned [`ProbeHandle`] values
+	/// correlate with [`crate::Event::ProbeSuccessful`] / [`crate::Event::ProbeFailed`].
 	///
-	/// [`Bolt11Payment::send_probes`]: crate::payment::Bolt11Payment
-	pub fn send_probes(&self, amount_msat: u64, node_id: PublicKey) -> Result<(), Error> {
+	/// [`Bolt11Payment::send_probes`]: crate::payment::Bolt11Payment::send_probes
+	pub fn send_probes(
+		&self, amount_msat: u64, node_id: PublicKey,
+	) -> Result<Vec<ProbeHandle>, Error> {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
@@ -208,11 +212,15 @@ impl SpontaneousPayment {
 				LDK_DEFAULT_FINAL_CLTV_EXPIRY_DELTA,
 				liquidity_limit_multiplier,
 			)
+			.map(|pairs| {
+				pairs
+					.into_iter()
+					.map(|(payment_hash, payment_id)| ProbeHandle { payment_hash, payment_id })
+					.collect()
+			})
 			.map_err(|e| {
 				log_error!(self.logger, "Failed to send payment probes: {:?}", e);
 				Error::ProbeSendingFailed
-			})?;
-
-		Ok(())
+			})
 	}
 }

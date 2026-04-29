@@ -96,6 +96,7 @@ pub mod logger;
 mod message_handler;
 pub mod payment;
 mod peer_store;
+mod probe_handle;
 mod runtime;
 mod scoring;
 mod tx_broadcaster;
@@ -161,6 +162,7 @@ use payment::{
 	UnifiedQrPayment,
 };
 use peer_store::{PeerInfo, PeerStore};
+pub use probe_handle::ProbeHandle;
 use rand::Rng;
 use runtime::Runtime;
 use types::{

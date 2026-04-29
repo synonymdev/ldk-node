@@ -185,10 +185,10 @@ interface Bolt11PaymentInterface {
     fun `send`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?): PaymentId
     
     @Throws(NodeException::class)
-    fun `sendProbes`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?)
+    fun `sendProbes`(`invoice`: Bolt11Invoice, `routeParameters`: RouteParametersConfig?): List<ProbeHandle>
     
     @Throws(NodeException::class)
-    fun `sendProbesUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?)
+    fun `sendProbesUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?): List<ProbeHandle>
     
     @Throws(NodeException::class)
     fun `sendUsingAmount`(`invoice`: Bolt11Invoice, `amountMsat`: kotlin.ULong, `routeParameters`: RouteParametersConfig?): PaymentId
@@ -650,7 +650,7 @@ interface SpontaneousPaymentInterface {
     fun `send`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `routeParameters`: RouteParametersConfig?): PaymentId
     
     @Throws(NodeException::class)
-    fun `sendProbes`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey)
+    fun `sendProbes`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey): List<ProbeHandle>
     
     @Throws(NodeException::class)
     fun `sendWithCustomTlvs`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `routeParameters`: RouteParametersConfig?, `customTlvs`: List<CustomTlvRecord>): PaymentId
@@ -1115,6 +1115,16 @@ data class PeerDetails (
 
 
 @kotlinx.serialization.Serializable
+data class ProbeHandle (
+    val `paymentHash`: PaymentHash, 
+    val `paymentId`: PaymentId
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
 data class RouteHintHop (
     val `srcNodeId`: PublicKey, 
     val `shortChannelId`: kotlin.ULong, 
@@ -1494,6 +1504,19 @@ sealed class Event {
         val `skimmedFeeMsat`: kotlin.ULong?,
         val `claimFromOnchainTx`: kotlin.Boolean,
         val `outboundAmountForwardedMsat`: kotlin.ULong?,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class ProbeSuccessful(
+        val `paymentId`: PaymentId,
+        val `paymentHash`: PaymentHash,
+    ) : Event() {
+    }
+    @kotlinx.serialization.Serializable
+    data class ProbeFailed(
+        val `paymentId`: PaymentId,
+        val `paymentHash`: PaymentHash,
+        val `shortChannelId`: kotlin.ULong?,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
@@ -2111,6 +2134,8 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
 
 
 

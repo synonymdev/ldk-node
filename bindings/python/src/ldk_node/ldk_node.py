@@ -527,9 +527,9 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_bolt11payment_send() != 12953:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_ldk_node_checksum_method_bolt11payment_send_probes() != 19286:
+    if lib.uniffi_ldk_node_checksum_method_bolt11payment_send_probes() != 16067:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_ldk_node_checksum_method_bolt11payment_send_probes_using_amount() != 5976:
+    if lib.uniffi_ldk_node_checksum_method_bolt11payment_send_probes_using_amount() != 37281:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_bolt11payment_send_using_amount() != 42793:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -837,7 +837,7 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send() != 27905:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send_probes() != 25937:
+    if lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send_probes() != 44206:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_spontaneouspayment_send_with_custom_tlvs() != 17876:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -1224,7 +1224,7 @@ _UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes.argtypes = (
     _UniffiRustBuffer,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
-_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount.argtypes = (
     ctypes.c_void_p,
     ctypes.c_void_p,
@@ -1232,7 +1232,7 @@ _UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount.argt
     _UniffiRustBuffer,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
-_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_using_amount.argtypes = (
     ctypes.c_void_p,
     ctypes.c_void_p,
@@ -2369,7 +2369,7 @@ _UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_probes.argtypes = (
     _UniffiRustBuffer,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
-_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_probes.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_probes.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_with_custom_tlvs.argtypes = (
     ctypes.c_void_p,
     ctypes.c_uint64,
@@ -4048,32 +4048,34 @@ class Bolt11Payment:
 
 
 
-    def send_probes(self, invoice: "Bolt11Invoice",route_parameters: "typing.Optional[RouteParametersConfig]") -> None:
+    def send_probes(self, invoice: "Bolt11Invoice",route_parameters: "typing.Optional[RouteParametersConfig]") -> "typing.List[ProbeHandle]":
         _UniffiConverterTypeBolt11Invoice.check_lower(invoice)
         
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
         
-        _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes,self._uniffi_clone_pointer(),
+        return _UniffiConverterSequenceTypeProbeHandle.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11Invoice.lower(invoice),
         _UniffiConverterOptionalTypeRouteParametersConfig.lower(route_parameters))
+        )
 
 
 
 
 
-
-    def send_probes_using_amount(self, invoice: "Bolt11Invoice",amount_msat: "int",route_parameters: "typing.Optional[RouteParametersConfig]") -> None:
+    def send_probes_using_amount(self, invoice: "Bolt11Invoice",amount_msat: "int",route_parameters: "typing.Optional[RouteParametersConfig]") -> "typing.List[ProbeHandle]":
         _UniffiConverterTypeBolt11Invoice.check_lower(invoice)
         
         _UniffiConverterUInt64.check_lower(amount_msat)
         
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
         
-        _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount,self._uniffi_clone_pointer(),
+        return _UniffiConverterSequenceTypeProbeHandle.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11Invoice.lower(invoice),
         _UniffiConverterUInt64.lower(amount_msat),
         _UniffiConverterOptionalTypeRouteParametersConfig.lower(route_parameters))
-
+        )
 
 
 
@@ -7116,15 +7118,16 @@ class SpontaneousPayment:
 
 
 
-    def send_probes(self, amount_msat: "int",node_id: "PublicKey") -> None:
+    def send_probes(self, amount_msat: "int",node_id: "PublicKey") -> "typing.List[ProbeHandle]":
         _UniffiConverterUInt64.check_lower(amount_msat)
         
         _UniffiConverterTypePublicKey.check_lower(node_id)
         
-        _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_probes,self._uniffi_clone_pointer(),
+        return _UniffiConverterSequenceTypeProbeHandle.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_probes,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
         _UniffiConverterTypePublicKey.lower(node_id))
-
+        )
 
 
 
@@ -9127,6 +9130,42 @@ class _UniffiConverterTypePeerDetails(_UniffiConverterRustBuffer):
         _UniffiConverterBool.write(value.is_connected, buf)
 
 
+class ProbeHandle:
+    payment_hash: "PaymentHash"
+    payment_id: "PaymentId"
+    def __init__(self, *, payment_hash: "PaymentHash", payment_id: "PaymentId"):
+        self.payment_hash = payment_hash
+        self.payment_id = payment_id
+
+    def __str__(self):
+        return "ProbeHandle(payment_hash={}, payment_id={})".format(self.payment_hash, self.payment_id)
+
+    def __eq__(self, other):
+        if self.payment_hash != other.payment_hash:
+            return False
+        if self.payment_id != other.payment_id:
+            return False
+        return True
+
+class _UniffiConverterTypeProbeHandle(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return ProbeHandle(
+            payment_hash=_UniffiConverterTypePaymentHash.read(buf),
+            payment_id=_UniffiConverterTypePaymentId.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterTypePaymentHash.check_lower(value.payment_hash)
+        _UniffiConverterTypePaymentId.check_lower(value.payment_id)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterTypePaymentHash.write(value.payment_hash, buf)
+        _UniffiConverterTypePaymentId.write(value.payment_id, buf)
+
+
 class RouteHintHop:
     src_node_id: "PublicKey"
     short_channel_id: "int"
@@ -10822,6 +10861,50 @@ class Event:
                 return False
             return True
     
+    class PROBE_SUCCESSFUL:
+        payment_id: "PaymentId"
+        payment_hash: "PaymentHash"
+
+        def __init__(self,payment_id: "PaymentId", payment_hash: "PaymentHash"):
+            self.payment_id = payment_id
+            self.payment_hash = payment_hash
+
+        def __str__(self):
+            return "Event.PROBE_SUCCESSFUL(payment_id={}, payment_hash={})".format(self.payment_id, self.payment_hash)
+
+        def __eq__(self, other):
+            if not other.is_probe_successful():
+                return False
+            if self.payment_id != other.payment_id:
+                return False
+            if self.payment_hash != other.payment_hash:
+                return False
+            return True
+    
+    class PROBE_FAILED:
+        payment_id: "PaymentId"
+        payment_hash: "PaymentHash"
+        short_channel_id: "typing.Optional[int]"
+
+        def __init__(self,payment_id: "PaymentId", payment_hash: "PaymentHash", short_channel_id: "typing.Optional[int]"):
+            self.payment_id = payment_id
+            self.payment_hash = payment_hash
+            self.short_channel_id = short_channel_id
+
+        def __str__(self):
+            return "Event.PROBE_FAILED(payment_id={}, payment_hash={}, short_channel_id={})".format(self.payment_id, self.payment_hash, self.short_channel_id)
+
+        def __eq__(self, other):
+            if not other.is_probe_failed():
+                return False
+            if self.payment_id != other.payment_id:
+                return False
+            if self.payment_hash != other.payment_hash:
+                return False
+            if self.short_channel_id != other.short_channel_id:
+                return False
+            return True
+    
     class CHANNEL_PENDING:
         channel_id: "ChannelId"
         user_channel_id: "UserChannelId"
@@ -11168,6 +11251,10 @@ class Event:
         return isinstance(self, Event.PAYMENT_CLAIMABLE)
     def is_payment_forwarded(self) -> bool:
         return isinstance(self, Event.PAYMENT_FORWARDED)
+    def is_probe_successful(self) -> bool:
+        return isinstance(self, Event.PROBE_SUCCESSFUL)
+    def is_probe_failed(self) -> bool:
+        return isinstance(self, Event.PROBE_FAILED)
     def is_channel_pending(self) -> bool:
         return isinstance(self, Event.CHANNEL_PENDING)
     def is_channel_ready(self) -> bool:
@@ -11204,6 +11291,8 @@ Event.PAYMENT_FAILED = type("Event.PAYMENT_FAILED", (Event.PAYMENT_FAILED, Event
 Event.PAYMENT_RECEIVED = type("Event.PAYMENT_RECEIVED", (Event.PAYMENT_RECEIVED, Event,), {})  # type: ignore
 Event.PAYMENT_CLAIMABLE = type("Event.PAYMENT_CLAIMABLE", (Event.PAYMENT_CLAIMABLE, Event,), {})  # type: ignore
 Event.PAYMENT_FORWARDED = type("Event.PAYMENT_FORWARDED", (Event.PAYMENT_FORWARDED, Event,), {})  # type: ignore
+Event.PROBE_SUCCESSFUL = type("Event.PROBE_SUCCESSFUL", (Event.PROBE_SUCCESSFUL, Event,), {})  # type: ignore
+Event.PROBE_FAILED = type("Event.PROBE_FAILED", (Event.PROBE_FAILED, Event,), {})  # type: ignore
 Event.CHANNEL_PENDING = type("Event.CHANNEL_PENDING", (Event.CHANNEL_PENDING, Event,), {})  # type: ignore
 Event.CHANNEL_READY = type("Event.CHANNEL_READY", (Event.CHANNEL_READY, Event,), {})  # type: ignore
 Event.CHANNEL_CLOSED = type("Event.CHANNEL_CLOSED", (Event.CHANNEL_CLOSED, Event,), {})  # type: ignore
@@ -11267,6 +11356,17 @@ class _UniffiConverterTypeEvent(_UniffiConverterRustBuffer):
                 _UniffiConverterOptionalUInt64.read(buf),
             )
         if variant == 6:
+            return Event.PROBE_SUCCESSFUL(
+                _UniffiConverterTypePaymentId.read(buf),
+                _UniffiConverterTypePaymentHash.read(buf),
+            )
+        if variant == 7:
+            return Event.PROBE_FAILED(
+                _UniffiConverterTypePaymentId.read(buf),
+                _UniffiConverterTypePaymentHash.read(buf),
+                _UniffiConverterOptionalUInt64.read(buf),
+            )
+        if variant == 8:
             return Event.CHANNEL_PENDING(
                 _UniffiConverterTypeChannelId.read(buf),
                 _UniffiConverterTypeUserChannelId.read(buf),
@@ -11274,35 +11374,35 @@ class _UniffiConverterTypeEvent(_UniffiConverterRustBuffer):
                 _UniffiConverterTypePublicKey.read(buf),
                 _UniffiConverterTypeOutPoint.read(buf),
             )
-        if variant == 7:
+        if variant == 9:
             return Event.CHANNEL_READY(
                 _UniffiConverterTypeChannelId.read(buf),
                 _UniffiConverterTypeUserChannelId.read(buf),
                 _UniffiConverterOptionalTypePublicKey.read(buf),
                 _UniffiConverterOptionalTypeOutPoint.read(buf),
             )
-        if variant == 8:
+        if variant == 10:
             return Event.CHANNEL_CLOSED(
                 _UniffiConverterTypeChannelId.read(buf),
                 _UniffiConverterTypeUserChannelId.read(buf),
                 _UniffiConverterOptionalTypePublicKey.read(buf),
                 _UniffiConverterOptionalTypeClosureReason.read(buf),
             )
-        if variant == 9:
+        if variant == 11:
             return Event.SPLICE_PENDING(
                 _UniffiConverterTypeChannelId.read(buf),
                 _UniffiConverterTypeUserChannelId.read(buf),
                 _UniffiConverterTypePublicKey.read(buf),
                 _UniffiConverterTypeOutPoint.read(buf),
             )
-        if variant == 10:
+        if variant == 12:
             return Event.SPLICE_FAILED(
                 _UniffiConverterTypeChannelId.read(buf),
                 _UniffiConverterTypeUserChannelId.read(buf),
                 _UniffiConverterTypePublicKey.read(buf),
                 _UniffiConverterOptionalTypeOutPoint.read(buf),
             )
-        if variant == 11:
+        if variant == 13:
             return Event.ONCHAIN_TRANSACTION_CONFIRMED(
                 _UniffiConverterTypeTxid.read(buf),
                 _UniffiConverterTypeBlockHash.read(buf),
@@ -11310,37 +11410,37 @@ class _UniffiConverterTypeEvent(_UniffiConverterRustBuffer):
                 _UniffiConverterUInt64.read(buf),
                 _UniffiConverterTypeTransactionDetails.read(buf),
             )
-        if variant == 12:
+        if variant == 14:
             return Event.ONCHAIN_TRANSACTION_RECEIVED(
                 _UniffiConverterTypeTxid.read(buf),
                 _UniffiConverterTypeTransactionDetails.read(buf),
             )
-        if variant == 13:
+        if variant == 15:
             return Event.ONCHAIN_TRANSACTION_REPLACED(
                 _UniffiConverterTypeTxid.read(buf),
                 _UniffiConverterSequenceTypeTxid.read(buf),
             )
-        if variant == 14:
+        if variant == 16:
             return Event.ONCHAIN_TRANSACTION_REORGED(
                 _UniffiConverterTypeTxid.read(buf),
             )
-        if variant == 15:
+        if variant == 17:
             return Event.ONCHAIN_TRANSACTION_EVICTED(
                 _UniffiConverterTypeTxid.read(buf),
             )
-        if variant == 16:
+        if variant == 18:
             return Event.SYNC_PROGRESS(
                 _UniffiConverterTypeSyncType.read(buf),
                 _UniffiConverterUInt8.read(buf),
                 _UniffiConverterUInt32.read(buf),
                 _UniffiConverterUInt32.read(buf),
             )
-        if variant == 17:
+        if variant == 19:
             return Event.SYNC_COMPLETED(
                 _UniffiConverterTypeSyncType.read(buf),
                 _UniffiConverterUInt32.read(buf),
             )
-        if variant == 18:
+        if variant == 20:
             return Event.BALANCE_CHANGED(
                 _UniffiConverterUInt64.read(buf),
                 _UniffiConverterUInt64.read(buf),
@@ -11388,6 +11488,15 @@ class _UniffiConverterTypeEvent(_UniffiConverterRustBuffer):
             _UniffiConverterOptionalUInt64.check_lower(value.skimmed_fee_msat)
             _UniffiConverterBool.check_lower(value.claim_from_onchain_tx)
             _UniffiConverterOptionalUInt64.check_lower(value.outbound_amount_forwarded_msat)
+            return
+        if value.is_probe_successful():
+            _UniffiConverterTypePaymentId.check_lower(value.payment_id)
+            _UniffiConverterTypePaymentHash.check_lower(value.payment_hash)
+            return
+        if value.is_probe_failed():
+            _UniffiConverterTypePaymentId.check_lower(value.payment_id)
+            _UniffiConverterTypePaymentHash.check_lower(value.payment_hash)
+            _UniffiConverterOptionalUInt64.check_lower(value.short_channel_id)
             return
         if value.is_channel_pending():
             _UniffiConverterTypeChannelId.check_lower(value.channel_id)
@@ -11499,70 +11608,79 @@ class _UniffiConverterTypeEvent(_UniffiConverterRustBuffer):
             _UniffiConverterOptionalUInt64.write(value.skimmed_fee_msat, buf)
             _UniffiConverterBool.write(value.claim_from_onchain_tx, buf)
             _UniffiConverterOptionalUInt64.write(value.outbound_amount_forwarded_msat, buf)
-        if value.is_channel_pending():
+        if value.is_probe_successful():
             buf.write_i32(6)
+            _UniffiConverterTypePaymentId.write(value.payment_id, buf)
+            _UniffiConverterTypePaymentHash.write(value.payment_hash, buf)
+        if value.is_probe_failed():
+            buf.write_i32(7)
+            _UniffiConverterTypePaymentId.write(value.payment_id, buf)
+            _UniffiConverterTypePaymentHash.write(value.payment_hash, buf)
+            _UniffiConverterOptionalUInt64.write(value.short_channel_id, buf)
+        if value.is_channel_pending():
+            buf.write_i32(8)
             _UniffiConverterTypeChannelId.write(value.channel_id, buf)
             _UniffiConverterTypeUserChannelId.write(value.user_channel_id, buf)
             _UniffiConverterTypeChannelId.write(value.former_temporary_channel_id, buf)
             _UniffiConverterTypePublicKey.write(value.counterparty_node_id, buf)
             _UniffiConverterTypeOutPoint.write(value.funding_txo, buf)
         if value.is_channel_ready():
-            buf.write_i32(7)
+            buf.write_i32(9)
             _UniffiConverterTypeChannelId.write(value.channel_id, buf)
             _UniffiConverterTypeUserChannelId.write(value.user_channel_id, buf)
             _UniffiConverterOptionalTypePublicKey.write(value.counterparty_node_id, buf)
             _UniffiConverterOptionalTypeOutPoint.write(value.funding_txo, buf)
         if value.is_channel_closed():
-            buf.write_i32(8)
+            buf.write_i32(10)
             _UniffiConverterTypeChannelId.write(value.channel_id, buf)
             _UniffiConverterTypeUserChannelId.write(value.user_channel_id, buf)
             _UniffiConverterOptionalTypePublicKey.write(value.counterparty_node_id, buf)
             _UniffiConverterOptionalTypeClosureReason.write(value.reason, buf)
         if value.is_splice_pending():
-            buf.write_i32(9)
+            buf.write_i32(11)
             _UniffiConverterTypeChannelId.write(value.channel_id, buf)
             _UniffiConverterTypeUserChannelId.write(value.user_channel_id, buf)
             _UniffiConverterTypePublicKey.write(value.counterparty_node_id, buf)
             _UniffiConverterTypeOutPoint.write(value.new_funding_txo, buf)
         if value.is_splice_failed():
-            buf.write_i32(10)
+            buf.write_i32(12)
             _UniffiConverterTypeChannelId.write(value.channel_id, buf)
             _UniffiConverterTypeUserChannelId.write(value.user_channel_id, buf)
             _UniffiConverterTypePublicKey.write(value.counterparty_node_id, buf)
             _UniffiConverterOptionalTypeOutPoint.write(value.abandoned_funding_txo, buf)
         if value.is_onchain_transaction_confirmed():
-            buf.write_i32(11)
+            buf.write_i32(13)
             _UniffiConverterTypeTxid.write(value.txid, buf)
             _UniffiConverterTypeBlockHash.write(value.block_hash, buf)
             _UniffiConverterUInt32.write(value.block_height, buf)
             _UniffiConverterUInt64.write(value.confirmation_time, buf)
             _UniffiConverterTypeTransactionDetails.write(value.details, buf)
         if value.is_onchain_transaction_received():
-            buf.write_i32(12)
+            buf.write_i32(14)
             _UniffiConverterTypeTxid.write(value.txid, buf)
             _UniffiConverterTypeTransactionDetails.write(value.details, buf)
         if value.is_onchain_transaction_replaced():
-            buf.write_i32(13)
+            buf.write_i32(15)
             _UniffiConverterTypeTxid.write(value.txid, buf)
             _UniffiConverterSequenceTypeTxid.write(value.conflicts, buf)
         if value.is_onchain_transaction_reorged():
-            buf.write_i32(14)
+            buf.write_i32(16)
             _UniffiConverterTypeTxid.write(value.txid, buf)
         if value.is_onchain_transaction_evicted():
-            buf.write_i32(15)
+            buf.write_i32(17)
             _UniffiConverterTypeTxid.write(value.txid, buf)
         if value.is_sync_progress():
-            buf.write_i32(16)
+            buf.write_i32(18)
             _UniffiConverterTypeSyncType.write(value.sync_type, buf)
             _UniffiConverterUInt8.write(value.progress_percent, buf)
             _UniffiConverterUInt32.write(value.current_block_height, buf)
             _UniffiConverterUInt32.write(value.target_block_height, buf)
         if value.is_sync_completed():
-            buf.write_i32(17)
+            buf.write_i32(19)
             _UniffiConverterTypeSyncType.write(value.sync_type, buf)
             _UniffiConverterUInt32.write(value.synced_block_height, buf)
         if value.is_balance_changed():
-            buf.write_i32(18)
+            buf.write_i32(20)
             _UniffiConverterUInt64.write(value.old_spendable_onchain_balance_sats, buf)
             _UniffiConverterUInt64.write(value.new_spendable_onchain_balance_sats, buf)
             _UniffiConverterUInt64.write(value.old_total_onchain_balance_sats, buf)
@@ -15643,6 +15761,31 @@ class _UniffiConverterSequenceTypePeerDetails(_UniffiConverterRustBuffer):
 
 
 
+class _UniffiConverterSequenceTypeProbeHandle(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiConverterTypeProbeHandle.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiConverterTypeProbeHandle.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiConverterTypeProbeHandle.read(buf) for i in range(count)
+        ]
+
+
+
 class _UniffiConverterSequenceTypeRouteHintHop(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -16609,6 +16752,7 @@ __all__ = [
     "OutPoint",
     "PaymentDetails",
     "PeerDetails",
+    "ProbeHandle",
     "RouteHintHop",
     "RouteParametersConfig",
     "RoutingFees",

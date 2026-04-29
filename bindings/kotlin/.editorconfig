@@ -1,0 +1,7 @@
+# ktlint uses EditorConfig for indentation. Without this file it defaults to
+# 2 spaces for Kotlin script, while Gradle/IntelliJ convention here is 4 spaces.
+root = true
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
