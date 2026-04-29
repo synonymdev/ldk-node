@@ -2619,16 +2619,34 @@ mod tests {
 
 	#[tokio::test]
 	async fn probe_events_persistence_roundtrip() {
+		let events = [
+			Event::ProbeSuccessful {
+				payment_id: PaymentId([1u8; 32]),
+				payment_hash: PaymentHash([2u8; 32]),
+			},
+			Event::ProbeFailed {
+				payment_id: PaymentId([3u8; 32]),
+				payment_hash: PaymentHash([4u8; 32]),
+				short_channel_id: Some(42),
+			},
+			Event::ProbeFailed {
+				payment_id: PaymentId([5u8; 32]),
+				payment_hash: PaymentHash([6u8; 32]),
+				short_channel_id: None,
+			},
+		];
+
+		for expected_event in events {
+			assert_probe_event_persistence_roundtrip(expected_event).await;
+		}
+	}
+
+	async fn assert_probe_event_persistence_roundtrip(expected_event: Event) {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		let logger = Arc::new(TestLogger::new());
 		let event_queue = Arc::new(EventQueue::new(Arc::clone(&store), Arc::clone(&logger)));
 
 		assert_eq!(event_queue.next_event(), None);
-
-		let payment_hash = PaymentHash([7u8; 32]);
-		let payment_id = PaymentId(payment_hash.0);
-		let expected_event =
-			Event::ProbeFailed { payment_id, payment_hash, short_channel_id: Some(42) };
 
 		event_queue.add_event(expected_event.clone()).await.unwrap();
 

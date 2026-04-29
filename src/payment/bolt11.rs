@@ -836,8 +836,10 @@ impl Bolt11Payment {
 	/// If `route_parameters` are provided they will override the default as well as the
 	/// node-wide parameters configured via [`Config::route_parameters`] on a per-field basis.
 	///
-	/// Returns one [`ProbeHandle`] per probe path. Use [`ProbeHandle::payment_id`] (and/or
-	/// [`ProbeHandle::payment_hash`]) to match [`crate::Event::ProbeSuccessful`] /
+	/// Returns one [`ProbeHandle`] per probe that LDK actually sends. LDK may skip route
+	/// paths before dispatch, for example if the path is too short to probe or would breach
+	/// [`Config::probing_liquidity_limit_multiplier`]. Use [`ProbeHandle::payment_id`]
+	/// (and/or [`ProbeHandle::payment_hash`]) to match [`crate::Event::ProbeSuccessful`] /
 	/// [`crate::Event::ProbeFailed`]. These values are **not** the invoice payment hash.
 	pub fn send_probes(
 		&self, invoice: &Bolt11Invoice, route_parameters: Option<RouteParametersConfig>,
