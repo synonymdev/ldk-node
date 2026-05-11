@@ -62,7 +62,8 @@
 - Added `OnchainPayment` methods `new_address_info`, `new_address_info_for_type`,
   `address_info_for_type_at_index`, `address_infos_for_type`, and
   `reveal_receive_addresses_to`. Address peek APIs support external receive and
-  internal change keychains without advancing wallet cursors.
+  internal change keychains without advancing wallet cursors. Batch address peek
+  requests are capped at 10,000 addresses per call.
 - Added pre-flight probe correlation: `Event::ProbeSuccessful` and `Event::ProbeFailed` (from LDK
   probe lifecycle), plus `ProbeHandle` (`payment_id`, synthetic `payment_hash`) values returned
   for probes actually dispatched by `Bolt11Payment::send_probes`, `send_probes_using_amount`, and

@@ -28,6 +28,8 @@ pub enum Error {
 	InsufficientFunds,
 	/// The requested fee rate is invalid.
 	InvalidFeeRate,
+	/// The requested quantity is invalid.
+	InvalidQuantity,
 	/// No spendable outputs available.
 	NoSpendableOutputs,
 	/// Coin selection failed.
@@ -56,6 +58,7 @@ impl fmt::Display for Error {
 			Error::OnchainTxSigningFailed => write!(f, "On-chain transaction signing failed"),
 			Error::InsufficientFunds => write!(f, "Insufficient funds"),
 			Error::InvalidFeeRate => write!(f, "Invalid fee rate"),
+			Error::InvalidQuantity => write!(f, "Invalid quantity"),
 			Error::NoSpendableOutputs => write!(f, "No spendable outputs available"),
 			Error::CoinSelectionFailed => write!(f, "Coin selection failed"),
 			Error::WalletOperationFailed => write!(f, "Wallet operation failed"),

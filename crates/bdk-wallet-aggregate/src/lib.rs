@@ -41,6 +41,31 @@ use bitcoin::{
 };
 pub use types::{CoinSelectionAlgorithm, Error, UtxoPsbtInfo};
 
+const BIP32_MAX_NORMAL_INDEX: u32 = (1 << 31) - 1;
+
+/// Maximum number of address metadata entries returned by a single batch derivation call.
+pub const MAX_ADDRESS_INFO_BATCH_COUNT: u32 = 10_000;
+
+fn validate_derivation_index(index: u32) -> Result<(), Error> {
+	if index > BIP32_MAX_NORMAL_INDEX {
+		return Err(Error::InvalidQuantity);
+	}
+	Ok(())
+}
+
+fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> {
+	validate_derivation_index(start_index)?;
+	if count > MAX_ADDRESS_INFO_BATCH_COUNT {
+		return Err(Error::InvalidQuantity);
+	}
+	if count == 0 {
+		return Ok(());
+	}
+
+	let last_index = start_index.checked_add(count - 1).ok_or(Error::InvalidQuantity)?;
+	validate_derivation_index(last_index)
+}
+
 /// A wallet aggregator that presents multiple BDK wallets as a single logical
 /// wallet.
 ///
@@ -400,6 +425,8 @@ where
 	pub fn address_info_for(
 		&self, key: &K, keychain: KeychainKind, index: u32,
 	) -> Result<AddressInfo, Error> {
+		validate_derivation_index(index)?;
+
 		let wallet = self.wallets.get(key).ok_or(Error::WalletNotFound)?;
 		Ok(wallet.peek_address(keychain, index))
 	}
@@ -408,13 +435,17 @@ where
 	pub fn address_infos_for(
 		&self, key: &K, keychain: KeychainKind, start_index: u32, count: u32,
 	) -> Result<Vec<AddressInfo>, Error> {
+		validate_derivation_range(start_index, count)?;
+
 		let wallet = self.wallets.get(key).ok_or(Error::WalletNotFound)?;
-		let end_index = start_index.checked_add(count).ok_or(Error::WalletOperationFailed)?;
+		let end_index = start_index.checked_add(count).ok_or(Error::InvalidQuantity)?;
 		Ok((start_index..end_index).map(|index| wallet.peek_address(keychain, index)).collect())
 	}
 
 	/// Reveal external receiving addresses through `index` for a specific wallet and persist.
 	pub fn reveal_addresses_to(&mut self, key: &K, index: u32) -> Result<(), Error> {
+		validate_derivation_index(index)?;
+
 		let wallet = self.wallets.get_mut(key).ok_or(Error::WalletNotFound)?;
 		let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
 
@@ -1579,6 +1610,44 @@ mod tests {
 
 		let addresses = agg.address_infos_for(&0, KeychainKind::External, 0, 0).unwrap();
 		assert!(addresses.is_empty());
+	}
+
+	#[test]
+	fn address_info_for_rejects_hardened_index() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let result = agg.address_info_for(&0, KeychainKind::External, BIP32_MAX_NORMAL_INDEX + 1);
+		assert_eq!(result, Err(Error::InvalidQuantity));
+	}
+
+	#[test]
+	fn address_infos_for_rejects_invalid_ranges() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let too_many =
+			agg.address_infos_for(&0, KeychainKind::External, 0, MAX_ADDRESS_INFO_BATCH_COUNT + 1);
+		assert_eq!(too_many, Err(Error::InvalidQuantity));
+
+		let hardened_end =
+			agg.address_infos_for(&0, KeychainKind::External, BIP32_MAX_NORMAL_INDEX - 1, 3);
+		assert_eq!(hardened_end, Err(Error::InvalidQuantity));
+
+		let overflow = agg.address_infos_for(&0, KeychainKind::External, u32::MAX, 1);
+		assert_eq!(overflow, Err(Error::InvalidQuantity));
+	}
+
+	#[test]
+	fn reveal_addresses_to_rejects_hardened_index() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let result = agg.reveal_addresses_to(&0, BIP32_MAX_NORMAL_INDEX + 1);
+		assert_eq!(result, Err(Error::InvalidQuantity));
 	}
 
 	#[test]

@@ -183,7 +183,8 @@ impl OnchainPayment {
 
 	/// Derive address metadata for a contiguous range without advancing any wallet cursor.
 	///
-	/// The returned vector contains `count` addresses starting at `start_index`.
+	/// The returned vector contains `count` addresses starting at `start_index`. Batch requests are
+	/// capped at 10,000 addresses per call.
 	pub fn address_infos_for_type(
 		&self, address_type: AddressType, keychain: KeychainKind, start_index: u32, count: u32,
 	) -> Result<Vec<AddressInfo>, Error> {

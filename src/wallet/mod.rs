@@ -60,6 +60,7 @@ use crate::{Error, NodeMetrics};
 // Minimum economical output value (dust limit)
 const DUST_LIMIT_SATS: u64 = 546;
 const BIP32_MAX_NORMAL_INDEX: u32 = (1 << 31) - 1;
+const MAX_ADDRESS_INFO_BATCH_COUNT: u32 = bdk_wallet_aggregate::MAX_ADDRESS_INFO_BATCH_COUNT;
 
 fn validate_derivation_index(index: u32) -> Result<(), Error> {
 	if index > BIP32_MAX_NORMAL_INDEX {
@@ -70,6 +71,9 @@ fn validate_derivation_index(index: u32) -> Result<(), Error> {
 
 fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> {
 	validate_derivation_index(start_index)?;
+	if count > MAX_ADDRESS_INFO_BATCH_COUNT {
+		return Err(Error::InvalidQuantity);
+	}
 	if count == 0 {
 		return Ok(());
 	}
@@ -1907,7 +1911,10 @@ impl ChangeDestinationSource for WalletKeysManager {
 
 #[cfg(test)]
 mod tests {
-	use super::{validate_derivation_index, validate_derivation_range, BIP32_MAX_NORMAL_INDEX};
+	use super::{
+		validate_derivation_index, validate_derivation_range, BIP32_MAX_NORMAL_INDEX,
+		MAX_ADDRESS_INFO_BATCH_COUNT,
+	};
 	use crate::Error;
 
 	#[test]
@@ -1927,6 +1934,15 @@ mod tests {
 			Err(Error::InvalidQuantity)
 		);
 		assert_eq!(validate_derivation_range(u32::MAX, 1), Err(Error::InvalidQuantity));
+	}
+
+	#[test]
+	fn derivation_range_validation_rejects_oversized_batches() {
+		assert_eq!(validate_derivation_range(0, MAX_ADDRESS_INFO_BATCH_COUNT), Ok(()));
+		assert_eq!(
+			validate_derivation_range(0, MAX_ADDRESS_INFO_BATCH_COUNT + 1),
+			Err(Error::InvalidQuantity)
+		);
 	}
 
 	#[test]
