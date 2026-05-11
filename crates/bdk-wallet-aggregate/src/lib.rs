@@ -29,7 +29,9 @@ use std::sync::Arc;
 
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
 use bdk_wallet::event::WalletEvent;
-use bdk_wallet::{Balance, KeychainKind, LocalOutput, PersistedWallet, Update, WalletPersister};
+use bdk_wallet::{
+	AddressInfo, Balance, KeychainKind, LocalOutput, PersistedWallet, Update, WalletPersister,
+};
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::hashes::Hash as _;
 use bitcoin::psbt::Psbt;
@@ -367,12 +369,22 @@ where
 
 	/// Generate a new receiving address from the primary wallet.
 	pub fn new_address(&mut self) -> Result<Address, Error> {
+		self.new_address_info().map(|address_info| address_info.address)
+	}
+
+	/// Generate a new receiving address with derivation metadata from the primary wallet.
+	pub fn new_address_info(&mut self) -> Result<AddressInfo, Error> {
 		let key = self.primary;
-		self.new_address_for(&key)
+		self.new_address_info_for(&key)
 	}
 
 	/// Generate a new receiving address for a specific wallet.
 	pub fn new_address_for(&mut self, key: &K) -> Result<Address, Error> {
+		self.new_address_info_for(key).map(|address_info| address_info.address)
+	}
+
+	/// Generate a new receiving address with derivation metadata for a specific wallet.
+	pub fn new_address_info_for(&mut self, key: &K) -> Result<AddressInfo, Error> {
 		let wallet = self.wallets.get_mut(key).ok_or(Error::WalletNotFound)?;
 		let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
 
@@ -381,7 +393,37 @@ where
 			log::error!("Failed to persist wallet for {:?}: {}", key, e);
 			Error::PersistenceFailed
 		})?;
-		Ok(address_info.address)
+		Ok(address_info)
+	}
+
+	/// Return address metadata at a derivation index without revealing it.
+	pub fn address_info_for(
+		&self, key: &K, keychain: KeychainKind, index: u32,
+	) -> Result<AddressInfo, Error> {
+		let wallet = self.wallets.get(key).ok_or(Error::WalletNotFound)?;
+		Ok(wallet.peek_address(keychain, index))
+	}
+
+	/// Return address metadata for a range of derivation indexes without revealing them.
+	pub fn address_infos_for(
+		&self, key: &K, keychain: KeychainKind, start_index: u32, count: u32,
+	) -> Result<Vec<AddressInfo>, Error> {
+		let wallet = self.wallets.get(key).ok_or(Error::WalletNotFound)?;
+		let end_index = start_index.checked_add(count).ok_or(Error::WalletOperationFailed)?;
+		Ok((start_index..end_index).map(|index| wallet.peek_address(keychain, index)).collect())
+	}
+
+	/// Reveal external receiving addresses through `index` for a specific wallet and persist.
+	pub fn reveal_addresses_to(&mut self, key: &K, index: u32) -> Result<(), Error> {
+		let wallet = self.wallets.get_mut(key).ok_or(Error::WalletNotFound)?;
+		let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
+
+		wallet.reveal_addresses_to(KeychainKind::External, index).count();
+		wallet.persist(persister).map_err(|e| {
+			log::error!("Failed to persist wallet for {:?}: {}", key, e);
+			Error::PersistenceFailed
+		})?;
+		Ok(())
 	}
 
 	/// Generate a new internal (change) address from the primary wallet.
@@ -1362,6 +1404,9 @@ where
 
 #[cfg(test)]
 mod tests {
+	use std::sync::{Arc, Mutex};
+
+	use bdk_chain::Merge;
 	use bdk_wallet::template::Bip84;
 	use bdk_wallet::{ChangeSet, KeychainKind, PersistedWallet, Wallet, WalletPersister};
 	use bitcoin::bip32::Xpriv;
@@ -1383,15 +1428,35 @@ mod tests {
 		}
 	}
 
+	#[derive(Clone, Default)]
+	struct MemoryPersister {
+		change_set: Arc<Mutex<ChangeSet>>,
+	}
+
+	impl WalletPersister for MemoryPersister {
+		type Error = std::convert::Infallible;
+
+		fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error> {
+			Ok(persister.change_set.lock().unwrap().clone())
+		}
+
+		fn persist(persister: &mut Self, change_set: &ChangeSet) -> Result<(), Self::Error> {
+			persister.change_set.lock().unwrap().merge(change_set.clone());
+			Ok(())
+		}
+	}
+
 	fn test_xprv() -> Xpriv {
 		Xpriv::new_master(Network::Regtest, &[0x42; 32]).unwrap()
 	}
 
-	fn create_funded_wallet(
-		persister: &mut NoopPersister, amount: Amount,
-	) -> PersistedWallet<NoopPersister> {
+	fn create_empty_wallet<P>(persister: &mut P) -> PersistedWallet<P>
+	where
+		P: WalletPersister,
+		P::Error: std::fmt::Debug,
+	{
 		let xprv = test_xprv();
-		let mut wallet = PersistedWallet::create(
+		PersistedWallet::create(
 			persister,
 			Wallet::create(
 				Bip84(xprv, KeychainKind::External),
@@ -1399,7 +1464,25 @@ mod tests {
 			)
 			.network(Network::Regtest),
 		)
-		.unwrap();
+		.unwrap()
+	}
+
+	fn load_empty_wallet(persister: &mut MemoryPersister) -> PersistedWallet<MemoryPersister> {
+		let xprv = test_xprv();
+		Wallet::load()
+			.descriptor(KeychainKind::External, Some(Bip84(xprv, KeychainKind::External)))
+			.descriptor(KeychainKind::Internal, Some(Bip84(xprv, KeychainKind::Internal)))
+			.extract_keys()
+			.check_network(Network::Regtest)
+			.load_wallet(persister)
+			.unwrap()
+			.expect("wallet should have been persisted")
+	}
+
+	fn create_funded_wallet(
+		persister: &mut NoopPersister, amount: Amount,
+	) -> PersistedWallet<NoopPersister> {
+		let mut wallet = create_empty_wallet(persister);
 
 		let addr = wallet.reveal_next_address(KeychainKind::External);
 		let funding_tx = Transaction {
@@ -1417,6 +1500,119 @@ mod tests {
 
 	fn recipient_script() -> ScriptBuf {
 		ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_byte_array([0xab; 20]))
+	}
+
+	#[test]
+	fn new_address_info_reveals_external_indexes() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let first = agg.new_address_info_for(&0).unwrap();
+		assert_eq!(first.index, 0);
+		assert_eq!(first.keychain, KeychainKind::External);
+
+		let second = agg.new_address_info().unwrap();
+		assert_eq!(second.index, 1);
+		assert_eq!(second.keychain, KeychainKind::External);
+
+		let third_address = agg.new_address_for(&0).unwrap();
+		let third_peek = agg.address_info_for(&0, KeychainKind::External, 2).unwrap();
+		assert_eq!(third_peek.index, 2);
+		assert_eq!(third_peek.address, third_address);
+	}
+
+	#[test]
+	fn address_info_for_index_does_not_advance_receive_index() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let peeked = agg.address_info_for(&0, KeychainKind::External, 7).unwrap();
+		assert_eq!(peeked.index, 7);
+		assert_eq!(peeked.keychain, KeychainKind::External);
+
+		let next = agg.new_address_info_for(&0).unwrap();
+		assert_eq!(next.index, 0);
+		assert_ne!(next.address, peeked.address);
+	}
+
+	#[test]
+	fn address_info_for_index_supports_internal_keychain_without_advancing_receive_index() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let change = agg.address_info_for(&0, KeychainKind::Internal, 3).unwrap();
+		assert_eq!(change.index, 3);
+		assert_eq!(change.keychain, KeychainKind::Internal);
+
+		let next_receive = agg.new_address_info_for(&0).unwrap();
+		assert_eq!(next_receive.index, 0);
+		assert_eq!(next_receive.keychain, KeychainKind::External);
+		assert_ne!(next_receive.address, change.address);
+	}
+
+	#[test]
+	fn address_infos_for_returns_keychain_range_without_advancing() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let addresses = agg.address_infos_for(&0, KeychainKind::Internal, 2, 3).unwrap();
+		let indexes: Vec<u32> = addresses.iter().map(|info| info.index).collect();
+		assert_eq!(indexes, vec![2, 3, 4]);
+		assert!(addresses.iter().all(|info| info.keychain == KeychainKind::Internal));
+
+		let single = agg.address_info_for(&0, KeychainKind::Internal, 3).unwrap();
+		assert_eq!(addresses[1], single);
+
+		let next_receive = agg.new_address_info_for(&0).unwrap();
+		assert_eq!(next_receive.index, 0);
+	}
+
+	#[test]
+	fn address_infos_for_allows_empty_ranges() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let addresses = agg.address_infos_for(&0, KeychainKind::External, 0, 0).unwrap();
+		assert!(addresses.is_empty());
+	}
+
+	#[test]
+	fn reveal_addresses_to_advances_next_receive_index() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let mut agg = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		agg.reveal_addresses_to(&0, 4).unwrap();
+		agg.reveal_addresses_to(&0, 4).unwrap();
+
+		let next = agg.new_address_info_for(&0).unwrap();
+		assert_eq!(next.index, 5);
+		assert_eq!(next.keychain, KeychainKind::External);
+	}
+
+	#[test]
+	fn revealed_receive_index_persists_across_reload() {
+		let mut create_persister = MemoryPersister::default();
+		let wallet = create_empty_wallet(&mut create_persister);
+		let aggregate_persister = create_persister.clone();
+
+		{
+			let mut agg = AggregateWallet::<u8, _>::new(wallet, aggregate_persister, 0, vec![]);
+			agg.reveal_addresses_to(&0, 3).unwrap();
+		}
+
+		let mut reload_persister = create_persister.clone();
+		let reloaded_wallet = load_empty_wallet(&mut reload_persister);
+		let mut reloaded =
+			AggregateWallet::<u8, _>::new(reloaded_wallet, reload_persister, 0, vec![]);
+
+		let next = reloaded.new_address_info_for(&0).unwrap();
+		assert_eq!(next.index, 4);
 	}
 
 	/// Demonstrates the bug: without cancel_tx, each finish() call

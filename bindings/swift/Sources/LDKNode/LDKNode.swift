@@ -3299,6 +3299,10 @@ public func FfiConverterTypeOffer_lower(_ value: Offer) -> UnsafeMutableRawPoint
 public protocol OnchainPaymentProtocol: AnyObject {
     func accelerateByCpfp(txid: Txid, feeRate: FeeRate?, destinationAddress: Address?) throws -> Txid
 
+    func addressInfoForTypeAtIndex(addressType: AddressType, keychain: KeychainKind, index: UInt32) throws -> AddressInfo
+
+    func addressInfosForType(addressType: AddressType, keychain: KeychainKind, startIndex: UInt32, count: UInt32) throws -> [AddressInfo]
+
     func bumpFeeByRbf(txid: Txid, feeRate: FeeRate) throws -> Txid
 
     func calculateCpfpFeeRate(parentTxid: Txid, urgent: Bool) throws -> FeeRate
@@ -3312,6 +3316,12 @@ public protocol OnchainPaymentProtocol: AnyObject {
     func newAddress() throws -> Address
 
     func newAddressForType(addressType: AddressType) throws -> Address
+
+    func newAddressInfo() throws -> AddressInfo
+
+    func newAddressInfoForType(addressType: AddressType) throws -> AddressInfo
+
+    func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws
 
     func selectUtxosWithAlgorithm(targetAmountSats: UInt64, feeRate: FeeRate?, algorithm: CoinSelectionAlgorithm, utxos: [SpendableUtxo]?) throws -> [SpendableUtxo]
 
@@ -3378,6 +3388,25 @@ open class OnchainPayment:
         })
     }
 
+    open func addressInfoForTypeAtIndex(addressType: AddressType, keychain: KeychainKind, index: UInt32) throws -> AddressInfo {
+        return try FfiConverterTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_address_info_for_type_at_index(self.uniffiClonePointer(),
+                                                                                    FfiConverterTypeAddressType.lower(addressType),
+                                                                                    FfiConverterTypeKeychainKind.lower(keychain),
+                                                                                    FfiConverterUInt32.lower(index), $0)
+        })
+    }
+
+    open func addressInfosForType(addressType: AddressType, keychain: KeychainKind, startIndex: UInt32, count: UInt32) throws -> [AddressInfo] {
+        return try FfiConverterSequenceTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type(self.uniffiClonePointer(),
+                                                                            FfiConverterTypeAddressType.lower(addressType),
+                                                                            FfiConverterTypeKeychainKind.lower(keychain),
+                                                                            FfiConverterUInt32.lower(startIndex),
+                                                                            FfiConverterUInt32.lower(count), $0)
+        })
+    }
+
     open func bumpFeeByRbf(txid: Txid, feeRate: FeeRate) throws -> Txid {
         return try FfiConverterTypeTxid.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf(self.uniffiClonePointer(),
@@ -3430,6 +3459,27 @@ open class OnchainPayment:
             uniffi_ldk_node_fn_method_onchainpayment_new_address_for_type(self.uniffiClonePointer(),
                                                                           FfiConverterTypeAddressType.lower(addressType), $0)
         })
+    }
+
+    open func newAddressInfo() throws -> AddressInfo {
+        return try FfiConverterTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_new_address_info(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func newAddressInfoForType(addressType: AddressType) throws -> AddressInfo {
+        return try FfiConverterTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type(self.uniffiClonePointer(),
+                                                                               FfiConverterTypeAddressType.lower(addressType), $0)
+        })
+    }
+
+    open func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws {
+        try rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(self.uniffiClonePointer(),
+                                                                                 FfiConverterTypeAddressType.lower(addressType),
+                                                                                 FfiConverterUInt32.lower(index), $0)
+        }
     }
 
     open func selectUtxosWithAlgorithm(targetAmountSats: UInt64, feeRate: FeeRate?, algorithm: CoinSelectionAlgorithm, utxos: [SpendableUtxo]?) throws -> [SpendableUtxo] {
@@ -4117,6 +4167,75 @@ public func FfiConverterTypeVssHeaderProvider_lift(_ pointer: UnsafeMutableRawPo
 #endif
 public func FfiConverterTypeVssHeaderProvider_lower(_ value: VssHeaderProvider) -> UnsafeMutableRawPointer {
     return FfiConverterTypeVssHeaderProvider.lower(value)
+}
+
+public struct AddressInfo {
+    public var index: UInt32
+    public var address: Address
+    public var keychain: KeychainKind
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(index: UInt32, address: Address, keychain: KeychainKind) {
+        self.index = index
+        self.address = address
+        self.keychain = keychain
+    }
+}
+
+extension AddressInfo: Equatable, Hashable {
+    public static func == (lhs: AddressInfo, rhs: AddressInfo) -> Bool {
+        if lhs.index != rhs.index {
+            return false
+        }
+        if lhs.address != rhs.address {
+            return false
+        }
+        if lhs.keychain != rhs.keychain {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(index)
+        hasher.combine(address)
+        hasher.combine(keychain)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAddressInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AddressInfo {
+        return
+            try AddressInfo(
+                index: FfiConverterUInt32.read(from: &buf),
+                address: FfiConverterTypeAddress.read(from: &buf),
+                keychain: FfiConverterTypeKeychainKind.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: AddressInfo, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.index, into: &buf)
+        FfiConverterTypeAddress.write(value.address, into: &buf)
+        FfiConverterTypeKeychainKind.write(value.keychain, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAddressInfo_lift(_ buf: RustBuffer) throws -> AddressInfo {
+    return try FfiConverterTypeAddressInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAddressInfo_lower(_ value: AddressInfo) -> RustBuffer {
+    return FfiConverterTypeAddressInfo.lower(value)
 }
 
 public struct AddressTypeBalance {
@@ -8176,6 +8295,58 @@ extension Event: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum KeychainKind {
+    case external
+    case `internal`
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKeychainKind: FfiConverterRustBuffer {
+    typealias SwiftType = KeychainKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeychainKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        case 1: return .external
+
+        case 2: return .internal
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: KeychainKind, into buf: inout [UInt8]) {
+        switch value {
+        case .external:
+            writeInt(&buf, Int32(1))
+
+        case .internal:
+            writeInt(&buf, Int32(2))
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeychainKind_lift(_ buf: RustBuffer) throws -> KeychainKind {
+    return try FfiConverterTypeKeychainKind.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeychainKind_lower(_ value: KeychainKind) -> RustBuffer {
+    return FfiConverterTypeKeychainKind.lower(value)
+}
+
+extension KeychainKind: Equatable, Hashable {}
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum Lsps1PaymentState {
     case expectPayment
     case paid
@@ -10920,6 +11091,31 @@ private struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterSequenceTypeAddressInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [AddressInfo]
+
+    static func write(_ value: [AddressInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAddressInfo.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [AddressInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [AddressInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeAddressInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceTypeChannelDetails: FfiConverterRustBuffer {
     typealias SwiftType = [ChannelDetails]
 
@@ -12774,6 +12970,12 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_type_at_index() != 42692 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type() != 3701 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -12793,6 +12995,15 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_type() != 9083 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_new_address_info() != 9889 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm() != 14084 {
