@@ -75,6 +75,17 @@ enum AddressType {
 	"Taproot",
 };
 
+enum KeychainKind {
+	"External",
+	"Internal",
+};
+
+dictionary AddressInfo {
+	u32 index;
+	Address address;
+	KeychainKind keychain;
+};
+
 enum LogLevel {
 	"Gossip",
 	"Trace",
@@ -302,7 +313,17 @@ interface OnchainPayment {
     [Throws=NodeError]
     Address new_address();
     [Throws=NodeError]
+    AddressInfo new_address_info();
+    [Throws=NodeError]
     Address new_address_for_type(AddressType address_type);
+    [Throws=NodeError]
+    AddressInfo new_address_info_for_type(AddressType address_type);
+    [Throws=NodeError]
+    AddressInfo address_info_for_type_at_index(AddressType address_type, KeychainKind keychain, u32 index);
+    [Throws=NodeError]
+    sequence<AddressInfo> address_infos_for_type(AddressType address_type, KeychainKind keychain, u32 start_index, u32 count);
+    [Throws=NodeError]
+    void reveal_receive_addresses_to(AddressType address_type, u32 index);
     [Throws=NodeError]
     sequence<SpendableUtxo> list_spendable_outputs();
     [Throws=NodeError]

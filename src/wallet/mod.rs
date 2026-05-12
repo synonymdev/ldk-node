@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
 use bdk_wallet::event::WalletEvent;
-use bdk_wallet::{Balance, KeychainKind, LocalOutput, PersistedWallet, Update};
+use bdk_wallet::{
+	AddressInfo, Balance, KeychainKind as BdkKeychainKind, LocalOutput, PersistedWallet, Update,
+};
 use bdk_wallet_aggregate::AggregateWallet;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::bip32::Xpriv;
@@ -51,12 +53,34 @@ use crate::event::{TxInput, TxOutput};
 use crate::fee_estimator::{ConfirmationTarget, FeeEstimator, OnchainFeeEstimator};
 use crate::logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use crate::payment::store::ConfirmationStatus;
-use crate::payment::{PaymentDetails, PaymentDirection, PaymentStatus};
+use crate::payment::{KeychainKind, PaymentDetails, PaymentDirection, PaymentStatus};
 use crate::types::{Broadcaster, ChannelManager, DynStore, PaymentStore};
 use crate::{Error, NodeMetrics};
 
 // Minimum economical output value (dust limit)
 const DUST_LIMIT_SATS: u64 = 546;
+const BIP32_MAX_NORMAL_INDEX: u32 = (1 << 31) - 1;
+const MAX_ADDRESS_INFO_BATCH_COUNT: u32 = bdk_wallet_aggregate::MAX_ADDRESS_INFO_BATCH_COUNT;
+
+fn validate_derivation_index(index: u32) -> Result<(), Error> {
+	if index > BIP32_MAX_NORMAL_INDEX {
+		return Err(Error::InvalidQuantity);
+	}
+	Ok(())
+}
+
+fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> {
+	validate_derivation_index(start_index)?;
+	if count > MAX_ADDRESS_INFO_BATCH_COUNT {
+		return Err(Error::InvalidQuantity);
+	}
+	if count == 0 {
+		return Ok(());
+	}
+
+	let last_index = start_index.checked_add(count - 1).ok_or(Error::InvalidQuantity)?;
+	validate_derivation_index(last_index)
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum OnchainSendAmount {
@@ -151,23 +175,23 @@ impl Wallet {
 		self.fee_estimator.estimate_fee_rate(target)
 	}
 
-	pub(crate) fn get_full_scan_request(&self) -> FullScanRequest<KeychainKind> {
+	pub(crate) fn get_full_scan_request(&self) -> FullScanRequest<BdkKeychainKind> {
 		self.inner.lock().unwrap().start_full_scan().build()
 	}
 
-	pub(crate) fn get_incremental_sync_request(&self) -> SyncRequest<(KeychainKind, u32)> {
+	pub(crate) fn get_incremental_sync_request(&self) -> SyncRequest<(BdkKeychainKind, u32)> {
 		self.inner.lock().unwrap().start_sync_with_revealed_spks().build()
 	}
 
 	pub(crate) fn get_wallet_full_scan_request(
 		&self, address_type: AddressType,
-	) -> Result<FullScanRequest<KeychainKind>, bdk_wallet_aggregate::Error> {
+	) -> Result<FullScanRequest<BdkKeychainKind>, bdk_wallet_aggregate::Error> {
 		self.inner.lock().unwrap().wallet_full_scan_request(&address_type)
 	}
 
 	pub(crate) fn get_wallet_incremental_sync_request(
 		&self, address_type: AddressType,
-	) -> Result<SyncRequest<(KeychainKind, u32)>, bdk_wallet_aggregate::Error> {
+	) -> Result<SyncRequest<(BdkKeychainKind, u32)>, bdk_wallet_aggregate::Error> {
 		self.inner.lock().unwrap().wallet_incremental_sync_request(&address_type)
 	}
 
@@ -191,7 +215,7 @@ impl Wallet {
 	// Get a drain script for change outputs.
 	pub(crate) fn get_drain_script(&self) -> Result<ScriptBuf, Error> {
 		let locked_wallet = self.inner.lock().unwrap();
-		let change_address = locked_wallet.peek_address(KeychainKind::Internal, 0);
+		let change_address = locked_wallet.peek_address(BdkKeychainKind::Internal, 0);
 		Ok(change_address.address.script_pubkey())
 	}
 
@@ -694,8 +718,12 @@ impl Wallet {
 	}
 
 	pub(crate) fn get_new_address(&self) -> Result<bitcoin::Address, Error> {
+		self.get_new_address_info().map(|address_info| address_info.address)
+	}
+
+	pub(crate) fn get_new_address_info(&self) -> Result<AddressInfo, Error> {
 		let mut locked_wallet = self.inner.lock().unwrap();
-		locked_wallet.new_address().map_err(|e| {
+		locked_wallet.new_address_info().map_err(|e| {
 			log_error!(self.logger, "Failed to get new address: {}", e);
 			Error::WalletOperationFailed
 		})
@@ -704,9 +732,74 @@ impl Wallet {
 	pub(crate) fn get_new_address_for_type(
 		&self, address_type: AddressType,
 	) -> Result<bitcoin::Address, Error> {
+		self.get_new_address_info_for_type(address_type).map(|address_info| address_info.address)
+	}
+
+	pub(crate) fn get_new_address_info_for_type(
+		&self, address_type: AddressType,
+	) -> Result<AddressInfo, Error> {
 		let mut locked_wallet = self.inner.lock().unwrap();
-		locked_wallet.new_address_for(&address_type).map_err(|e| {
+		locked_wallet.new_address_info_for(&address_type).map_err(|e| {
 			log_error!(self.logger, "Failed to get new address for type {:?}: {}", address_type, e);
+			Error::WalletOperationFailed
+		})
+	}
+
+	pub(crate) fn get_address_info_for_type_at_index(
+		&self, address_type: AddressType, keychain: KeychainKind, index: u32,
+	) -> Result<AddressInfo, Error> {
+		validate_derivation_index(index)?;
+
+		let locked_wallet = self.inner.lock().unwrap();
+		locked_wallet.address_info_for(&address_type, keychain.into(), index).map_err(|e| {
+			log_error!(
+				self.logger,
+				"Failed to get address info for type {:?} keychain {:?} at index {}: {}",
+				address_type,
+				keychain,
+				index,
+				e
+			);
+			Error::WalletOperationFailed
+		})
+	}
+
+	pub(crate) fn get_address_infos_for_type(
+		&self, address_type: AddressType, keychain: KeychainKind, start_index: u32, count: u32,
+	) -> Result<Vec<AddressInfo>, Error> {
+		validate_derivation_range(start_index, count)?;
+
+		let locked_wallet = self.inner.lock().unwrap();
+		locked_wallet.address_infos_for(&address_type, keychain.into(), start_index, count).map_err(
+			|e| {
+				log_error!(
+					self.logger,
+					"Failed to get address infos for type {:?} keychain {:?} at indexes {}..{}: {}",
+					address_type,
+					keychain,
+					start_index,
+					start_index.saturating_add(count),
+					e
+				);
+				Error::WalletOperationFailed
+			},
+		)
+	}
+
+	pub(crate) fn reveal_receive_addresses_to(
+		&self, address_type: AddressType, index: u32,
+	) -> Result<(), Error> {
+		validate_derivation_index(index)?;
+
+		let mut locked_wallet = self.inner.lock().unwrap();
+		locked_wallet.reveal_addresses_to(&address_type, index).map_err(|e| {
+			log_error!(
+				self.logger,
+				"Failed to reveal receive addresses through {} for type {:?}: {}",
+				index,
+				address_type,
+				e
+			);
 			Error::WalletOperationFailed
 		})
 	}
@@ -1030,7 +1123,7 @@ impl Wallet {
 			OnchainSendAmount::AllRetainingReserve { cur_anchor_reserve_sats }
 				if cur_anchor_reserve_sats > DUST_LIMIT_SATS =>
 			{
-				let change_address_info = primary.peek_address(KeychainKind::Internal, 0);
+				let change_address_info = primary.peek_address(BdkKeychainKind::Internal, 0);
 				let spendable_amount_sats = self
 					.get_balances_inner(&aggregate_balance, cur_anchor_reserve_sats)
 					.map(|(_, s)| s)
@@ -1813,5 +1906,47 @@ impl ChangeDestinationSource for WalletKeysManager {
 				.map(|addr| addr.script_pubkey())
 				.map_err(|_| ())
 		})
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{
+		validate_derivation_index, validate_derivation_range, BIP32_MAX_NORMAL_INDEX,
+		MAX_ADDRESS_INFO_BATCH_COUNT,
+	};
+	use crate::Error;
+
+	#[test]
+	fn derivation_index_validation_rejects_hardened_range() {
+		assert_eq!(validate_derivation_index(BIP32_MAX_NORMAL_INDEX), Ok(()));
+		assert_eq!(
+			validate_derivation_index(BIP32_MAX_NORMAL_INDEX + 1),
+			Err(Error::InvalidQuantity)
+		);
+	}
+
+	#[test]
+	fn derivation_range_validation_rejects_overflow_into_hardened_range() {
+		assert_eq!(validate_derivation_range(BIP32_MAX_NORMAL_INDEX - 1, 2), Ok(()));
+		assert_eq!(
+			validate_derivation_range(BIP32_MAX_NORMAL_INDEX - 1, 3),
+			Err(Error::InvalidQuantity)
+		);
+		assert_eq!(validate_derivation_range(u32::MAX, 1), Err(Error::InvalidQuantity));
+	}
+
+	#[test]
+	fn derivation_range_validation_rejects_oversized_batches() {
+		assert_eq!(validate_derivation_range(0, MAX_ADDRESS_INFO_BATCH_COUNT), Ok(()));
+		assert_eq!(
+			validate_derivation_range(0, MAX_ADDRESS_INFO_BATCH_COUNT + 1),
+			Err(Error::InvalidQuantity)
+		);
+	}
+
+	#[test]
+	fn derivation_range_validation_allows_empty_ranges_at_valid_start() {
+		assert_eq!(validate_derivation_range(BIP32_MAX_NORMAL_INDEX, 0), Ok(()));
 	}
 }

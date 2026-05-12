@@ -1522,6 +1522,16 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2551,6 +2561,21 @@ internal interface UniffiLib : Library {
         `destinationAddress`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_address_info_for_type_at_index(
+        `ptr`: Pointer?,
+        `addressType`: RustBufferByValue,
+        `keychain`: RustBufferByValue,
+        `index`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type(
+        `ptr`: Pointer?,
+        `addressType`: RustBufferByValue,
+        `keychain`: RustBufferByValue,
+        `startIndex`: Int,
+        `count`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf(
         `ptr`: Pointer?,
         `txid`: RustBufferByValue,
@@ -2591,6 +2616,21 @@ internal interface UniffiLib : Library {
         `addressType`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_new_address_info(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type(
+        `ptr`: Pointer?,
+        `addressType`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(
+        `ptr`: Pointer?,
+        `addressType`: RustBufferByValue,
+        `index`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_method_onchainpayment_select_utxos_with_algorithm(
         `ptr`: Pointer?,
         `targetAmountSats`: Long,
@@ -3324,6 +3364,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_type_at_index(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate(
@@ -3337,6 +3381,12 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_onchainpayment_new_address(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_type(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_new_address_info(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm(
     ): Short
@@ -3914,6 +3964,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_type_at_index() != 42692.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type() != 3701.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -3933,6 +3989,15 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_type() != 9083.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info() != 9889.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm() != 14084.toShort()) {
@@ -8061,6 +8126,37 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
     }
 
     @Throws(NodeException::class)
+    override fun `addressInfoForTypeAtIndex`(`addressType`: AddressType, `keychain`: KeychainKind, `index`: kotlin.UInt): AddressInfo {
+        return FfiConverterTypeAddressInfo.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_address_info_for_type_at_index(
+                    it,
+                    FfiConverterTypeAddressType.lower(`addressType`),
+                    FfiConverterTypeKeychainKind.lower(`keychain`),
+                    FfiConverterUInt.lower(`index`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `addressInfosForType`(`addressType`: AddressType, `keychain`: KeychainKind, `startIndex`: kotlin.UInt, `count`: kotlin.UInt): List<AddressInfo> {
+        return FfiConverterSequenceTypeAddressInfo.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type(
+                    it,
+                    FfiConverterTypeAddressType.lower(`addressType`),
+                    FfiConverterTypeKeychainKind.lower(`keychain`),
+                    FfiConverterUInt.lower(`startIndex`),
+                    FfiConverterUInt.lower(`count`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
     override fun `bumpFeeByRbf`(`txid`: Txid, `feeRate`: FeeRate): Txid {
         return FfiConverterTypeTxid.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -8154,6 +8250,45 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
                 )
             }
         })
+    }
+
+    @Throws(NodeException::class)
+    override fun `newAddressInfo`(): AddressInfo {
+        return FfiConverterTypeAddressInfo.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_new_address_info(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `newAddressInfoForType`(`addressType`: AddressType): AddressInfo {
+        return FfiConverterTypeAddressInfo.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type(
+                    it,
+                    FfiConverterTypeAddressType.lower(`addressType`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `revealReceiveAddressesTo`(`addressType`: AddressType, `index`: kotlin.UInt) {
+        callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(
+                    it,
+                    FfiConverterTypeAddressType.lower(`addressType`),
+                    FfiConverterUInt.lower(`index`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
     }
 
     @Throws(NodeException::class)
@@ -9041,6 +9176,31 @@ object FfiConverterTypeVssHeaderProvider: FfiConverter<VssHeaderProvider, Pointe
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(lower(value).toLong())
+    }
+}
+
+
+
+
+object FfiConverterTypeAddressInfo: FfiConverterRustBuffer<AddressInfo> {
+    override fun read(buf: ByteBuffer): AddressInfo {
+        return AddressInfo(
+            FfiConverterUInt.read(buf),
+            FfiConverterTypeAddress.read(buf),
+            FfiConverterTypeKeychainKind.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AddressInfo) = (
+            FfiConverterUInt.allocationSize(value.`index`) +
+            FfiConverterTypeAddress.allocationSize(value.`address`) +
+            FfiConverterTypeKeychainKind.allocationSize(value.`keychain`)
+    )
+
+    override fun write(value: AddressInfo, buf: ByteBuffer) {
+        FfiConverterUInt.write(value.`index`, buf)
+        FfiConverterTypeAddress.write(value.`address`, buf)
+        FfiConverterTypeKeychainKind.write(value.`keychain`, buf)
     }
 }
 
@@ -11207,6 +11367,24 @@ object FfiConverterTypeEvent : FfiConverterRustBuffer<Event>{
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+object FfiConverterTypeKeychainKind: FfiConverterRustBuffer<KeychainKind> {
+    override fun read(buf: ByteBuffer) = try {
+        KeychainKind.entries[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: KeychainKind) = 4UL
+
+    override fun write(value: KeychainKind, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
     }
 }
 
@@ -13725,6 +13903,31 @@ object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypeAddressInfo: FfiConverterRustBuffer<List<AddressInfo>> {
+    override fun read(buf: ByteBuffer): List<AddressInfo> {
+        val len = buf.getInt()
+        return List<AddressInfo>(len) {
+            FfiConverterTypeAddressInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<AddressInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeAddressInfo.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<AddressInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeAddressInfo.write(it, buf)
         }
     }
 }
