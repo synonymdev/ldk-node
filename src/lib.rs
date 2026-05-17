@@ -1391,8 +1391,11 @@ impl Node {
 
 	/// Disconnects the peer with the given node id.
 	///
-	/// Will also remove the peer from the peer store, i.e., after this has been called we won't
-	/// try to reconnect on restart.
+	/// Will also remove the peer from the peer store, i.e., the stored peer entry won't be used
+	/// by the reconnect loop.
+	///
+	/// If an active channel with this peer is later restored and the peer has an announced address
+	/// in the network graph, startup may persist the peer again so the channel can reconnect.
 	pub fn disconnect(&self, counterparty_node_id: PublicKey) -> Result<(), Error> {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);

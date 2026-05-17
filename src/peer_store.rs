@@ -5,12 +5,13 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
 use bitcoin::secp256k1::PublicKey;
 use lightning::impl_writeable_tlv_based;
+use lightning::routing::gossip::NodeId;
 use lightning::util::persist::KVStoreSync;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
 
@@ -19,7 +20,7 @@ use crate::io::{
 	PEER_INFO_PERSISTENCE_SECONDARY_NAMESPACE,
 };
 use crate::logger::{log_error, log_info, LdkLogger};
-use crate::types::DynStore;
+use crate::types::{DynStore, Graph};
 use crate::{Error, SocketAddress};
 
 pub struct PeerStore<L: Deref>
@@ -156,15 +157,64 @@ impl_writeable_tlv_based!(PeerInfo, {
 	(2, address, required),
 });
 
+pub(crate) fn persist_missing_channel_peers<L, I>(
+	counterparty_node_ids: I, network_graph: &Graph, peer_store: &PeerStore<L>, logger: L,
+) where
+	L: Deref,
+	L::Target: LdkLogger,
+	I: IntoIterator<Item = PublicKey>,
+{
+	let graph = network_graph.read_only();
+	let mut seen = HashSet::new();
+
+	for counterparty_node_id in counterparty_node_ids {
+		if !seen.insert(counterparty_node_id)
+			|| peer_store.get_peer(&counterparty_node_id).is_some()
+		{
+			continue;
+		}
+
+		let announced_address = graph
+			.nodes()
+			.get(&NodeId::from_pubkey(&counterparty_node_id))
+			.and_then(|node_info| node_info.announcement_info.as_ref())
+			.and_then(|announcement_info| announcement_info.addresses().first())
+			.cloned();
+
+		let Some(address) = announced_address else {
+			continue;
+		};
+
+		let peer_info = PeerInfo { node_id: counterparty_node_id, address };
+		match peer_store.add_peer(peer_info) {
+			Ok(()) => {
+				log_info!(
+					logger,
+					"Persisted peer {} from channel counterparty",
+					counterparty_node_id
+				)
+			},
+			Err(e) => {
+				log_error!(logger, "Failed to persist peer {}: {}", counterparty_node_id, e)
+			},
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use std::str::FromStr;
 	use std::sync::Arc;
 
+	use bitcoin::Network;
+	use lightning::ln::msgs::UnsignedNodeAnnouncement;
+	use lightning::routing::gossip::{NodeAlias, NodeId};
+	use lightning::types::features::{ChannelFeatures, NodeFeatures};
 	use lightning::util::test_utils::TestLogger;
 
 	use super::*;
 	use crate::io::test_utils::InMemoryStore;
+	use crate::logger::Logger;
 
 	#[test]
 	fn peer_info_persistence() {
@@ -253,5 +303,69 @@ mod tests {
 
 		peer_store.add_peer(PeerInfo { node_id, address }).unwrap();
 		assert_eq!(peer_store.list_peers().len(), 1);
+	}
+
+	#[test]
+	fn missing_channel_peer_is_persisted_from_graph() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(Logger::new_log_facade());
+		let peer_store = PeerStore::new(Arc::clone(&store), Arc::clone(&logger));
+		let network_graph = Graph::new(Network::Regtest.into(), Arc::clone(&logger));
+
+		let node_id = PublicKey::from_str(
+			"0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993",
+		)
+		.unwrap();
+		let other_node_id = PublicKey::from_str(
+			"02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619",
+		)
+		.unwrap();
+		let address = SocketAddress::from_str("127.0.0.1:9738").unwrap();
+
+		network_graph
+			.add_channel_from_partial_announcement(
+				42,
+				None,
+				0,
+				ChannelFeatures::empty(),
+				NodeId::from_pubkey(&node_id),
+				NodeId::from_pubkey(&other_node_id),
+			)
+			.unwrap();
+		network_graph
+			.update_node_from_unsigned_announcement(&UnsignedNodeAnnouncement {
+				features: NodeFeatures::empty(),
+				timestamp: 1,
+				node_id: NodeId::from_pubkey(&node_id),
+				rgb: [0; 3],
+				alias: NodeAlias([0; 32]),
+				addresses: vec![address.clone()],
+				excess_address_data: Vec::new(),
+				excess_data: Vec::new(),
+			})
+			.unwrap();
+
+		persist_missing_channel_peers(vec![node_id], &network_graph, &peer_store, logger);
+
+		let peer = peer_store.get_peer(&node_id).unwrap();
+		assert_eq!(peer.node_id, node_id);
+		assert_eq!(peer.address, address);
+	}
+
+	#[test]
+	fn missing_channel_peer_without_announced_address_is_skipped() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(Logger::new_log_facade());
+		let peer_store = PeerStore::new(Arc::clone(&store), Arc::clone(&logger));
+		let network_graph = Graph::new(Network::Regtest.into(), Arc::clone(&logger));
+
+		let node_id = PublicKey::from_str(
+			"0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993",
+		)
+		.unwrap();
+
+		persist_missing_channel_peers(vec![node_id], &network_graph, &peer_store, logger);
+
+		assert!(peer_store.get_peer(&node_id).is_none());
 	}
 }
