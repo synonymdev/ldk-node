@@ -368,4 +368,59 @@ mod tests {
 
 		assert!(peer_store.get_peer(&node_id).is_none());
 	}
+
+	#[test]
+	fn missing_channel_peer_is_persisted_after_graph_retry() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(Logger::new_log_facade());
+		let peer_store = PeerStore::new(Arc::clone(&store), Arc::clone(&logger));
+		let network_graph = Graph::new(Network::Regtest.into(), Arc::clone(&logger));
+
+		let node_id = PublicKey::from_str(
+			"0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993",
+		)
+		.unwrap();
+		let other_node_id = PublicKey::from_str(
+			"02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619",
+		)
+		.unwrap();
+		let address = SocketAddress::from_str("127.0.0.1:9738").unwrap();
+
+		persist_missing_channel_peers(
+			vec![node_id],
+			&network_graph,
+			&peer_store,
+			Arc::clone(&logger),
+		);
+		assert!(peer_store.get_peer(&node_id).is_none());
+
+		network_graph
+			.add_channel_from_partial_announcement(
+				42,
+				None,
+				0,
+				ChannelFeatures::empty(),
+				NodeId::from_pubkey(&node_id),
+				NodeId::from_pubkey(&other_node_id),
+			)
+			.unwrap();
+		network_graph
+			.update_node_from_unsigned_announcement(&UnsignedNodeAnnouncement {
+				features: NodeFeatures::empty(),
+				timestamp: 1,
+				node_id: NodeId::from_pubkey(&node_id),
+				rgb: [0; 3],
+				alias: NodeAlias([0; 32]),
+				addresses: vec![address.clone()],
+				excess_address_data: Vec::new(),
+				excess_data: Vec::new(),
+			})
+			.unwrap();
+
+		persist_missing_channel_peers(vec![node_id], &network_graph, &peer_store, logger);
+
+		let peer = peer_store.get_peer(&node_id).unwrap();
+		assert_eq!(peer.node_id, node_id);
+		assert_eq!(peer.address, address);
+	}
 }

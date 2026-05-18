@@ -1,7 +1,10 @@
-# 0.7.0-rc.40 (Synonym Fork)
+# 0.7.0-rc.41 (Synonym Fork)
 
 ## Bug Fixes
 
+- Retry restored channel peer persistence after Rapid Gossip Sync updates the
+  network graph, so restored RGS nodes can reconnect channels whose counterparty
+  addresses were not available during the initial build-time recovery pass.
 - Fixed orphaned channel migration blocking node startup when the existing monitor
   in the KV store can't be deserialized (e.g., `UnknownVersion` from a newer LDK
   version). The migration now skips writing and lets the node start normally,

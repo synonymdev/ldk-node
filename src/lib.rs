@@ -162,7 +162,7 @@ use payment::{
 	Bolt11Payment, Bolt12Payment, OnchainPayment, PaymentDetails, SpontaneousPayment,
 	UnifiedQrPayment,
 };
-use peer_store::{PeerInfo, PeerStore};
+use peer_store::{persist_missing_channel_peers, PeerInfo, PeerStore};
 pub use probe_handle::ProbeHandle;
 use rand::Rng;
 use runtime::Runtime;
@@ -274,6 +274,9 @@ impl Node {
 			let gossip_sync_store = Arc::clone(&self.kv_store);
 			let gossip_sync_logger = Arc::clone(&self.logger);
 			let gossip_node_metrics = Arc::clone(&self.node_metrics);
+			let gossip_channel_manager = Arc::clone(&self.channel_manager);
+			let gossip_network_graph = Arc::clone(&self.network_graph);
+			let gossip_peer_store = Arc::clone(&self.peer_store);
 			let mut stop_gossip_sync = self.stop_sender.subscribe();
 			self.runtime.spawn_cancellable_background_task(async move {
 				let mut interval = tokio::time::interval(RGS_SYNC_INTERVAL);
@@ -295,6 +298,15 @@ impl Node {
 										"Background sync of RGS gossip data finished in {}ms.",
 										now.elapsed().as_millis()
 										);
+									persist_missing_channel_peers(
+										gossip_channel_manager
+											.list_channels()
+											.into_iter()
+											.map(|channel| channel.counterparty.node_id),
+										&gossip_network_graph,
+										&gossip_peer_store,
+										Arc::clone(&gossip_sync_logger),
+									);
 									{
 										let mut locked_node_metrics = gossip_node_metrics.write().unwrap();
 										locked_node_metrics.latest_rgs_snapshot_timestamp = Some(updated_timestamp);
