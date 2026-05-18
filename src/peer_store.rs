@@ -164,11 +164,29 @@ pub(crate) fn persist_missing_channel_peers<L, I>(
 	L::Target: LdkLogger,
 	I: IntoIterator<Item = PublicKey>,
 {
+	persist_missing_channel_peers_excluding(
+		counterparty_node_ids,
+		network_graph,
+		peer_store,
+		&HashSet::new(),
+		logger,
+	)
+}
+
+pub(crate) fn persist_missing_channel_peers_excluding<L, I>(
+	counterparty_node_ids: I, network_graph: &Graph, peer_store: &PeerStore<L>,
+	excluded_node_ids: &HashSet<PublicKey>, logger: L,
+) where
+	L: Deref,
+	L::Target: LdkLogger,
+	I: IntoIterator<Item = PublicKey>,
+{
 	let graph = network_graph.read_only();
 	let mut seen = HashSet::new();
 
 	for counterparty_node_id in counterparty_node_ids {
 		if !seen.insert(counterparty_node_id)
+			|| excluded_node_ids.contains(&counterparty_node_id)
 			|| peer_store.get_peer(&counterparty_node_id).is_some()
 		{
 			continue;
@@ -422,5 +440,57 @@ mod tests {
 		let peer = peer_store.get_peer(&node_id).unwrap();
 		assert_eq!(peer.node_id, node_id);
 		assert_eq!(peer.address, address);
+	}
+
+	#[test]
+	fn excluded_missing_channel_peer_is_not_persisted_from_graph() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(Logger::new_log_facade());
+		let peer_store = PeerStore::new(Arc::clone(&store), Arc::clone(&logger));
+		let network_graph = Graph::new(Network::Regtest.into(), Arc::clone(&logger));
+
+		let node_id = PublicKey::from_str(
+			"0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993",
+		)
+		.unwrap();
+		let other_node_id = PublicKey::from_str(
+			"02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619",
+		)
+		.unwrap();
+		let address = SocketAddress::from_str("127.0.0.1:9738").unwrap();
+		let excluded_node_ids = HashSet::from([node_id]);
+
+		network_graph
+			.add_channel_from_partial_announcement(
+				42,
+				None,
+				0,
+				ChannelFeatures::empty(),
+				NodeId::from_pubkey(&node_id),
+				NodeId::from_pubkey(&other_node_id),
+			)
+			.unwrap();
+		network_graph
+			.update_node_from_unsigned_announcement(&UnsignedNodeAnnouncement {
+				features: NodeFeatures::empty(),
+				timestamp: 1,
+				node_id: NodeId::from_pubkey(&node_id),
+				rgb: [0; 3],
+				alias: NodeAlias([0; 32]),
+				addresses: vec![address],
+				excess_address_data: Vec::new(),
+				excess_data: Vec::new(),
+			})
+			.unwrap();
+
+		persist_missing_channel_peers_excluding(
+			vec![node_id],
+			&network_graph,
+			&peer_store,
+			&excluded_node_ids,
+			logger,
+		);
+
+		assert!(peer_store.get_peer(&node_id).is_none());
 	}
 }
