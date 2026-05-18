@@ -301,7 +301,7 @@ impl Node {
 										now.elapsed().as_millis()
 										);
 									let peer_recovery_exclusions =
-										gossip_peer_recovery_exclusions.read().unwrap().clone();
+										gossip_peer_recovery_exclusions.read().unwrap();
 									persist_missing_channel_peers_excluding(
 										gossip_channel_manager
 											.list_channels()
@@ -309,7 +309,7 @@ impl Node {
 											.map(|channel| channel.counterparty.node_id),
 										&gossip_network_graph,
 										&gossip_peer_store,
-										&peer_recovery_exclusions,
+										&*peer_recovery_exclusions,
 										Arc::clone(&gossip_sync_logger),
 									);
 									{
@@ -1423,13 +1423,13 @@ impl Node {
 
 		log_info!(self.logger, "Disconnecting peer {}..", counterparty_node_id);
 
+		self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
 		match self.peer_store.remove_peer(&counterparty_node_id) {
 			Ok(()) => {},
 			Err(e) => {
 				log_error!(self.logger, "Failed to remove peer {}: {}", counterparty_node_id, e)
 			},
 		}
-		self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
 
 		self.peer_manager.disconnect_by_node_id(counterparty_node_id);
 		Ok(())
@@ -1910,8 +1910,8 @@ impl Node {
 
 			// Check if this was the last open channel, if so, forget the peer.
 			if open_channels.len() == 1 {
-				self.peer_store.remove_peer(&counterparty_node_id)?;
 				self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
+				self.peer_store.remove_peer(&counterparty_node_id)?;
 			}
 		}
 
