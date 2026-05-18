@@ -214,7 +214,7 @@ pub struct Node {
 	_router: Arc<Router>,
 	scorer: Arc<Mutex<Scorer>>,
 	peer_store: Arc<PeerStore<Arc<Logger>>>,
-	manually_disconnected_peers: Arc<RwLock<HashSet<PublicKey>>>,
+	rgs_peer_recovery_exclusions: Arc<RwLock<HashSet<PublicKey>>>,
 	payment_store: Arc<PaymentStore>,
 	is_running: Arc<RwLock<bool>>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
@@ -278,7 +278,7 @@ impl Node {
 			let gossip_channel_manager = Arc::clone(&self.channel_manager);
 			let gossip_network_graph = Arc::clone(&self.network_graph);
 			let gossip_peer_store = Arc::clone(&self.peer_store);
-			let gossip_manually_disconnected_peers = Arc::clone(&self.manually_disconnected_peers);
+			let gossip_peer_recovery_exclusions = Arc::clone(&self.rgs_peer_recovery_exclusions);
 			let mut stop_gossip_sync = self.stop_sender.subscribe();
 			self.runtime.spawn_cancellable_background_task(async move {
 				let mut interval = tokio::time::interval(RGS_SYNC_INTERVAL);
@@ -300,8 +300,8 @@ impl Node {
 										"Background sync of RGS gossip data finished in {}ms.",
 										now.elapsed().as_millis()
 										);
-									let manually_disconnected_peers =
-										gossip_manually_disconnected_peers.read().unwrap().clone();
+									let peer_recovery_exclusions =
+										gossip_peer_recovery_exclusions.read().unwrap().clone();
 									persist_missing_channel_peers_excluding(
 										gossip_channel_manager
 											.list_channels()
@@ -309,7 +309,7 @@ impl Node {
 											.map(|channel| channel.counterparty.node_id),
 										&gossip_network_graph,
 										&gossip_peer_store,
-										&manually_disconnected_peers,
+										&peer_recovery_exclusions,
 										Arc::clone(&gossip_sync_logger),
 									);
 									{
@@ -1389,7 +1389,7 @@ impl Node {
 		// races with an in-flight reconnection loop attempt at the old address.
 		if persist {
 			self.peer_store.add_peer(peer_info.clone())?;
-			self.manually_disconnected_peers.write().unwrap().remove(&node_id);
+			self.rgs_peer_recovery_exclusions.write().unwrap().remove(&node_id);
 		}
 
 		let con_node_id = peer_info.node_id;
@@ -1429,7 +1429,7 @@ impl Node {
 				log_error!(self.logger, "Failed to remove peer {}: {}", counterparty_node_id, e)
 			},
 		}
-		self.manually_disconnected_peers.write().unwrap().insert(counterparty_node_id);
+		self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
 
 		self.peer_manager.disconnect_by_node_id(counterparty_node_id);
 		Ok(())
@@ -1489,7 +1489,7 @@ impl Node {
 					peer_info.node_id
 				);
 				self.peer_store.add_peer(peer_info)?;
-				self.manually_disconnected_peers.write().unwrap().remove(&node_id);
+				self.rgs_peer_recovery_exclusions.write().unwrap().remove(&node_id);
 				Ok(UserChannelId(user_channel_id))
 			},
 			Err(e) => {
@@ -1911,6 +1911,7 @@ impl Node {
 			// Check if this was the last open channel, if so, forget the peer.
 			if open_channels.len() == 1 {
 				self.peer_store.remove_peer(&counterparty_node_id)?;
+				self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
 			}
 		}
 

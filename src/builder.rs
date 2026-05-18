@@ -2392,7 +2392,7 @@ fn build_with_store_internal(
 		_router: router,
 		scorer,
 		peer_store,
-		manually_disconnected_peers: Arc::new(RwLock::new(HashSet::new())),
+		rgs_peer_recovery_exclusions: Arc::new(RwLock::new(HashSet::new())),
 		payment_store,
 		is_running,
 		node_metrics,
