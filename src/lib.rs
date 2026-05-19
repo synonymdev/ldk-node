@@ -309,7 +309,7 @@ impl Node {
 											.map(|channel| channel.counterparty.node_id),
 										&gossip_network_graph,
 										&gossip_peer_store,
-										&*peer_recovery_exclusions,
+										&peer_recovery_exclusions,
 										Arc::clone(&gossip_sync_logger),
 									);
 									{

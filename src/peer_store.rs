@@ -57,8 +57,11 @@ where
 			);
 		}
 
-		locked_peers.insert(peer_info.node_id, peer_info);
-		self.persist_peers(&*locked_peers)
+		let mut updated_peers = locked_peers.clone();
+		updated_peers.insert(peer_info.node_id, peer_info);
+		self.persist_peers(&updated_peers)?;
+		*locked_peers = updated_peers;
+		Ok(())
 	}
 
 	pub(crate) fn remove_peer(&self, node_id: &PublicKey) -> Result<(), Error> {
@@ -183,37 +186,39 @@ pub(crate) fn persist_missing_channel_peers_excluding<L, I>(
 {
 	let graph = network_graph.read_only();
 	let mut seen = HashSet::new();
+	let missing_peers = counterparty_node_ids
+		.into_iter()
+		.filter_map(|counterparty_node_id| {
+			if !seen.insert(counterparty_node_id)
+				|| excluded_node_ids.contains(&counterparty_node_id)
+				|| peer_store.get_peer(&counterparty_node_id).is_some()
+			{
+				return None;
+			}
 
-	for counterparty_node_id in counterparty_node_ids {
-		if !seen.insert(counterparty_node_id)
-			|| excluded_node_ids.contains(&counterparty_node_id)
-			|| peer_store.get_peer(&counterparty_node_id).is_some()
-		{
+			graph
+				.nodes()
+				.get(&NodeId::from_pubkey(&counterparty_node_id))
+				.and_then(|node_info| node_info.announcement_info.as_ref())
+				.and_then(|announcement_info| announcement_info.addresses().first())
+				.cloned()
+				.map(|address| PeerInfo { node_id: counterparty_node_id, address })
+		})
+		.collect::<Vec<_>>();
+	drop(graph);
+
+	for peer_info in missing_peers {
+		let node_id = peer_info.node_id;
+		if peer_store.get_peer(&node_id).is_some() {
 			continue;
 		}
 
-		let announced_address = graph
-			.nodes()
-			.get(&NodeId::from_pubkey(&counterparty_node_id))
-			.and_then(|node_info| node_info.announcement_info.as_ref())
-			.and_then(|announcement_info| announcement_info.addresses().first())
-			.cloned();
-
-		let Some(address) = announced_address else {
-			continue;
-		};
-
-		let peer_info = PeerInfo { node_id: counterparty_node_id, address };
 		match peer_store.add_peer(peer_info) {
 			Ok(()) => {
-				log_info!(
-					logger,
-					"Persisted peer {} from channel counterparty",
-					counterparty_node_id
-				)
+				log_info!(logger, "Persisted peer {} from channel counterparty", node_id)
 			},
 			Err(e) => {
-				log_error!(logger, "Failed to persist peer {}: {}", counterparty_node_id, e)
+				log_error!(logger, "Failed to persist peer {}: {}", node_id, e)
 			},
 		}
 	}
@@ -221,13 +226,19 @@ pub(crate) fn persist_missing_channel_peers_excluding<L, I>(
 
 #[cfg(test)]
 mod tests {
+	use std::collections::HashMap;
+	use std::future::Future;
+	use std::pin::Pin;
 	use std::str::FromStr;
-	use std::sync::Arc;
+	use std::sync::atomic::{AtomicBool, Ordering};
+	use std::sync::{Arc, Mutex};
 
 	use bitcoin::Network;
+	use lightning::io;
 	use lightning::ln::msgs::UnsignedNodeAnnouncement;
 	use lightning::routing::gossip::{NodeAlias, NodeId};
 	use lightning::types::features::{ChannelFeatures, NodeFeatures};
+	use lightning::util::persist::KVStore;
 	use lightning::util::test_utils::TestLogger;
 
 	use super::*;
@@ -321,6 +332,26 @@ mod tests {
 
 		peer_store.add_peer(PeerInfo { node_id, address }).unwrap();
 		assert_eq!(peer_store.list_peers().len(), 1);
+	}
+
+	#[test]
+	fn peer_add_persistence_failure_leaves_peer_retryable() {
+		let store: Arc<DynStore> = Arc::new(FailFirstWriteStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let peer_store = PeerStore::new(Arc::clone(&store), Arc::clone(&logger));
+
+		let node_id = PublicKey::from_str(
+			"0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993",
+		)
+		.unwrap();
+		let address = SocketAddress::from_str("127.0.0.1:9738").unwrap();
+		let peer_info = PeerInfo { node_id, address };
+
+		assert!(matches!(peer_store.add_peer(peer_info.clone()), Err(Error::PersistenceFailed)));
+		assert!(peer_store.get_peer(&node_id).is_none());
+
+		peer_store.add_peer(peer_info.clone()).unwrap();
+		assert_eq!(peer_store.get_peer(&node_id), Some(peer_info));
 	}
 
 	#[test]
@@ -492,5 +523,125 @@ mod tests {
 		);
 
 		assert!(peer_store.get_peer(&node_id).is_none());
+	}
+
+	struct FailFirstWriteStore {
+		persisted_bytes: Mutex<HashMap<String, HashMap<String, Vec<u8>>>>,
+		fail_next_write: AtomicBool,
+	}
+
+	impl FailFirstWriteStore {
+		fn new() -> Self {
+			Self {
+				persisted_bytes: Mutex::new(HashMap::new()),
+				fail_next_write: AtomicBool::new(true),
+			}
+		}
+
+		fn read_internal(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> io::Result<Vec<u8>> {
+			let persisted_lock = self.persisted_bytes.lock().unwrap();
+			let prefixed = format!("{}/{}", primary_namespace, secondary_namespace);
+			persisted_lock
+				.get(&prefixed)
+				.and_then(|inner| inner.get(key))
+				.cloned()
+				.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Key not found"))
+		}
+
+		fn write_internal(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> io::Result<()> {
+			if self.fail_next_write.swap(false, Ordering::Relaxed) {
+				return Err(io::Error::new(io::ErrorKind::Other, "Injected write failure"));
+			}
+
+			let mut persisted_lock = self.persisted_bytes.lock().unwrap();
+			let prefixed = format!("{}/{}", primary_namespace, secondary_namespace);
+			persisted_lock
+				.entry(prefixed)
+				.or_insert_with(HashMap::new)
+				.insert(key.to_string(), buf);
+			Ok(())
+		}
+
+		fn remove_internal(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> io::Result<()> {
+			let mut persisted_lock = self.persisted_bytes.lock().unwrap();
+			let prefixed = format!("{}/{}", primary_namespace, secondary_namespace);
+			if let Some(inner) = persisted_lock.get_mut(&prefixed) {
+				inner.remove(key);
+			}
+			Ok(())
+		}
+
+		fn list_internal(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> io::Result<Vec<String>> {
+			let persisted_lock = self.persisted_bytes.lock().unwrap();
+			let prefixed = format!("{}/{}", primary_namespace, secondary_namespace);
+			Ok(persisted_lock
+				.get(&prefixed)
+				.map(|inner| inner.keys().cloned().collect())
+				.unwrap_or_default())
+		}
+	}
+
+	impl KVStore for FailFirstWriteStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> Pin<Box<dyn Future<Output = io::Result<Vec<u8>>> + Send + 'static>> {
+			let res = self.read_internal(primary_namespace, secondary_namespace, key);
+			Box::pin(async move { res })
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'static>> {
+			let res = self.write_internal(primary_namespace, secondary_namespace, key, buf);
+			Box::pin(async move { res })
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, _lazy: bool,
+		) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'static>> {
+			let res = self.remove_internal(primary_namespace, secondary_namespace, key);
+			Box::pin(async move { res })
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> Pin<Box<dyn Future<Output = io::Result<Vec<String>>> + Send + 'static>> {
+			let res = self.list_internal(primary_namespace, secondary_namespace);
+			Box::pin(async move { res })
+		}
+	}
+
+	impl KVStoreSync for FailFirstWriteStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> io::Result<Vec<u8>> {
+			self.read_internal(primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> io::Result<()> {
+			self.write_internal(primary_namespace, secondary_namespace, key, buf)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, _lazy: bool,
+		) -> io::Result<()> {
+			self.remove_internal(primary_namespace, secondary_namespace, key)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> io::Result<Vec<String>> {
+			self.list_internal(primary_namespace, secondary_namespace)
+		}
 	}
 }
