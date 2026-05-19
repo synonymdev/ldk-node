@@ -103,7 +103,7 @@ mod tx_broadcaster;
 mod types;
 mod wallet;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
@@ -162,7 +162,7 @@ use payment::{
 	Bolt11Payment, Bolt12Payment, OnchainPayment, PaymentDetails, SpontaneousPayment,
 	UnifiedQrPayment,
 };
-use peer_store::{PeerInfo, PeerStore};
+use peer_store::{persist_missing_channel_peers_excluding, PeerInfo, PeerStore};
 pub use probe_handle::ProbeHandle;
 use rand::Rng;
 use runtime::Runtime;
@@ -214,6 +214,7 @@ pub struct Node {
 	_router: Arc<Router>,
 	scorer: Arc<Mutex<Scorer>>,
 	peer_store: Arc<PeerStore<Arc<Logger>>>,
+	rgs_peer_recovery_exclusions: Arc<RwLock<HashSet<PublicKey>>>,
 	payment_store: Arc<PaymentStore>,
 	is_running: Arc<RwLock<bool>>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
@@ -274,6 +275,10 @@ impl Node {
 			let gossip_sync_store = Arc::clone(&self.kv_store);
 			let gossip_sync_logger = Arc::clone(&self.logger);
 			let gossip_node_metrics = Arc::clone(&self.node_metrics);
+			let gossip_channel_manager = Arc::clone(&self.channel_manager);
+			let gossip_network_graph = Arc::clone(&self.network_graph);
+			let gossip_peer_store = Arc::clone(&self.peer_store);
+			let gossip_peer_recovery_exclusions = Arc::clone(&self.rgs_peer_recovery_exclusions);
 			let mut stop_gossip_sync = self.stop_sender.subscribe();
 			self.runtime.spawn_cancellable_background_task(async move {
 				let mut interval = tokio::time::interval(RGS_SYNC_INTERVAL);
@@ -295,6 +300,18 @@ impl Node {
 										"Background sync of RGS gossip data finished in {}ms.",
 										now.elapsed().as_millis()
 										);
+									let peer_recovery_exclusions =
+										gossip_peer_recovery_exclusions.read().unwrap();
+									persist_missing_channel_peers_excluding(
+										gossip_channel_manager
+											.list_channels()
+											.into_iter()
+											.map(|channel| channel.counterparty.node_id),
+										&gossip_network_graph,
+										&gossip_peer_store,
+										&peer_recovery_exclusions,
+										Arc::clone(&gossip_sync_logger),
+									);
 									{
 										let mut locked_node_metrics = gossip_node_metrics.write().unwrap();
 										locked_node_metrics.latest_rgs_snapshot_timestamp = Some(updated_timestamp);
@@ -1372,6 +1389,7 @@ impl Node {
 		// races with an in-flight reconnection loop attempt at the old address.
 		if persist {
 			self.peer_store.add_peer(peer_info.clone())?;
+			self.rgs_peer_recovery_exclusions.write().unwrap().remove(&node_id);
 		}
 
 		let con_node_id = peer_info.node_id;
@@ -1391,8 +1409,13 @@ impl Node {
 
 	/// Disconnects the peer with the given node id.
 	///
-	/// Will also remove the peer from the peer store, i.e., after this has been called we won't
-	/// try to reconnect on restart.
+	/// Will also remove the peer from the peer store, i.e., the stored peer entry won't be used
+	/// by the reconnect loop.
+	///
+	/// If an active channel with this peer is later restored and the peer has an announced address
+	/// in the network graph, startup may persist the peer again so the channel can reconnect.
+	/// Background RGS retries will not re-persist the peer during this node instance unless the
+	/// peer is explicitly connected with persistence enabled or a new channel is opened.
 	pub fn disconnect(&self, counterparty_node_id: PublicKey) -> Result<(), Error> {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
@@ -1400,6 +1423,7 @@ impl Node {
 
 		log_info!(self.logger, "Disconnecting peer {}..", counterparty_node_id);
 
+		self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
 		match self.peer_store.remove_peer(&counterparty_node_id) {
 			Ok(()) => {},
 			Err(e) => {
@@ -1465,6 +1489,7 @@ impl Node {
 					peer_info.node_id
 				);
 				self.peer_store.add_peer(peer_info)?;
+				self.rgs_peer_recovery_exclusions.write().unwrap().remove(&node_id);
 				Ok(UserChannelId(user_channel_id))
 			},
 			Err(e) => {
@@ -1885,6 +1910,7 @@ impl Node {
 
 			// Check if this was the last open channel, if so, forget the peer.
 			if open_channels.len() == 1 {
+				self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
 				self.peer_store.remove_peer(&counterparty_node_id)?;
 			}
 		}

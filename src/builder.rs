@@ -5,7 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::default::Default;
 use std::path::PathBuf;
@@ -77,7 +77,7 @@ use crate::liquidity::{
 use crate::logger::{log_error, LdkLogger, LogLevel, LogWriter, Logger};
 use crate::message_handler::NodeCustomMessageHandler;
 use crate::payment::asynchronous::om_mailbox::OnionMessageMailbox;
-use crate::peer_store::PeerStore;
+use crate::peer_store::{persist_missing_channel_peers, PeerStore};
 use crate::runtime::Runtime;
 use crate::tx_broadcaster::TransactionBroadcaster;
 use crate::types::{
@@ -2347,6 +2347,13 @@ fn build_with_store_internal(
 		},
 	};
 
+	persist_missing_channel_peers(
+		channel_manager.list_channels().into_iter().map(|channel| channel.counterparty.node_id),
+		&network_graph,
+		&peer_store,
+		Arc::clone(&logger),
+	);
+
 	let om_mailbox = if let Some(AsyncPaymentsRole::Server) = async_payments_role {
 		Some(Arc::new(OnionMessageMailbox::new()))
 	} else {
@@ -2385,6 +2392,7 @@ fn build_with_store_internal(
 		_router: router,
 		scorer,
 		peer_store,
+		rgs_peer_recovery_exclusions: Arc::new(RwLock::new(HashSet::new())),
 		payment_store,
 		is_running,
 		node_metrics,
