@@ -108,7 +108,7 @@ use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use balance::{AddressTypeBalance, BalanceDetails, LightningBalance, PendingSweepBalance};
@@ -232,8 +232,8 @@ pub(crate) struct RgsPeerRecoveryExclusions {
 }
 
 impl RgsPeerRecoveryExclusions {
-	fn snapshot(&self) -> HashSet<PublicKey> {
-		self.node_ids.read().unwrap().clone()
+	fn read(&self) -> RwLockReadGuard<'_, HashSet<PublicKey>> {
+		self.node_ids.read().unwrap()
 	}
 
 	fn exclude_after_disconnect(&self, node_id: PublicKey) {
@@ -254,7 +254,7 @@ impl RgsPeerRecoveryExclusions {
 
 	#[cfg(test)]
 	fn contains(&self, node_id: &PublicKey) -> bool {
-		self.node_ids.read().unwrap().contains(node_id)
+		self.read().contains(node_id)
 	}
 }
 
@@ -333,7 +333,7 @@ impl Node {
 										now.elapsed().as_millis()
 										);
 									let peer_recovery_exclusions =
-										gossip_peer_recovery_exclusions.snapshot();
+										gossip_peer_recovery_exclusions.read();
 									persist_missing_channel_peers_excluding(
 										gossip_channel_manager
 											.list_channels()
@@ -2533,7 +2533,6 @@ mod tests {
 
 		exclusions.exclude_after_disconnect(node_id);
 		assert!(exclusions.contains(&node_id));
-		assert!(exclusions.snapshot().contains(&node_id));
 
 		exclusions.clear_after_persistent_connect(&node_id);
 		assert!(!exclusions.contains(&node_id));
@@ -2543,6 +2542,5 @@ mod tests {
 
 		exclusions.clear_after_channel_open(&node_id);
 		assert!(!exclusions.contains(&node_id));
-		assert!(!exclusions.snapshot().contains(&node_id));
 	}
 }

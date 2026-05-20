@@ -1,7 +1,9 @@
-# 0.7.0-rc.43 (Synonym Fork)
+# 0.7.0-rc.44 (Synonym Fork)
 
 ## Bug Fixes
 
+- Fixed an RGS peer-recovery race where a disconnect immediately after a recovery
+  pass began could re-persist the disconnected peer from a stale exclusion snapshot.
 - Persist missing announced channel peers from the network graph during
   build-time restore and retry after Rapid Gossip Sync graph updates. Explicit
   disconnects and last-channel closes suppress RGS re-persistence during the
