@@ -5,7 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::default::Default;
 use std::path::PathBuf;
@@ -86,6 +86,7 @@ use crate::types::{
 };
 use crate::wallet::persist::KVStoreWalletPersister;
 use crate::wallet::Wallet;
+use crate::RgsPeerRecoveryExclusions;
 use crate::{Node, NodeMetrics};
 
 const VSS_HARDENED_CHILD_INDEX: u32 = 877;
@@ -2392,7 +2393,7 @@ fn build_with_store_internal(
 		_router: router,
 		scorer,
 		peer_store,
-		rgs_peer_recovery_exclusions: Arc::new(RwLock::new(HashSet::new())),
+		rgs_peer_recovery_exclusions: Arc::new(RgsPeerRecoveryExclusions::default()),
 		payment_store,
 		is_running,
 		node_metrics,

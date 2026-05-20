@@ -214,7 +214,7 @@ pub struct Node {
 	_router: Arc<Router>,
 	scorer: Arc<Mutex<Scorer>>,
 	peer_store: Arc<PeerStore<Arc<Logger>>>,
-	rgs_peer_recovery_exclusions: Arc<RwLock<HashSet<PublicKey>>>,
+	rgs_peer_recovery_exclusions: Arc<RgsPeerRecoveryExclusions>,
 	payment_store: Arc<PaymentStore>,
 	is_running: Arc<RwLock<bool>>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
@@ -224,6 +224,38 @@ pub struct Node {
 	/// Shared RGS timestamp used by LocalGraphStore to persist the timestamp alongside the graph.
 	local_rgs_timestamp: Arc<AtomicU32>,
 	accept_stale_channel_monitors: AtomicBool,
+}
+
+#[derive(Default)]
+pub(crate) struct RgsPeerRecoveryExclusions {
+	node_ids: RwLock<HashSet<PublicKey>>,
+}
+
+impl RgsPeerRecoveryExclusions {
+	fn snapshot(&self) -> HashSet<PublicKey> {
+		self.node_ids.read().unwrap().clone()
+	}
+
+	fn exclude_after_disconnect(&self, node_id: PublicKey) {
+		self.node_ids.write().unwrap().insert(node_id);
+	}
+
+	fn exclude_after_last_channel_close(&self, node_id: PublicKey) {
+		self.node_ids.write().unwrap().insert(node_id);
+	}
+
+	fn clear_after_persistent_connect(&self, node_id: &PublicKey) {
+		self.node_ids.write().unwrap().remove(node_id);
+	}
+
+	fn clear_after_channel_open(&self, node_id: &PublicKey) {
+		self.node_ids.write().unwrap().remove(node_id);
+	}
+
+	#[cfg(test)]
+	fn contains(&self, node_id: &PublicKey) -> bool {
+		self.node_ids.read().unwrap().contains(node_id)
+	}
 }
 
 impl Node {
@@ -301,7 +333,7 @@ impl Node {
 										now.elapsed().as_millis()
 										);
 									let peer_recovery_exclusions =
-										gossip_peer_recovery_exclusions.read().unwrap();
+										gossip_peer_recovery_exclusions.snapshot();
 									persist_missing_channel_peers_excluding(
 										gossip_channel_manager
 											.list_channels()
@@ -1389,7 +1421,7 @@ impl Node {
 		// races with an in-flight reconnection loop attempt at the old address.
 		if persist {
 			self.peer_store.add_peer(peer_info.clone())?;
-			self.rgs_peer_recovery_exclusions.write().unwrap().remove(&node_id);
+			self.rgs_peer_recovery_exclusions.clear_after_persistent_connect(&node_id);
 		}
 
 		let con_node_id = peer_info.node_id;
@@ -1423,7 +1455,7 @@ impl Node {
 
 		log_info!(self.logger, "Disconnecting peer {}..", counterparty_node_id);
 
-		self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
+		self.rgs_peer_recovery_exclusions.exclude_after_disconnect(counterparty_node_id);
 		match self.peer_store.remove_peer(&counterparty_node_id) {
 			Ok(()) => {},
 			Err(e) => {
@@ -1489,7 +1521,7 @@ impl Node {
 					peer_info.node_id
 				);
 				self.peer_store.add_peer(peer_info)?;
-				self.rgs_peer_recovery_exclusions.write().unwrap().remove(&node_id);
+				self.rgs_peer_recovery_exclusions.clear_after_channel_open(&node_id);
 				Ok(UserChannelId(user_channel_id))
 			},
 			Err(e) => {
@@ -1910,7 +1942,8 @@ impl Node {
 
 			// Check if this was the last open channel, if so, forget the peer.
 			if open_channels.len() == 1 {
-				self.rgs_peer_recovery_exclusions.write().unwrap().insert(counterparty_node_id);
+				self.rgs_peer_recovery_exclusions
+					.exclude_after_last_channel_close(counterparty_node_id);
 				self.peer_store.remove_peer(&counterparty_node_id)?;
 			}
 		}
@@ -2480,4 +2513,36 @@ pub(crate) fn total_anchor_channels_reserve_sats(
 			.count() as u64
 			* anchor_channels_config.per_channel_reserve_sats
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use std::str::FromStr;
+
+	use super::*;
+
+	fn test_node_id() -> PublicKey {
+		PublicKey::from_str("0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993")
+			.unwrap()
+	}
+
+	#[test]
+	fn rgs_peer_recovery_exclusions_follow_disconnect_and_connect_transitions() {
+		let exclusions = RgsPeerRecoveryExclusions::default();
+		let node_id = test_node_id();
+
+		exclusions.exclude_after_disconnect(node_id);
+		assert!(exclusions.contains(&node_id));
+		assert!(exclusions.snapshot().contains(&node_id));
+
+		exclusions.clear_after_persistent_connect(&node_id);
+		assert!(!exclusions.contains(&node_id));
+
+		exclusions.exclude_after_last_channel_close(node_id);
+		assert!(exclusions.contains(&node_id));
+
+		exclusions.clear_after_channel_open(&node_id);
+		assert!(!exclusions.contains(&node_id));
+		assert!(!exclusions.snapshot().contains(&node_id));
+	}
 }
