@@ -108,7 +108,7 @@ use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use balance::{AddressTypeBalance, BalanceDetails, LightningBalance, PendingSweepBalance};
@@ -236,20 +236,40 @@ impl RgsPeerRecoveryExclusions {
 		self.node_ids.read().unwrap()
 	}
 
+	fn write(&self) -> RwLockWriteGuard<'_, HashSet<PublicKey>> {
+		self.node_ids.write().unwrap()
+	}
+
 	fn exclude_after_disconnect(&self, node_id: PublicKey) {
-		self.node_ids.write().unwrap().insert(node_id);
+		self.write().insert(node_id);
 	}
 
 	fn exclude_after_last_channel_close(&self, node_id: PublicKey) {
-		self.node_ids.write().unwrap().insert(node_id);
+		self.write().insert(node_id);
 	}
 
+	#[cfg(test)]
 	fn clear_after_persistent_connect(&self, node_id: &PublicKey) {
-		self.node_ids.write().unwrap().remove(node_id);
+		self.write().remove(node_id);
 	}
 
+	#[cfg(test)]
 	fn clear_after_channel_open(&self, node_id: &PublicKey) {
-		self.node_ids.write().unwrap().remove(node_id);
+		self.write().remove(node_id);
+	}
+
+	fn add_peer_and_clear_exclusion<L>(
+		&self, peer_store: &PeerStore<L>, peer_info: PeerInfo,
+	) -> Result<(), Error>
+	where
+		L: Deref,
+		L::Target: LdkLogger,
+	{
+		let mut excluded_node_ids = self.write();
+		let node_id = peer_info.node_id;
+		peer_store.add_peer(peer_info)?;
+		excluded_node_ids.remove(&node_id);
+		Ok(())
 	}
 
 	#[cfg(test)]
@@ -1420,8 +1440,8 @@ impl Node {
 		// Persist first so the address is updated even if the connection attempt
 		// races with an in-flight reconnection loop attempt at the old address.
 		if persist {
-			self.peer_store.add_peer(peer_info.clone())?;
-			self.rgs_peer_recovery_exclusions.clear_after_persistent_connect(&node_id);
+			self.rgs_peer_recovery_exclusions
+				.add_peer_and_clear_exclusion(self.peer_store.as_ref(), peer_info.clone())?;
 		}
 
 		let con_node_id = peer_info.node_id;
@@ -1520,8 +1540,8 @@ impl Node {
 					"Initiated channel creation with peer {}. ",
 					peer_info.node_id
 				);
-				self.peer_store.add_peer(peer_info)?;
-				self.rgs_peer_recovery_exclusions.clear_after_channel_open(&node_id);
+				self.rgs_peer_recovery_exclusions
+					.add_peer_and_clear_exclusion(self.peer_store.as_ref(), peer_info)?;
 				Ok(UserChannelId(user_channel_id))
 			},
 			Err(e) => {
@@ -2529,6 +2549,18 @@ mod tests {
 			.unwrap()
 	}
 
+	fn other_test_node_id() -> PublicKey {
+		PublicKey::from_str("02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619")
+			.unwrap()
+	}
+
+	fn test_peer_info(node_id: PublicKey, port: u16) -> PeerInfo {
+		PeerInfo {
+			node_id,
+			address: SocketAddress::from_str(&format!("127.0.0.1:{port}")).unwrap(),
+		}
+	}
+
 	#[test]
 	fn rgs_peer_recovery_exclusions_follow_disconnect_and_connect_transitions() {
 		let exclusions = RgsPeerRecoveryExclusions::default();
@@ -2573,5 +2605,59 @@ mod tests {
 		write_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
 		writer.join().unwrap();
 		assert!(exclusions.contains(&node_id));
+	}
+
+	#[test]
+	fn rgs_peer_recovery_persistent_peer_updates_take_exclusion_lock_first() {
+		let store: Arc<DynStore> = Arc::new(crate::io::test_utils::InMemoryStore::new());
+		let logger = Arc::new(Logger::new_log_facade());
+		let peer_store = Arc::new(PeerStore::new(store, logger));
+		let exclusions = Arc::new(RgsPeerRecoveryExclusions::default());
+		let node_id = test_node_id();
+		let other_node_id = other_test_node_id();
+		let peer_info = test_peer_info(node_id, 9738);
+		let other_peer_info = test_peer_info(other_node_id, 9739);
+
+		exclusions.exclude_after_disconnect(node_id);
+		let recovery_read_guard = exclusions.read();
+
+		let (attempting_clear_tx, attempting_clear_rx) = mpsc::channel();
+		let (clear_done_tx, clear_done_rx) = mpsc::channel();
+		let clear_exclusions = Arc::clone(&exclusions);
+		let clear_peer_store = Arc::clone(&peer_store);
+		let peer_info_for_clear = peer_info.clone();
+		let clearer = thread::spawn(move || {
+			attempting_clear_tx.send(()).unwrap();
+			clear_exclusions
+				.add_peer_and_clear_exclusion(clear_peer_store.as_ref(), peer_info_for_clear)
+				.unwrap();
+			clear_done_tx.send(()).unwrap();
+		});
+
+		attempting_clear_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		assert!(
+			clear_done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+			"persistent peer update must wait for the recovery read guard before taking peer_store"
+		);
+
+		let (peer_store_write_tx, peer_store_write_rx) = mpsc::channel();
+		let concurrent_peer_store = Arc::clone(&peer_store);
+		let other_peer_info_for_write = other_peer_info.clone();
+		let peer_store_writer = thread::spawn(move || {
+			concurrent_peer_store.add_peer(other_peer_info_for_write).unwrap();
+			peer_store_write_tx.send(()).unwrap();
+		});
+		peer_store_write_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		peer_store_writer.join().unwrap();
+
+		assert_eq!(peer_store.get_peer(&other_node_id), Some(other_peer_info));
+		assert!(peer_store.get_peer(&node_id).is_none());
+		assert!(recovery_read_guard.contains(&node_id));
+
+		drop(recovery_read_guard);
+		clear_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		clearer.join().unwrap();
+		assert_eq!(peer_store.get_peer(&node_id), Some(peer_info));
+		assert!(!exclusions.contains(&node_id));
 	}
 }
