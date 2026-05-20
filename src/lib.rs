@@ -2518,6 +2518,9 @@ pub(crate) fn total_anchor_channels_reserve_sats(
 #[cfg(test)]
 mod tests {
 	use std::str::FromStr;
+	use std::sync::{mpsc, Arc};
+	use std::thread;
+	use std::time::Duration;
 
 	use super::*;
 
@@ -2542,5 +2545,33 @@ mod tests {
 
 		exclusions.clear_after_channel_open(&node_id);
 		assert!(!exclusions.contains(&node_id));
+	}
+
+	#[test]
+	fn rgs_peer_recovery_read_guard_serializes_disconnect_exclusion() {
+		let exclusions = Arc::new(RgsPeerRecoveryExclusions::default());
+		let node_id = test_node_id();
+		let recovery_read_guard = exclusions.read();
+
+		let (attempting_write_tx, attempting_write_rx) = mpsc::channel();
+		let (write_done_tx, write_done_rx) = mpsc::channel();
+		let writer_exclusions = Arc::clone(&exclusions);
+		let writer = thread::spawn(move || {
+			attempting_write_tx.send(()).unwrap();
+			writer_exclusions.exclude_after_disconnect(node_id);
+			write_done_tx.send(()).unwrap();
+		});
+
+		attempting_write_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		assert!(
+			write_done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+			"disconnect exclusion must wait while RGS recovery holds the live read guard"
+		);
+		assert!(!recovery_read_guard.contains(&node_id));
+
+		drop(recovery_read_guard);
+		write_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		writer.join().unwrap();
+		assert!(exclusions.contains(&node_id));
 	}
 }

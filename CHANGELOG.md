@@ -1,12 +1,10 @@
-# 0.7.0-rc.44 (Synonym Fork)
+# 0.7.0-rc.45 (Synonym Fork)
 
 ## Bug Fixes
 
-- Fixed an RGS peer-recovery race where a disconnect immediately after a recovery
-  pass began could re-persist the disconnected peer from a stale exclusion snapshot.
 - Persist missing announced channel peers from the network graph during
-  build-time restore and retry after Rapid Gossip Sync graph updates. Explicit
-  disconnects and last-channel closes suppress RGS re-persistence during the
+  build-time restore and after Rapid Gossip Sync graph updates. Automatic
+  recovery respects explicit disconnects and last-channel closes during the
   current node instance; after restart, active restored channels may persist
   peers again from the graph so they can reconnect.
 - Fixed orphaned channel migration blocking node startup when the existing monitor
