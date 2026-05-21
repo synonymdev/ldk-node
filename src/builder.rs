@@ -77,7 +77,7 @@ use crate::liquidity::{
 use crate::logger::{log_error, LdkLogger, LogLevel, LogWriter, Logger};
 use crate::message_handler::NodeCustomMessageHandler;
 use crate::payment::asynchronous::om_mailbox::OnionMessageMailbox;
-use crate::peer_store::PeerStore;
+use crate::peer_store::{persist_missing_channel_peers, PeerStore};
 use crate::runtime::Runtime;
 use crate::tx_broadcaster::TransactionBroadcaster;
 use crate::types::{
@@ -86,6 +86,7 @@ use crate::types::{
 };
 use crate::wallet::persist::KVStoreWalletPersister;
 use crate::wallet::Wallet;
+use crate::RgsPeerRecoveryExclusions;
 use crate::{Node, NodeMetrics};
 
 const VSS_HARDENED_CHILD_INDEX: u32 = 877;
@@ -2347,6 +2348,13 @@ fn build_with_store_internal(
 		},
 	};
 
+	persist_missing_channel_peers(
+		channel_manager.list_channels().into_iter().map(|channel| channel.counterparty.node_id),
+		&network_graph,
+		&peer_store,
+		Arc::clone(&logger),
+	);
+
 	let om_mailbox = if let Some(AsyncPaymentsRole::Server) = async_payments_role {
 		Some(Arc::new(OnionMessageMailbox::new()))
 	} else {
@@ -2385,6 +2393,7 @@ fn build_with_store_internal(
 		_router: router,
 		scorer,
 		peer_store,
+		rgs_peer_recovery_exclusions: Arc::new(RgsPeerRecoveryExclusions::default()),
 		payment_store,
 		is_running,
 		node_metrics,

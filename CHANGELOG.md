@@ -1,7 +1,12 @@
-# 0.7.0-rc.39 (Synonym Fork)
+# 0.7.0-rc.46 (Synonym Fork)
 
 ## Bug Fixes
 
+- Persist missing announced channel peers from the network graph during
+  build-time restore and after Rapid Gossip Sync graph updates. Automatic
+  recovery respects explicit disconnects and last-channel closes during the
+  current node instance; after restart, active restored channels may persist
+  peers again from the graph so they can reconnect.
 - Fixed orphaned channel migration blocking node startup when the existing monitor
   in the KV store can't be deserialized (e.g., `UnknownVersion` from a newer LDK
   version). The migration now skips writing and lets the node start normally,

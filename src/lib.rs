@@ -103,12 +103,12 @@ mod tx_broadcaster;
 mod types;
 mod wallet;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use balance::{AddressTypeBalance, BalanceDetails, LightningBalance, PendingSweepBalance};
@@ -162,7 +162,7 @@ use payment::{
 	Bolt11Payment, Bolt12Payment, OnchainPayment, PaymentDetails, SpontaneousPayment,
 	UnifiedQrPayment,
 };
-use peer_store::{PeerInfo, PeerStore};
+use peer_store::{persist_missing_channel_peers_excluding, PeerInfo, PeerStore};
 pub use probe_handle::ProbeHandle;
 use rand::Rng;
 use runtime::Runtime;
@@ -214,6 +214,7 @@ pub struct Node {
 	_router: Arc<Router>,
 	scorer: Arc<Mutex<Scorer>>,
 	peer_store: Arc<PeerStore<Arc<Logger>>>,
+	rgs_peer_recovery_exclusions: Arc<RgsPeerRecoveryExclusions>,
 	payment_store: Arc<PaymentStore>,
 	is_running: Arc<RwLock<bool>>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
@@ -223,6 +224,58 @@ pub struct Node {
 	/// Shared RGS timestamp used by LocalGraphStore to persist the timestamp alongside the graph.
 	local_rgs_timestamp: Arc<AtomicU32>,
 	accept_stale_channel_monitors: AtomicBool,
+}
+
+#[derive(Default)]
+pub(crate) struct RgsPeerRecoveryExclusions {
+	node_ids: RwLock<HashSet<PublicKey>>,
+}
+
+impl RgsPeerRecoveryExclusions {
+	fn read(&self) -> RwLockReadGuard<'_, HashSet<PublicKey>> {
+		self.node_ids.read().unwrap()
+	}
+
+	fn write(&self) -> RwLockWriteGuard<'_, HashSet<PublicKey>> {
+		self.node_ids.write().unwrap()
+	}
+
+	fn exclude_after_disconnect(&self, node_id: PublicKey) {
+		self.write().insert(node_id);
+	}
+
+	fn exclude_after_last_channel_close(&self, node_id: PublicKey) {
+		self.write().insert(node_id);
+	}
+
+	#[cfg(test)]
+	fn clear_after_persistent_connect(&self, node_id: &PublicKey) {
+		self.write().remove(node_id);
+	}
+
+	#[cfg(test)]
+	fn clear_after_channel_open(&self, node_id: &PublicKey) {
+		self.write().remove(node_id);
+	}
+
+	fn add_peer_and_clear_exclusion<L>(
+		&self, peer_store: &PeerStore<L>, peer_info: PeerInfo,
+	) -> Result<(), Error>
+	where
+		L: Deref,
+		L::Target: LdkLogger,
+	{
+		let mut excluded_node_ids = self.write();
+		let node_id = peer_info.node_id;
+		peer_store.add_peer(peer_info)?;
+		excluded_node_ids.remove(&node_id);
+		Ok(())
+	}
+
+	#[cfg(test)]
+	fn contains(&self, node_id: &PublicKey) -> bool {
+		self.read().contains(node_id)
+	}
 }
 
 impl Node {
@@ -274,6 +327,10 @@ impl Node {
 			let gossip_sync_store = Arc::clone(&self.kv_store);
 			let gossip_sync_logger = Arc::clone(&self.logger);
 			let gossip_node_metrics = Arc::clone(&self.node_metrics);
+			let gossip_channel_manager = Arc::clone(&self.channel_manager);
+			let gossip_network_graph = Arc::clone(&self.network_graph);
+			let gossip_peer_store = Arc::clone(&self.peer_store);
+			let gossip_peer_recovery_exclusions = Arc::clone(&self.rgs_peer_recovery_exclusions);
 			let mut stop_gossip_sync = self.stop_sender.subscribe();
 			self.runtime.spawn_cancellable_background_task(async move {
 				let mut interval = tokio::time::interval(RGS_SYNC_INTERVAL);
@@ -295,6 +352,18 @@ impl Node {
 										"Background sync of RGS gossip data finished in {}ms.",
 										now.elapsed().as_millis()
 										);
+									let peer_recovery_exclusions =
+										gossip_peer_recovery_exclusions.read();
+									persist_missing_channel_peers_excluding(
+										gossip_channel_manager
+											.list_channels()
+											.into_iter()
+											.map(|channel| channel.counterparty.node_id),
+										&gossip_network_graph,
+										&gossip_peer_store,
+										&peer_recovery_exclusions,
+										Arc::clone(&gossip_sync_logger),
+									);
 									{
 										let mut locked_node_metrics = gossip_node_metrics.write().unwrap();
 										locked_node_metrics.latest_rgs_snapshot_timestamp = Some(updated_timestamp);
@@ -1371,7 +1440,8 @@ impl Node {
 		// Persist first so the address is updated even if the connection attempt
 		// races with an in-flight reconnection loop attempt at the old address.
 		if persist {
-			self.peer_store.add_peer(peer_info.clone())?;
+			self.rgs_peer_recovery_exclusions
+				.add_peer_and_clear_exclusion(self.peer_store.as_ref(), peer_info.clone())?;
 		}
 
 		let con_node_id = peer_info.node_id;
@@ -1391,8 +1461,13 @@ impl Node {
 
 	/// Disconnects the peer with the given node id.
 	///
-	/// Will also remove the peer from the peer store, i.e., after this has been called we won't
-	/// try to reconnect on restart.
+	/// Will also remove the peer from the peer store, i.e., the stored peer entry won't be used
+	/// by the reconnect loop.
+	///
+	/// If an active channel with this peer is later restored and the peer has an announced address
+	/// in the network graph, startup may persist the peer again so the channel can reconnect.
+	/// Background RGS retries will not re-persist the peer during this node instance unless the
+	/// peer is explicitly connected with persistence enabled or a new channel is opened.
 	pub fn disconnect(&self, counterparty_node_id: PublicKey) -> Result<(), Error> {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
@@ -1400,6 +1475,7 @@ impl Node {
 
 		log_info!(self.logger, "Disconnecting peer {}..", counterparty_node_id);
 
+		self.rgs_peer_recovery_exclusions.exclude_after_disconnect(counterparty_node_id);
 		match self.peer_store.remove_peer(&counterparty_node_id) {
 			Ok(()) => {},
 			Err(e) => {
@@ -1464,7 +1540,8 @@ impl Node {
 					"Initiated channel creation with peer {}. ",
 					peer_info.node_id
 				);
-				self.peer_store.add_peer(peer_info)?;
+				self.rgs_peer_recovery_exclusions
+					.add_peer_and_clear_exclusion(self.peer_store.as_ref(), peer_info)?;
 				Ok(UserChannelId(user_channel_id))
 			},
 			Err(e) => {
@@ -1885,6 +1962,8 @@ impl Node {
 
 			// Check if this was the last open channel, if so, forget the peer.
 			if open_channels.len() == 1 {
+				self.rgs_peer_recovery_exclusions
+					.exclude_after_last_channel_close(counterparty_node_id);
 				self.peer_store.remove_peer(&counterparty_node_id)?;
 			}
 		}
@@ -2454,4 +2533,131 @@ pub(crate) fn total_anchor_channels_reserve_sats(
 			.count() as u64
 			* anchor_channels_config.per_channel_reserve_sats
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use std::str::FromStr;
+	use std::sync::{mpsc, Arc};
+	use std::thread;
+	use std::time::Duration;
+
+	use super::*;
+
+	fn test_node_id() -> PublicKey {
+		PublicKey::from_str("0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993")
+			.unwrap()
+	}
+
+	fn other_test_node_id() -> PublicKey {
+		PublicKey::from_str("02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619")
+			.unwrap()
+	}
+
+	fn test_peer_info(node_id: PublicKey, port: u16) -> PeerInfo {
+		PeerInfo {
+			node_id,
+			address: SocketAddress::from_str(&format!("127.0.0.1:{port}")).unwrap(),
+		}
+	}
+
+	#[test]
+	fn rgs_peer_recovery_exclusions_follow_disconnect_and_connect_transitions() {
+		let exclusions = RgsPeerRecoveryExclusions::default();
+		let node_id = test_node_id();
+
+		exclusions.exclude_after_disconnect(node_id);
+		assert!(exclusions.contains(&node_id));
+
+		exclusions.clear_after_persistent_connect(&node_id);
+		assert!(!exclusions.contains(&node_id));
+
+		exclusions.exclude_after_last_channel_close(node_id);
+		assert!(exclusions.contains(&node_id));
+
+		exclusions.clear_after_channel_open(&node_id);
+		assert!(!exclusions.contains(&node_id));
+	}
+
+	#[test]
+	fn rgs_peer_recovery_read_guard_serializes_disconnect_exclusion() {
+		let exclusions = Arc::new(RgsPeerRecoveryExclusions::default());
+		let node_id = test_node_id();
+		let recovery_read_guard = exclusions.read();
+
+		let (attempting_write_tx, attempting_write_rx) = mpsc::channel();
+		let (write_done_tx, write_done_rx) = mpsc::channel();
+		let writer_exclusions = Arc::clone(&exclusions);
+		let writer = thread::spawn(move || {
+			attempting_write_tx.send(()).unwrap();
+			writer_exclusions.exclude_after_disconnect(node_id);
+			write_done_tx.send(()).unwrap();
+		});
+
+		attempting_write_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		assert!(
+			write_done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+			"disconnect exclusion must wait while RGS recovery holds the live read guard"
+		);
+		assert!(!recovery_read_guard.contains(&node_id));
+
+		drop(recovery_read_guard);
+		write_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		writer.join().unwrap();
+		assert!(exclusions.contains(&node_id));
+	}
+
+	#[test]
+	fn rgs_peer_recovery_persistent_peer_updates_take_exclusion_lock_first() {
+		let store: Arc<DynStore> = Arc::new(crate::io::test_utils::InMemoryStore::new());
+		let logger = Arc::new(Logger::new_log_facade());
+		let peer_store = Arc::new(PeerStore::new(store, logger));
+		let exclusions = Arc::new(RgsPeerRecoveryExclusions::default());
+		let node_id = test_node_id();
+		let other_node_id = other_test_node_id();
+		let peer_info = test_peer_info(node_id, 9738);
+		let other_peer_info = test_peer_info(other_node_id, 9739);
+
+		exclusions.exclude_after_disconnect(node_id);
+		let recovery_read_guard = exclusions.read();
+
+		let (attempting_clear_tx, attempting_clear_rx) = mpsc::channel();
+		let (clear_done_tx, clear_done_rx) = mpsc::channel();
+		let clear_exclusions = Arc::clone(&exclusions);
+		let clear_peer_store = Arc::clone(&peer_store);
+		let peer_info_for_clear = peer_info.clone();
+		let clearer = thread::spawn(move || {
+			attempting_clear_tx.send(()).unwrap();
+			clear_exclusions
+				.add_peer_and_clear_exclusion(clear_peer_store.as_ref(), peer_info_for_clear)
+				.unwrap();
+			clear_done_tx.send(()).unwrap();
+		});
+
+		attempting_clear_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		assert!(
+			clear_done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+			"persistent peer update must wait for the recovery read guard before taking peer_store"
+		);
+
+		let (peer_store_write_tx, peer_store_write_rx) = mpsc::channel();
+		let concurrent_peer_store = Arc::clone(&peer_store);
+		let other_peer_info_for_write = other_peer_info.clone();
+		let peer_store_writer = thread::spawn(move || {
+			concurrent_peer_store.add_peer(other_peer_info_for_write).unwrap();
+			peer_store_write_tx.send(()).unwrap();
+		});
+		peer_store_write_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		peer_store_writer.join().unwrap();
+
+		assert_eq!(peer_store.get_peer(&other_node_id), Some(other_peer_info));
+		assert!(peer_store.get_peer(&node_id).is_none());
+		assert!(recovery_read_guard.contains(&node_id));
+
+		drop(recovery_read_guard);
+		clear_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		clearer.join().unwrap();
+		assert_eq!(peer_store.get_peer(&node_id), Some(peer_info));
+		assert!(!exclusions.contains(&node_id));
+	}
 }

@@ -47,11 +47,11 @@ use crate::payment::asynchronous::static_invoice_store::StaticInvoiceStore;
 use crate::payment::store::{
 	PaymentDetails, PaymentDetailsUpdate, PaymentDirection, PaymentKind, PaymentStatus,
 };
+use crate::peer_store::persist_missing_channel_peers;
 use crate::runtime::Runtime;
 use crate::types::{CustomTlvRecord, DynStore, OnionMessenger, PaymentStore, Sweeper, Wallet};
 use crate::{
-	hex_utils, BumpTransactionEventHandler, ChannelManager, Error, Graph, PeerInfo, PeerStore,
-	UserChannelId,
+	hex_utils, BumpTransactionEventHandler, ChannelManager, Error, Graph, PeerStore, UserChannelId,
 };
 
 /// Details about a transaction input.
@@ -2122,35 +2122,18 @@ where
 					},
 				};
 
-				let network_graph = self.network_graph.read_only();
 				let channels =
 					self.channel_manager.list_channels_with_counterparty(&counterparty_node_id);
 				if let Some(pending_channel) =
 					channels.into_iter().find(|c| c.channel_id == channel_id)
 				{
-					if !pending_channel.is_outbound
-						&& self.peer_store.get_peer(&counterparty_node_id).is_none()
-					{
-						if let Some(address) = network_graph
-							.nodes()
-							.get(&NodeId::from_pubkey(&counterparty_node_id))
-							.and_then(|node_info| node_info.announcement_info.as_ref())
-							.and_then(|ann_info| ann_info.addresses().first())
-						{
-							let peer = PeerInfo {
-								node_id: counterparty_node_id,
-								address: address.clone(),
-							};
-
-							self.peer_store.add_peer(peer).unwrap_or_else(|e| {
-								log_error!(
-									self.logger,
-									"Failed to add peer {} to peer store: {}",
-									counterparty_node_id,
-									e
-								);
-							});
-						}
+					if !pending_channel.is_outbound {
+						persist_missing_channel_peers(
+							std::iter::once(counterparty_node_id),
+							&self.network_graph,
+							&self.peer_store,
+							self.logger.clone(),
+						);
 					}
 				}
 			},
