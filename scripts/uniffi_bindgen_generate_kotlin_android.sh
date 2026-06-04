@@ -54,17 +54,59 @@ rustup target add x86_64-linux-android aarch64-linux-android armv7-linux-android
 # Build for all Android architectures with page size optimizations
 echo "Building for Android architectures..."
 JNI_LIB_DIR="$ANDROID_LIB_DIR/lib/src/main/jniLibs"
+export CARGO_PROFILE_RELEASE_SMALLER_STRIP=false
 export RUSTFLAGS="-C link-args=-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
 export CFLAGS="-D__ANDROID_MIN_SDK_VERSION__=21"
+
+find_readelf() {
+    if command -v llvm-readelf >/dev/null 2>&1; then
+        command -v llvm-readelf
+        return
+    fi
+
+    if command -v readelf >/dev/null 2>&1; then
+        command -v readelf
+        return
+    fi
+
+    echo "Error: llvm-readelf or readelf is required to validate Android native debug symbols"
+    exit 1
+}
+
+has_debug_metadata() {
+    "$READELF_BIN" -S "$1" | grep -Eq '\.(symtab|debug_|gnu_debugdata)'
+}
+
+validate_android_symbols() {
+    READELF_BIN=$(find_readelf)
+
+    for abi in armeabi-v7a arm64-v8a x86_64; do
+        lib="$JNI_LIB_DIR/$abi/libldk_node.so"
+        if [ ! -f "$lib" ]; then
+            echo "Error: Android native library missing at $lib"
+            exit 1
+        fi
+
+        if ! has_debug_metadata "$lib"; then
+            echo "Error: Android native library has no usable debug metadata: $lib"
+            exit 1
+        fi
+    done
+}
+
 cargo ndk \
     -o "$JNI_LIB_DIR" \
+    --no-strip \
     -t armeabi-v7a \
     -t arm64-v8a \
     -t x86_64 \
     build --profile release-smaller --features uniffi || exit 1
 
+validate_android_symbols
+
 # Clean up exported flags so they don't leak into subsequent scripts
 # (e.g. the -z linker flags are Linux-only and break macOS builds)
+unset CARGO_PROFILE_RELEASE_SMALLER_STRIP
 unset RUSTFLAGS
 unset CFLAGS
 

@@ -1,7 +1,9 @@
-# 0.7.0-rc.46 (Synonym Fork)
+# 0.7.0-rc.47 (Synonym Fork)
 
 ## Bug Fixes
 
+- Kept Android native debug metadata in published `ldk-node-android` artifacts and
+  failed Android binding generation when generated JNI libraries lack usable symbols.
 - Persist missing announced channel peers from the network graph during
   build-time restore and after Rapid Gossip Sync graph updates. Automatic
   recovery respects explicit disconnects and last-channel closes during the
