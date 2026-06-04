@@ -74,7 +74,16 @@ find_readelf() {
 }
 
 has_debug_metadata() {
-    "$READELF_BIN" -S "$1" | grep -Eq '\.(symtab|debug_|gnu_debugdata)'
+    for attempt in 1 2 3; do
+        if "$READELF_BIN" -S "$1" | grep -Eq '\.(symtab|debug_|gnu_debugdata)'; then
+            return 0
+        fi
+
+        sleep "$attempt"
+    done
+
+    "$READELF_BIN" -S "$1" | grep -E '\.(symtab|debug_|gnu_debugdata)' || true
+    return 1
 }
 
 validate_android_symbols() {
