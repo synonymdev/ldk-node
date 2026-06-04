@@ -39,6 +39,12 @@ android {
         jvmTarget = "1.8"
     }
 
+    packaging {
+        jniLibs {
+            keepDebugSymbols += listOf("**/libldk_node.so")
+        }
+    }
+
     publishing {
         singleVariant("release") {
             withSourcesJar()
