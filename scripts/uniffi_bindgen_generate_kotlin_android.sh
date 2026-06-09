@@ -70,6 +70,18 @@ find_readelf() {
         return
     fi
 
+    for ndk_dir in "${ANDROID_NDK_ROOT:-}" "${ANDROID_NDK_HOME:-}" "${NDK_HOME:-}"; do
+        if [ -z "$ndk_dir" ] || [ ! -d "$ndk_dir/toolchains/llvm/prebuilt" ]; then
+            continue
+        fi
+
+        ndk_readelf=$(find "$ndk_dir/toolchains/llvm/prebuilt" -path '*/bin/llvm-readelf' | head -n 1)
+        if [ -n "$ndk_readelf" ]; then
+            echo "$ndk_readelf"
+            return
+        fi
+    done
+
     echo "Error: llvm-readelf or readelf is required to validate Android native debug symbols"
     exit 1
 }
