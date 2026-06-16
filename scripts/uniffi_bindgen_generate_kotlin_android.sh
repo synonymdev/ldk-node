@@ -4,6 +4,7 @@ BINDINGS_DIR="bindings/kotlin"
 TARGET_DIR="target"
 PROJECT_DIR="ldk-node-android"
 ANDROID_LIB_DIR="$BINDINGS_DIR/$PROJECT_DIR"
+NATIVE_DEBUG_SYMBOLS_ZIP="$ANDROID_LIB_DIR/native-debug-symbols.zip"
 
 # Install gobley-uniffi-bindgen from fork (skip if orchestrator already installed it)
 if [ -z "${BINDGEN_GOBLEY_INSTALLED:-}" ]; then
@@ -86,6 +87,28 @@ find_readelf() {
     exit 1
 }
 
+find_strip() {
+    if command -v llvm-strip >/dev/null 2>&1; then
+        command -v llvm-strip
+        return
+    fi
+
+    for ndk_dir in "${ANDROID_NDK_ROOT:-}" "${ANDROID_NDK_HOME:-}" "${NDK_HOME:-}"; do
+        if [ -z "$ndk_dir" ] || [ ! -d "$ndk_dir/toolchains/llvm/prebuilt" ]; then
+            continue
+        fi
+
+        ndk_strip=$(find "$ndk_dir/toolchains/llvm/prebuilt" -path '*/bin/llvm-strip' | head -n 1)
+        if [ -n "$ndk_strip" ]; then
+            echo "$ndk_strip"
+            return
+        fi
+    done
+
+    echo "Error: llvm-strip is required to strip Android native release libraries"
+    exit 1
+}
+
 has_dwarf_debug_metadata() {
     for attempt in 1 2 3; do
         if "$READELF_BIN" -S "$1" | grep -Eq '\.debug_info'; then
@@ -97,6 +120,10 @@ has_dwarf_debug_metadata() {
 
     "$READELF_BIN" -S "$1" | grep -E '\.debug_info' || true
     return 1
+}
+
+has_dwarf_sections() {
+    "$READELF_BIN" -S "$1" | grep -Eq '\.debug_'
 }
 
 readelf_program_headers() {
@@ -141,6 +168,20 @@ validate_android_library() {
     fi
 }
 
+validate_stripped_android_library() {
+    lib="$1"
+    if has_dwarf_sections "$lib"; then
+        echo "Error: Android release native library still contains .debug_* sections: $lib"
+        exit 1
+    fi
+
+    if ! has_16kb_load_alignment "$lib"; then
+        echo "Error: Android native library is not 16 KB page-size aligned: $lib"
+        readelf_program_headers "$lib" | grep LOAD || true
+        exit 1
+    fi
+}
+
 validate_android_symbols() {
     READELF_BIN=$(find_readelf)
 
@@ -152,6 +193,40 @@ validate_android_symbols() {
         fi
 
         validate_android_library "$lib"
+    done
+}
+
+create_native_debug_symbols_archive() {
+    tmp_dir=$(mktemp -d)
+
+    for abi in armeabi-v7a arm64-v8a x86_64; do
+        mkdir -p "$tmp_dir/$abi"
+        cp "$JNI_LIB_DIR/$abi/libldk_node.so" "$tmp_dir/$abi/"
+    done
+
+    rm -f "$NATIVE_DEBUG_SYMBOLS_ZIP"
+    archive_path="$PWD/$NATIVE_DEBUG_SYMBOLS_ZIP"
+    (
+        cd "$tmp_dir"
+        zip -qr "$archive_path" armeabi-v7a arm64-v8a x86_64
+    )
+    zip -T "$NATIVE_DEBUG_SYMBOLS_ZIP" >/dev/null
+    rm -rf "$tmp_dir"
+}
+
+strip_android_libraries() {
+    STRIP_BIN=$(find_strip)
+
+    for abi in armeabi-v7a arm64-v8a x86_64; do
+        "$STRIP_BIN" --strip-unneeded "$JNI_LIB_DIR/$abi/libldk_node.so"
+    done
+}
+
+validate_stripped_android_symbols() {
+    READELF_BIN=$(find_readelf)
+
+    for abi in armeabi-v7a arm64-v8a x86_64; do
+        validate_stripped_android_library "$JNI_LIB_DIR/$abi/libldk_node.so"
     done
 }
 
@@ -174,7 +249,7 @@ validate_android_aar_symbols() {
             exit 1
         fi
 
-        validate_android_library "$lib"
+        validate_stripped_android_library "$lib"
     done
 
     rm -rf "$tmp_dir"
@@ -189,6 +264,9 @@ cargo ndk \
     build --profile release-smaller --features uniffi || exit 1
 
 validate_android_symbols
+create_native_debug_symbols_archive
+strip_android_libraries
+validate_stripped_android_symbols
 
 # Clean up exported flags so they don't leak into subsequent scripts
 # (e.g. the -z linker flags are Linux-only and break macOS builds)
@@ -205,6 +283,9 @@ echo "Fixing Kotlin coroutines imports..."
 KOTLIN_BINDINGS_FILE="$ANDROID_LIB_DIR/lib/src/main/kotlin/org/lightningdevkit/ldknode/ldk_node.android.kt"
 sed -i.bak '/import kotlinx\.coroutines\.IO/d' "$KOTLIN_BINDINGS_FILE"
 rm -f "$KOTLIN_BINDINGS_FILE.bak"
+
+echo "Normalizing generated Kotlin whitespace..."
+find "$ANDROID_LIB_DIR/lib/src/main/kotlin" -name "*.kt" -exec perl -0pi -e 's/[ \t]+(?=\n)//g; s/[ \t]+\z//; s/\n+\z/\n/; $_ .= "\n" unless /\n\z/' {} \;
 
 # Sync version from Cargo.toml
 echo "Syncing version from Cargo.toml..."

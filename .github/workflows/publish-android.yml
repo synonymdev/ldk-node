@@ -13,7 +13,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -55,7 +55,7 @@ jobs:
         if [[ -z "$VERSION" ]]; then
           VERSION="$GITHUB_REF_NAME"
         fi
-        echo "version=${VERSION#v}" >> $GITHUB_OUTPUT
+        echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
 
     - name: Generate Android bindings
       run: scripts/uniffi_bindgen_generate_kotlin_android.sh
@@ -63,6 +63,18 @@ jobs:
     - name: Build with Gradle
       working-directory: bindings/kotlin/ldk-node-android
       run: ./gradlew build -Pversion=${{ steps.version.outputs.version }}
+
+    - name: Upload native debug symbols artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ldk-node-native-debug-symbols-${{ steps.version.outputs.version }}
+        path: bindings/kotlin/ldk-node-android/native-debug-symbols.zip
+
+    - name: Upload native debug symbols to release
+      if: github.event_name == 'release'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh release upload "${{ github.event.release.tag_name }}" bindings/kotlin/ldk-node-android/native-debug-symbols.zip --clobber
 
     - name: Publish to GitHub Packages
       working-directory: bindings/kotlin/ldk-node-android
