@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 BINDINGS_DIR="bindings/kotlin"
 TARGET_DIR="target"
 PROJECT_DIR="ldk-node-android"
@@ -57,6 +59,7 @@ rustup target add x86_64-linux-android aarch64-linux-android armv7-linux-android
 echo "Building for Android architectures..."
 JNI_LIB_DIR="$ANDROID_LIB_DIR/lib/src/main/jniLibs"
 export CARGO_PROFILE_RELEASE_SMALLER_STRIP=false
+export CARGO_PROFILE_RELEASE_SMALLER_DEBUG=2
 export RUSTFLAGS="-C link-args=-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
 export CFLAGS="-D__ANDROID_MIN_SDK_VERSION__=21"
 
@@ -206,11 +209,17 @@ create_native_debug_symbols_archive() {
 
     rm -f "$NATIVE_DEBUG_SYMBOLS_ZIP"
     archive_path="$PWD/$NATIVE_DEBUG_SYMBOLS_ZIP"
-    (
+    if ! (
         cd "$tmp_dir"
         zip -qr "$archive_path" armeabi-v7a arm64-v8a x86_64
-    )
-    zip -T "$NATIVE_DEBUG_SYMBOLS_ZIP" >/dev/null
+    ); then
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+    if ! zip -T "$NATIVE_DEBUG_SYMBOLS_ZIP" >/dev/null; then
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
     rm -rf "$tmp_dir"
 }
 
@@ -271,6 +280,7 @@ validate_stripped_android_symbols
 # Clean up exported flags so they don't leak into subsequent scripts
 # (e.g. the -z linker flags are Linux-only and break macOS builds)
 unset CARGO_PROFILE_RELEASE_SMALLER_STRIP
+unset CARGO_PROFILE_RELEASE_SMALLER_DEBUG
 unset RUSTFLAGS
 unset CFLAGS
 
