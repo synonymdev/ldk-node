@@ -11,7 +11,8 @@ NATIVE_DEBUG_SYMBOLS_ZIP="$ANDROID_LIB_DIR/native-debug-symbols.zip"
 # Install gobley-uniffi-bindgen from fork (skip if orchestrator already installed it)
 if [ -z "${BINDGEN_GOBLEY_INSTALLED:-}" ]; then
 	echo "Installing gobley-uniffi-bindgen fork..."
-	cargo install --git https://github.com/ovitrif/gobley.git --branch fix-v0.2.0 gobley-uniffi-bindgen --force
+	GOBLEY_REV="36730a4219b2e8d06aa2c073936d6fc6a7f60e0f"
+	cargo install --git https://github.com/ovitrif/gobley.git --rev "$GOBLEY_REV" gobley-uniffi-bindgen --force
 fi
 UNIFFI_BINDGEN_BIN="gobley-uniffi-bindgen"
 

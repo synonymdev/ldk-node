@@ -1,4 +1,4 @@
-# 0.7.0-rc.49 (Synonym Fork)
+# 0.7.0-rc.50 (Synonym Fork)
 
 ## Bug Fixes
 
