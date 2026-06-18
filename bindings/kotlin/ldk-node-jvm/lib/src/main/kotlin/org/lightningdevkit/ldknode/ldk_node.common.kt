@@ -2476,4 +2476,3 @@ typealias UntrustedString = kotlin.String
  * It's also what we have an external type that references a custom type.
  */
 typealias UserChannelId = kotlin.String
-
