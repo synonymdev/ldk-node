@@ -424,6 +424,8 @@ pub enum Event {
 		payment_id: PaymentId,
 		/// The hash of the probe payment.
 		payment_hash: PaymentHash,
+		/// The total routing fee paid by the probe path, in thousandths of a satoshi.
+		route_fee_msat: Option<u64>,
 	},
 	/// A sent payment probe has failed.
 	ProbeFailed {
@@ -433,6 +435,8 @@ pub enum Event {
 		payment_hash: PaymentHash,
 		/// The channel responsible for the failed probe, if known.
 		short_channel_id: Option<u64>,
+		/// The total routing fee for the failed probe path, in thousandths of a satoshi.
+		route_fee_msat: Option<u64>,
 	},
 	/// A channel has been created and is pending confirmation on-chain.
 	ChannelPending {
@@ -964,11 +968,13 @@ impl_writeable_tlv_based_enum!(Event,
 	(18, ProbeSuccessful) => {
 		(0, payment_hash, required),
 		(2, payment_id, required),
+		(4, route_fee_msat, option),
 	},
 	(19, ProbeFailed) => {
 		(0, payment_hash, required),
 		(1, short_channel_id, option),
 		(3, payment_id, required),
+		(5, route_fee_msat, option),
 	}
 );
 
@@ -1804,8 +1810,9 @@ where
 
 			LdkEvent::PaymentPathSuccessful { .. } => {},
 			LdkEvent::PaymentPathFailed { .. } => {},
-			LdkEvent::ProbeSuccessful { payment_id, payment_hash, .. } => {
-				let event = Event::ProbeSuccessful { payment_id, payment_hash };
+			LdkEvent::ProbeSuccessful { payment_id, payment_hash, path, .. } => {
+				let route_fee_msat = Some(path.fee_msat());
+				let event = Event::ProbeSuccessful { payment_id, payment_hash, route_fee_msat };
 				match self.event_queue.add_event(event).await {
 					Ok(_) => {},
 					Err(e) => {
@@ -1814,8 +1821,14 @@ where
 					},
 				}
 			},
-			LdkEvent::ProbeFailed { payment_id, payment_hash, short_channel_id, .. } => {
-				let event = Event::ProbeFailed { payment_id, payment_hash, short_channel_id };
+			LdkEvent::ProbeFailed { payment_id, payment_hash, short_channel_id, path, .. } => {
+				let route_fee_msat = Some(path.fee_msat());
+				let event = Event::ProbeFailed {
+					payment_id,
+					payment_hash,
+					short_channel_id,
+					route_fee_msat,
+				};
 				match self.event_queue.add_event(event).await {
 					Ok(_) => {},
 					Err(e) => {
@@ -2606,16 +2619,19 @@ mod tests {
 			Event::ProbeSuccessful {
 				payment_id: PaymentId([1u8; 32]),
 				payment_hash: PaymentHash([2u8; 32]),
+				route_fee_msat: Some(1_234),
 			},
 			Event::ProbeFailed {
 				payment_id: PaymentId([3u8; 32]),
 				payment_hash: PaymentHash([4u8; 32]),
 				short_channel_id: Some(42),
+				route_fee_msat: Some(5_678),
 			},
 			Event::ProbeFailed {
 				payment_id: PaymentId([5u8; 32]),
 				payment_hash: PaymentHash([6u8; 32]),
 				short_channel_id: None,
+				route_fee_msat: None,
 			},
 		];
 

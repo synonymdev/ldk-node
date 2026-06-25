@@ -40,3 +40,4 @@ swift.swiftdoc
 .claude
 *.local.*
 .ai
+.vscode
