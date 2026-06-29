@@ -47,7 +47,7 @@ use crate::builder::sanitize_alias;
 pub use crate::config::{
 	battery_saving_sync_intervals, default_config, AddressType, AnchorChannelsConfig,
 	BackgroundSyncConfig, ElectrumSyncConfig, EsploraSyncConfig, MaxDustHTLCExposure,
-	RuntimeSyncIntervals,
+	RuntimeSyncIntervals, ScoringDecayParameters, ScoringFeeParameters,
 };
 use crate::error::Error;
 pub use crate::graph::{ChannelInfo, ChannelUpdateInfo, NodeAnnouncementInfo, NodeInfo};

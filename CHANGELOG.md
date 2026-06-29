@@ -1,4 +1,4 @@
-# 0.7.0-rc.51 (Synonym Fork)
+# 0.7.0-rc.52 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -65,6 +65,7 @@
 
 ## Synonym Fork Additions
 
+- Added configurable routing scorer parameters `scoring_fee_params` and `scoring_decay_params`
 - Added `AddressInfo` (`index`, `address`, `keychain`) and `KeychainKind`.
 - Added `OnchainPayment` methods `new_address_info`, `new_address_info_for_type`,
   `address_info_for_type_at_index`, `address_infos_for_type`, and

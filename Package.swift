@@ -1,10 +1,10 @@
-// swift-tools-version:5.5
+// swift-tools-version:5.9
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
 
-let tag = "v0.7.0-rc.51"
-let checksum = "efeec8d0480f1400c6a4203232359f5b3c4c338a4ba13826538cac12b8fe1bac"
+let tag = "v0.7.0-rc.52"
+let checksum = "bfa1de808ed8b457f6c5aaf911b96806d995fd2a40c04b2b2e27aa75ab206098"
 let url = "https://github.com/synonymdev/ldk-node/releases/download/\(tag)/LDKNodeFFI.xcframework.zip"
 
 let package = Package(
