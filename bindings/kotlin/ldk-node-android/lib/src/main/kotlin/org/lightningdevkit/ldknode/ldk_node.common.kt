@@ -352,6 +352,10 @@ interface BuilderInterface {
 
     fun `setPathfindingScoresSource`(`url`: kotlin.String)
 
+    fun `setScoringDecayParams`(`params`: ScoringDecayParameters)
+
+    fun `setScoringFeeParams`(`params`: ScoringFeeParameters)
+
     fun `setStorageDirPath`(`storageDirPath`: kotlin.String)
 
     companion object
@@ -875,6 +879,8 @@ data class Config (
     val `probingLiquidityLimitMultiplier`: kotlin.ULong,
     val `anchorChannelsConfig`: AnchorChannelsConfig?,
     val `routeParameters`: RouteParametersConfig?,
+    val `scoringFeeParams`: ScoringFeeParameters?,
+    val `scoringDecayParams`: ScoringDecayParameters?,
     val `includeUntrustedPendingInSpendable`: kotlin.Boolean,
     val `addressType`: AddressType,
     val `addressTypesToMonitor`: List<AddressType>
@@ -1191,6 +1197,34 @@ data class RuntimeSyncIntervals (
     val `onchainWalletSyncIntervalSecs`: kotlin.ULong,
     val `lightningWalletSyncIntervalSecs`: kotlin.ULong,
     val `feeRateCacheUpdateIntervalSecs`: kotlin.ULong
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class ScoringDecayParameters (
+    val `historicalNoUpdatesHalfLifeSecs`: kotlin.ULong,
+    val `liquidityOffsetHalfLifeSecs`: kotlin.ULong
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class ScoringFeeParameters (
+    val `basePenaltyMsat`: kotlin.ULong,
+    val `basePenaltyAmountMultiplierMsat`: kotlin.ULong,
+    val `liquidityPenaltyMultiplierMsat`: kotlin.ULong,
+    val `liquidityPenaltyAmountMultiplierMsat`: kotlin.ULong,
+    val `historicalLiquidityPenaltyMultiplierMsat`: kotlin.ULong,
+    val `historicalLiquidityPenaltyAmountMultiplierMsat`: kotlin.ULong,
+    val `antiProbingPenaltyMsat`: kotlin.ULong,
+    val `consideredImpossiblePenaltyMsat`: kotlin.ULong,
+    val `linearSuccessProbability`: kotlin.Boolean,
+    val `probingDiversityPenaltyMsat`: kotlin.ULong
 ) {
     companion object
 }
@@ -1536,6 +1570,7 @@ sealed class Event {
     data class ProbeSuccessful(
         val `paymentId`: PaymentId,
         val `paymentHash`: PaymentHash,
+        val `routeFeeMsat`: kotlin.ULong?,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
@@ -1543,6 +1578,7 @@ sealed class Event {
         val `paymentId`: PaymentId,
         val `paymentHash`: PaymentHash,
         val `shortChannelId`: kotlin.ULong?,
+        val `routeFeeMsat`: kotlin.ULong?,
     ) : Event() {
     }
     @kotlinx.serialization.Serializable
@@ -2174,6 +2210,10 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
+
+
 
 
 
