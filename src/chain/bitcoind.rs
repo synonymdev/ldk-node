@@ -204,6 +204,8 @@ impl BitcoindChainSource {
 
 		let mut chain_polling_interval =
 			tokio::time::interval(Duration::from_secs(CHAIN_POLLING_INTERVAL_SECS));
+		// Initial sync already ran chain+mempool; skip the immediate first tick.
+		chain_polling_interval.reset();
 		chain_polling_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
 		let mut fee_rate_update_interval =
@@ -418,13 +420,22 @@ impl BitcoindChainSource {
 			"Finished synchronizing chain listeners in {}ms",
 			now.elapsed().unwrap().as_millis()
 		);
-		periodically_archive_fully_resolved_monitors(
+		// Archival and metrics persistence are best-effort: chain/mempool sync already
+		// succeeded, and failing these must not block `sync_wallets` (especially during
+		// initial sync, which subscribers wait on).
+		if let Err(e) = periodically_archive_fully_resolved_monitors(
 			Arc::clone(&channel_manager),
 			Arc::clone(&chain_monitor),
 			Arc::clone(&self.kv_store),
 			Arc::clone(&self.logger),
 			Arc::clone(&self.node_metrics),
-		)?;
+		) {
+			log_error!(
+				self.logger,
+				"Failed to archive fully resolved channel monitors after sync: {}",
+				e
+			);
+		}
 
 		let cur_height = channel_manager.current_best_block().height;
 
@@ -472,15 +483,19 @@ impl BitcoindChainSource {
 
 		let unix_time_secs_opt =
 			SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
-		let mut locked_node_metrics = self.node_metrics.write().unwrap();
-		locked_node_metrics.latest_lightning_wallet_sync_timestamp = unix_time_secs_opt;
-		locked_node_metrics.latest_onchain_wallet_sync_timestamp = unix_time_secs_opt;
+		{
+			let mut locked_node_metrics = self.node_metrics.write().unwrap();
+			locked_node_metrics.latest_lightning_wallet_sync_timestamp = unix_time_secs_opt;
+			locked_node_metrics.latest_onchain_wallet_sync_timestamp = unix_time_secs_opt;
 
-		write_node_metrics(
-			&*locked_node_metrics,
-			Arc::clone(&self.kv_store),
-			Arc::clone(&self.logger),
-		)?;
+			if let Err(e) = write_node_metrics(
+				&*locked_node_metrics,
+				Arc::clone(&self.kv_store),
+				Arc::clone(&self.logger),
+			) {
+				log_error!(self.logger, "Failed to persist node metrics after sync: {}", e);
+			}
+		}
 
 		Ok(ListenerSyncOutcome::Complete(account_generation))
 	}

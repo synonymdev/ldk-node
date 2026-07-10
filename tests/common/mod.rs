@@ -437,7 +437,26 @@ pub(crate) fn setup_node(
 	setup_node_for_async_payments(chain_source, config, seed_bytes, None)
 }
 
+/// Builds a node without starting background sync. Useful when tests must register derived
+/// accounts before initial Bitcoind synchronization begins.
+pub(crate) fn build_node(
+	chain_source: &TestChainSource, config: TestConfig, seed_bytes: Option<Vec<u8>>,
+) -> TestNode {
+	build_node_for_async_payments(chain_source, config, seed_bytes, None)
+}
+
 pub(crate) fn setup_node_for_async_payments(
+	chain_source: &TestChainSource, config: TestConfig, seed_bytes: Option<Vec<u8>>,
+	async_payments_role: Option<AsyncPaymentsRole>,
+) -> TestNode {
+	let node = build_node_for_async_payments(chain_source, config, seed_bytes, async_payments_role);
+	node.start().unwrap();
+	assert!(node.status().is_running);
+	assert!(node.status().latest_fee_rate_cache_update_timestamp.is_some());
+	node
+}
+
+pub(crate) fn build_node_for_async_payments(
 	chain_source: &TestChainSource, config: TestConfig, seed_bytes: Option<Vec<u8>>,
 	async_payments_role: Option<AsyncPaymentsRole>,
 ) -> TestNode {
@@ -508,18 +527,13 @@ pub(crate) fn setup_node_for_async_payments(
 
 	builder.set_async_payments_role(async_payments_role).unwrap();
 
-	let node = match config.store_type {
+	match config.store_type {
 		TestStoreType::TestSyncStore => {
 			let kv_store = Arc::new(TestSyncStore::new(config.node_config.storage_dir_path.into()));
 			builder.build_with_store(kv_store).unwrap()
 		},
 		TestStoreType::Sqlite => builder.build().unwrap(),
-	};
-
-	node.start().unwrap();
-	assert!(node.status().is_running);
-	assert!(node.status().latest_fee_rate_cache_update_timestamp.is_some());
-	node
+	}
 }
 
 pub(crate) async fn generate_blocks_and_wait<E: ElectrumApi>(

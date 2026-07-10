@@ -3461,9 +3461,9 @@ mod derived_accounts {
 	use ldk_node::NodeError;
 
 	use crate::common::{
-		distribute_funds_unconfirmed, generate_blocks_and_wait, invalidate_blocks, open_channel,
-		premine_and_distribute_funds, premine_blocks, setup_bitcoind_and_electrsd, setup_node,
-		wait_for_tx, TestChainSource,
+		build_node, distribute_funds_unconfirmed, generate_blocks_and_wait, invalidate_blocks,
+		open_channel, premine_and_distribute_funds, premine_blocks, setup_bitcoind_and_electrsd,
+		setup_node, wait_for_tx, TestChainSource,
 	};
 	use crate::helpers::{
 		confirm_and_sync, fund_and_sync, fund_multiple_and_sync, fund_peer_node_and_sync,
@@ -4036,13 +4036,42 @@ mod derived_accounts {
 		let mut config = node_config(AddressType::NativeSegwit, vec![]);
 		config.store_type = crate::common::TestStoreType::Sqlite;
 		config.node_config.storage_dir_path = storage_path;
-		let node = setup_node(&chain_source, config, Some(seed.to_vec()));
+		// Register before start so background initial sync (not a later sync_wallets poll)
+		// must observe the persisted unconfirmed tx against the empty mempool.
+		let node = build_node(&chain_source, config, Some(seed.to_vec()));
 		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
-		node.sync_wallets().unwrap();
+		assert_eq!(
+			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+				.unwrap()
+				.total_sats,
+			70_000,
+			"persisted unconfirmed funds must still be present before initial sync"
+		);
+		node.start().unwrap();
+		assert!(node.status().is_running);
+
+		// Ignore any timestamp restored from the previous node's persisted metrics.
+		let sync_timestamp_before = node.status().latest_onchain_wallet_sync_timestamp;
+		let mut saw_initial_sync = false;
+		for _ in 0..200 {
+			let sync_timestamp_after = node.status().latest_onchain_wallet_sync_timestamp;
+			if sync_timestamp_after.is_some() && sync_timestamp_after != sync_timestamp_before {
+				saw_initial_sync = true;
+				break;
+			}
+			tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+		}
+		assert!(
+			saw_initial_sync,
+			"initial Bitcoind sync must publish a fresh on-chain sync timestamp"
+		);
 
 		let balance =
 			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1).unwrap();
-		assert_eq!(balance.total_sats, 0);
+		assert_eq!(
+			balance.total_sats, 0,
+			"initial sync alone must evict persisted unconfirmed funds when mempool is empty"
+		);
 		assert_eq!(balance.spendable_sats, 0);
 		node.stop().unwrap();
 	}
