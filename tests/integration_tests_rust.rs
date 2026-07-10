@@ -17,8 +17,8 @@ use bitcoin::hashes::Hash;
 use bitcoin::{Address, Amount, ScriptBuf, Txid};
 use common::logging::{init_log_logger, validate_log_entry, MultiNodeLogger, TestLogWriter};
 use common::{
-	bump_fee_and_broadcast, distribute_funds_unconfirmed, do_channel_full_cycle, drain_all_events,
-	expect_channel_pending_event, expect_channel_ready_event, expect_event,
+	api_fee_rate, bump_fee_and_broadcast, distribute_funds_unconfirmed, do_channel_full_cycle,
+	drain_all_events, expect_channel_pending_event, expect_channel_ready_event, expect_event,
 	expect_payment_claimable_event, expect_payment_received_event, expect_payment_successful_event,
 	expect_splice_pending_event, generate_blocks_and_wait, open_channel, open_channel_push_amt,
 	premine_and_distribute_funds, premine_blocks, prepare_rbf, random_config,
@@ -669,7 +669,7 @@ async fn calculate_send_all_fee_matches_actual() {
 	let custom_fee_rate = bitcoin::FeeRate::from_sat_per_kwu(500);
 	let estimated_fee_custom = node_a
 		.onchain_payment()
-		.calculate_send_all_fee(&addr_b, true, Some(custom_fee_rate))
+		.calculate_send_all_fee(&addr_b, true, Some(api_fee_rate(custom_fee_rate)))
 		.expect("custom fee rate estimation should succeed");
 	assert!(estimated_fee_custom > 0);
 
@@ -3301,7 +3301,7 @@ async fn get_address_balance_electrum() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn electrum_connection_timeout_config() {
-	let (_, electrsd) = setup_bitcoind_and_electrsd();
+	let (_bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
 	let config = random_config(false);
 	setup_builder!(builder, config.node_config);
@@ -3319,7 +3319,7 @@ async fn electrum_connection_timeout_zero_disables() {
 	// connection_timeout_secs: 0 must map to no socket timeout rather than passing
 	// Duration::ZERO to set_read_timeout, which errors on most platforms and would
 	// cause start() to fail.
-	let (_, electrsd) = setup_bitcoind_and_electrsd();
+	let (_bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
 	let config = random_config(false);
 	setup_builder!(builder, config.node_config);
@@ -3336,7 +3336,7 @@ async fn electrum_connection_timeout_zero_disables() {
 async fn electrum_connection_timeout_above_max_is_capped() {
 	// Values above 255 must be capped to 255 (electrum_client uses u8) and must not
 	// prevent startup or sync — the node should start and sync successfully.
-	let (_, electrsd) = setup_bitcoind_and_electrsd();
+	let (_bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
 	let config = random_config(false);
 	setup_builder!(builder, config.node_config);

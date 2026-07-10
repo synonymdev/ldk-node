@@ -23,7 +23,7 @@ use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::{
-	Address, Amount, Network, OutPoint, ScriptBuf, Sequence, Transaction, Txid, Witness,
+	Address, Amount, FeeRate, Network, OutPoint, ScriptBuf, Sequence, Transaction, Txid, Witness,
 };
 use electrsd::corepc_node::{Client as BitcoindClient, Node as BitcoinD};
 use electrsd::{corepc_node, ElectrsD};
@@ -46,6 +46,26 @@ use logging::TestLogWriter;
 use rand::distr::Alphanumeric;
 use rand::{rng, Rng};
 use serde_json::{json, Value};
+
+#[cfg(not(feature = "uniffi"))]
+pub(crate) fn api_fee_rate(fee_rate: FeeRate) -> FeeRate {
+	fee_rate
+}
+
+#[cfg(feature = "uniffi")]
+pub(crate) fn api_fee_rate(fee_rate: FeeRate) -> Arc<FeeRate> {
+	Arc::new(fee_rate)
+}
+
+#[cfg(not(feature = "uniffi"))]
+pub(crate) fn api_seed_bytes(seed: [u8; 64]) -> [u8; 64] {
+	seed
+}
+
+#[cfg(feature = "uniffi")]
+pub(crate) fn api_seed_bytes(seed: [u8; 64]) -> Vec<u8> {
+	seed.to_vec()
+}
 
 pub(crate) fn drain_all_events(node: &TestNode) {
 	while let Some(event) = node.next_event() {
