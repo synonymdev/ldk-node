@@ -75,8 +75,8 @@
   - Registration is not persisted and not auto-loaded; re-add after each build. BDK data
     remains persisted per account
   - Derived accounts always full-scan so externally issued xpub addresses stay discoverable on
-    Esplora/Electrum; descriptor origins use the real account path; channel preflight only
-    counts account-`0` SegWit as the funding builder
+    Esplora/Electrum; descriptor origins use the real account path; channel preflight requires an
+    account-`0` SegWit builder before counting non-Legacy (including derived) funds
   - Funds combine for balances, coin selection, and signing; primary receive/change stay on
     account `0`; Legacy-primary funding builds/changes only on account-0 non-Legacy wallets
     while derived UTXOs remain selectable as foreign inputs

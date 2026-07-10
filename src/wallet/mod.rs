@@ -1065,10 +1065,17 @@ impl Wallet {
 		&self, total_anchor_channels_reserve_sats: u64,
 	) -> Result<u64, Error> {
 		let locked_wallet = self.inner.lock().unwrap();
-		// Match Legacy-primary funding: only account-0 non-Legacy wallets can be the funding
-		// builder. Derived SegWit UTXOs remain usable as foreign inputs after a builder exists.
-		let balance = locked_wallet
-			.balance_filtered(|k| k.account_index == 0 && k.address_type != AddressType::Legacy);
+		// Legacy-primary funding needs an account-0 non-Legacy wallet as the builder/change
+		// wallet. Derived SegWit UTXOs can still be selected as foreign inputs once that builder
+		// exists, so count all non-Legacy funds only when such a builder is loaded.
+		let has_account_zero_segwit_builder = locked_wallet
+			.loaded_keys()
+			.iter()
+			.any(|k| k.account_index == 0 && k.address_type != AddressType::Legacy);
+		if !has_account_zero_segwit_builder {
+			return Ok(0);
+		}
+		let balance = locked_wallet.balance_filtered(|k| k.address_type != AddressType::Legacy);
 		self.get_balances_inner(&balance, total_anchor_channels_reserve_sats).map(|(_, s)| s)
 	}
 
