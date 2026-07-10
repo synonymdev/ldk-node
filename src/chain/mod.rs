@@ -179,8 +179,10 @@ pub(super) fn collect_additional_sync_requests(
 		.iter()
 		.copied()
 		.filter_map(|wallet_account| {
-			let do_incremental =
-				node_metrics.read().unwrap().get_wallet_sync_timestamp(wallet_account).is_some();
+			// Derived accounts always full-scan: addresses may be issued from an exported
+			// xpub outside the node and never revealed to BDK.
+			let do_incremental = wallet_account.account_index == 0
+				&& node_metrics.read().unwrap().get_wallet_sync_timestamp(wallet_account).is_some();
 			let request = if do_incremental {
 				onchain_wallet
 					.get_wallet_incremental_sync_request(wallet_account)

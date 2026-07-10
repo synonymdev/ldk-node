@@ -3449,6 +3449,7 @@ mod events {
 // Derived on-chain wallet accounts
 // ---------------------------------------------------------------------------
 mod derived_accounts {
+	use bitcoin::Address;
 	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
 	use ldk_node::NodeError;
@@ -3783,5 +3784,115 @@ mod derived_accounts {
 		node.add_onchain_wallet_account(AddressType::NativeSegwit, 2, xpub2).unwrap();
 
 		node.stop().unwrap();
+	}
+
+	fn native_segwit_receive_address_from_xpub(account_xpub: &str, address_index: u32) -> Address {
+		use std::str::FromStr;
+
+		use bitcoin::bip32::{ChildNumber, Xpub};
+		use bitcoin::secp256k1::Secp256k1;
+		use bitcoin::{Address, CompressedPublicKey, Network};
+
+		let xpub = Xpub::from_str(account_xpub).unwrap();
+		let child = xpub
+			.derive_pub(
+				&Secp256k1::new(),
+				&[
+					ChildNumber::from_normal_idx(0).unwrap(),
+					ChildNumber::from_normal_idx(address_index).unwrap(),
+				],
+			)
+			.unwrap();
+		Address::p2wpkh(&CompressedPublicKey(child.public_key), Network::Regtest)
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_derived_account_discovers_external_xpub_addresses_after_prior_sync() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Electrum(&electrsd);
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub.clone()).unwrap();
+
+		let first = native_segwit_receive_address_from_xpub(&xpub, 0);
+		fund_and_sync(&bitcoind, &electrsd, &node, first, 60_000).await;
+		assert!(
+			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+				.unwrap()
+				.total_sats >= 59_000
+		);
+
+		// After a successful sync, a later externally derived address must still be discovered
+		// (derived accounts always full-scan; incremental would miss this).
+		let second = native_segwit_receive_address_from_xpub(&xpub, 1);
+		fund_and_sync(&bitcoind, &electrsd, &node, second, 70_000).await;
+		assert!(
+			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+				.unwrap()
+				.total_sats >= 129_000
+		);
+
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_derived_account_rejects_hardened_range_account_index() {
+		let (_bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+
+		let too_high = ldk_node::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX + 1;
+		assert_eq!(
+			node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, too_high)
+				.unwrap_err(),
+			NodeError::InvalidQuantity
+		);
+		assert_eq!(
+			node.add_onchain_wallet_account(AddressType::NativeSegwit, too_high, "tpub".into())
+				.unwrap_err(),
+			NodeError::InvalidQuantity
+		);
+
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_legacy_primary_preflight_ignores_derived_only_segwit_funds() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+		let node_a = setup_node(&chain_source, node_config(AddressType::Legacy, vec![]), None);
+		let node_b = setup_node(&chain_source, crate::common::random_config(true), None);
+
+		let xpub = node_a.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		node_a.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub.clone()).unwrap();
+
+		let derived_addr = native_segwit_receive_address_from_xpub(&xpub, 0);
+		fund_and_sync(&bitcoind, &electrsd, &node_a, derived_addr, 200_000).await;
+		fund_peer_node_and_sync(
+			&bitcoind,
+			&electrsd,
+			&node_b,
+			node_b.onchain_payment().new_address().unwrap(),
+			CHANNEL_PEER_FUNDING_SATS,
+		)
+		.await;
+
+		// Only derived SegWit is funded; Legacy-primary funding needs an account-0 SegWit builder.
+		assert_eq!(
+			node_a.open_channel(
+				node_b.node_id(),
+				node_b.listening_addresses().unwrap().first().unwrap().clone(),
+				100_000,
+				None,
+				None,
+			),
+			Err(NodeError::InsufficientFunds)
+		);
+
+		node_a.stop().unwrap();
+		node_b.stop().unwrap();
 	}
 }

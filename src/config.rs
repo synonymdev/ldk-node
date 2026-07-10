@@ -102,6 +102,12 @@ pub(crate) const RGS_SYNC_TIMEOUT_SECS: u64 = 5;
 /// The length in bytes of our wallets' keys seed.
 pub const WALLET_KEYS_SEED_LEN: usize = 64;
 
+/// Maximum BIP32 account index that can be registered as a derived on-chain wallet.
+///
+/// Hardened derivation only allows indices in `0..2^31`, so account indexes above this value
+/// cannot be encoded as a hardened child number.
+pub const MAX_ONCHAIN_WALLET_ACCOUNT_INDEX: u32 = (1 << 31) - 1;
+
 // The timeout after which we abort a external scores sync operation.
 pub(crate) const EXTERNAL_PATHFINDING_SCORES_SYNC_TIMEOUT_SECS: u64 = 5;
 
@@ -1020,7 +1026,7 @@ mod tests {
 
 	#[test]
 	fn onchain_wallet_account_helpers() {
-		use super::{AddressType, OnchainWalletAccount};
+		use super::{AddressType, OnchainWalletAccount, MAX_ONCHAIN_WALLET_ACCOUNT_INDEX};
 
 		let main = OnchainWalletAccount::account_zero(AddressType::Taproot);
 		assert!(!main.is_derived());
@@ -1030,5 +1036,6 @@ mod tests {
 			OnchainWalletAccount { address_type: AddressType::NestedSegwit, account_index: 3 };
 		assert!(derived.is_derived());
 		assert_eq!(derived.storage_suffix(), "nested_segwit_3");
+		assert_eq!(MAX_ONCHAIN_WALLET_ACCOUNT_INDEX, (1 << 31) - 1);
 	}
 }

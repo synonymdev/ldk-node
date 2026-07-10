@@ -214,8 +214,8 @@ impl Wallet {
 	}
 
 	pub(crate) fn current_best_block(&self) -> BestBlock {
-		let checkpoint = self.inner.lock().unwrap().latest_checkpoint();
-		BestBlock { block_hash: checkpoint.hash(), height: checkpoint.height() }
+		let (block_hash, height) = self.inner.lock().unwrap().current_best_block();
+		BestBlock { block_hash, height }
 	}
 
 	// Get a drain script for change outputs.
@@ -403,6 +403,15 @@ impl Wallet {
 	pub(crate) fn export_onchain_wallet_account_xpub(
 		&self, address_type: AddressType, account_index: u32,
 	) -> Result<String, Error> {
+		if account_index > crate::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX {
+			log_error!(
+				self.logger,
+				"Account index {} exceeds the maximum hardened BIP32 account index",
+				account_index
+			);
+			return Err(Error::InvalidQuantity);
+		}
+
 		let xprv = Xpriv::new_master(self.config.network, &self.seed_bytes).map_err(|e| {
 			log_error!(self.logger, "Failed to derive master secret: {}", e);
 			Error::InvalidSeedBytes
@@ -431,8 +440,12 @@ impl Wallet {
 	pub(crate) fn add_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32, xpub: &str,
 	) -> Result<(), Error> {
-		if account_index == 0 {
-			log_error!(self.logger, "Account 0 cannot be registered as a derived account");
+		if account_index == 0 || account_index > crate::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX {
+			log_error!(
+				self.logger,
+				"Derived account index must be in 1..={}",
+				crate::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX
+			);
 			return Err(Error::InvalidQuantity);
 		}
 
@@ -1052,7 +1065,10 @@ impl Wallet {
 		&self, total_anchor_channels_reserve_sats: u64,
 	) -> Result<u64, Error> {
 		let locked_wallet = self.inner.lock().unwrap();
-		let balance = locked_wallet.balance_filtered(|k| k.address_type != AddressType::Legacy);
+		// Match Legacy-primary funding: only account-0 non-Legacy wallets can be the funding
+		// builder. Derived SegWit UTXOs remain usable as foreign inputs after a builder exists.
+		let balance = locked_wallet
+			.balance_filtered(|k| k.account_index == 0 && k.address_type != AddressType::Legacy);
 		self.get_balances_inner(&balance, total_anchor_channels_reserve_sats).map(|(_, s)| s)
 	}
 
@@ -1863,7 +1879,7 @@ fn create_wallet_for_account(
 	let mut persister =
 		KVStoreWalletPersister::new(Arc::clone(&kv_store), Arc::clone(&logger), wallet_account);
 
-	let mut wallet = crate::builder::get_or_create_wallet_for_account(
+	let (mut wallet, loaded_from_store) = crate::builder::get_or_create_wallet_for_account(
 		wallet_account,
 		xprv,
 		network,
@@ -1874,14 +1890,23 @@ fn create_wallet_for_account(
 		Error::WalletOperationFailed
 	})?;
 
-	let block_id = bdk_chain::BlockId { height: chain_tip.height, hash: chain_tip.block_hash };
-	let mut cp = wallet.latest_checkpoint();
-	cp = cp.insert(block_id);
-	let update = bdk_wallet::Update { chain: Some(cp), ..Default::default() };
-	wallet.apply_update(update).map_err(|e| {
-		log_error!(logger, "Failed to apply checkpoint for {:?}: {}", wallet_account, e);
-		Error::WalletOperationFailed
-	})?;
+	// Only advance brand-new wallets to the current tip. Re-loaded wallets keep their persisted
+	// checkpoint so Bitcoind Listen can catch up from the older tip (via the aggregate minimum)
+	// instead of skipping blocks between the persisted height and the primary tip.
+	//
+	// New derived wallets still start at the current tip: Bitcoind has no account full-scan, so
+	// pre-registration history on that backend remains undiscoverable; Esplora/Electrum full-scan
+	// recovers it regardless of the local checkpoint.
+	if !loaded_from_store {
+		let block_id = bdk_chain::BlockId { height: chain_tip.height, hash: chain_tip.block_hash };
+		let mut cp = wallet.latest_checkpoint();
+		cp = cp.insert(block_id);
+		let update = bdk_wallet::Update { chain: Some(cp), ..Default::default() };
+		wallet.apply_update(update).map_err(|e| {
+			log_error!(logger, "Failed to apply checkpoint for {:?}: {}", wallet_account, e);
+			Error::WalletOperationFailed
+		})?;
+	}
 
 	Ok((wallet, persister))
 }

@@ -68,11 +68,15 @@
 - Added derived on-chain wallet account support (`account_index >= 1`) from the node's master
   seed:
   - `export_onchain_wallet_account_xpub` / `add_onchain_wallet_account` (idempotent; validates
-    xpub; rejects account `0`); `get_balance_for_onchain_wallet_account` /
-    `list_onchain_wallet_accounts`; `OnchainPayment::new_address_for_account` /
-    `new_address_info_for_account`; `OnchainWalletAccount`
+    xpub; rejects account `0` and indexes above `MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`);
+    `get_balance_for_onchain_wallet_account` / `list_onchain_wallet_accounts`;
+    `OnchainPayment::new_address_for_account` / `new_address_info_for_account`;
+    `OnchainWalletAccount`
   - Registration is not persisted and not auto-loaded; re-add after each build. BDK data
     remains persisted per account
+  - Derived accounts always full-scan so externally issued xpub addresses stay discoverable on
+    Esplora/Electrum; descriptor origins use the real account path; channel preflight only
+    counts account-`0` SegWit as the funding builder
   - Funds combine for balances, coin selection, and signing; primary receive/change stay on
     account `0`; Legacy-primary funding builds/changes only on account-0 non-Legacy wallets
     while derived UTXOs remain selectable as foreign inputs

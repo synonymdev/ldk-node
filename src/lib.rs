@@ -2229,9 +2229,14 @@ impl Node {
 	/// Registers a derived on-chain wallet account (`account_index >= 1`).
 	///
 	/// Validates `xpub` against the node's master seed. Idempotent for the same xpub.
-	/// Account `0` is rejected with [`Error::InvalidQuantity`].
+	/// Account `0` and indexes above [`crate::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`] are
+	/// rejected with [`Error::InvalidQuantity`].
 	///
 	/// Not persisted across restarts; re-add after each build. BDK data remains persisted.
+	///
+	/// Derived accounts are always full-scanned (BDK stop gap) so addresses issued from the exported
+	/// xpub outside the node remain discoverable on Esplora/Electrum. Bitcoind Listen does not
+	/// historically scan for funds received before first registration of a brand-new account.
 	pub fn add_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32, xpub: String,
 	) -> Result<(), Error> {
@@ -2443,22 +2448,7 @@ pub(crate) struct NodeMetrics {
 	last_known_total_lightning_balance_sats: Option<u64>,
 	/// Sync timestamps for account-0 monitored address types (TLV type 18).
 	monitored_wallet_sync_timestamps: Vec<(AddressType, u64)>,
-	/// Sync timestamps for derived accounts (TLV type 20).
-	derived_wallet_sync_timestamps: Vec<DerivedWalletSyncTimestamp>,
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct DerivedWalletSyncTimestamp {
-	address_type: AddressType,
-	account_index: u32,
-	timestamp: u64,
-}
-
-impl_writeable_tlv_based!(DerivedWalletSyncTimestamp, {
-	(0, address_type, required),
-	(2, account_index, required),
-	(4, timestamp, required),
-});
 
 impl Default for NodeMetrics {
 	fn default() -> Self {
@@ -2474,7 +2464,6 @@ impl Default for NodeMetrics {
 			last_known_total_onchain_balance_sats: None,
 			last_known_total_lightning_balance_sats: None,
 			monitored_wallet_sync_timestamps: Vec::new(),
-			derived_wallet_sync_timestamps: Vec::new(),
 		}
 	}
 }
@@ -2483,47 +2472,31 @@ impl NodeMetrics {
 	pub(crate) fn get_wallet_sync_timestamp(
 		&self, wallet_account: OnchainWalletAccount,
 	) -> Option<u64> {
-		if wallet_account.account_index == 0 {
-			self.monitored_wallet_sync_timestamps
-				.iter()
-				.find(|(at, _)| *at == wallet_account.address_type)
-				.map(|(_, ts)| *ts)
-		} else {
-			self.derived_wallet_sync_timestamps
-				.iter()
-				.find(|entry| {
-					entry.address_type == wallet_account.address_type
-						&& entry.account_index == wallet_account.account_index
-				})
-				.map(|entry| entry.timestamp)
+		// Derived accounts always full-scan and do not persist sync timestamps (avoids an even TLV
+		// that would break rollback to older node builds).
+		if wallet_account.account_index != 0 {
+			return None;
 		}
+		self.monitored_wallet_sync_timestamps
+			.iter()
+			.find(|(at, _)| *at == wallet_account.address_type)
+			.map(|(_, ts)| *ts)
 	}
 
 	pub(crate) fn set_wallet_sync_timestamp(
 		&mut self, wallet_account: OnchainWalletAccount, timestamp: u64,
 	) {
-		if wallet_account.account_index == 0 {
-			if let Some(entry) = self
-				.monitored_wallet_sync_timestamps
-				.iter_mut()
-				.find(|(at, _)| *at == wallet_account.address_type)
-			{
-				entry.1 = timestamp;
-			} else {
-				self.monitored_wallet_sync_timestamps
-					.push((wallet_account.address_type, timestamp));
-			}
-		} else if let Some(entry) = self.derived_wallet_sync_timestamps.iter_mut().find(|entry| {
-			entry.address_type == wallet_account.address_type
-				&& entry.account_index == wallet_account.account_index
-		}) {
-			entry.timestamp = timestamp;
+		if wallet_account.account_index != 0 {
+			return;
+		}
+		if let Some(entry) = self
+			.monitored_wallet_sync_timestamps
+			.iter_mut()
+			.find(|(at, _)| *at == wallet_account.address_type)
+		{
+			entry.1 = timestamp;
 		} else {
-			self.derived_wallet_sync_timestamps.push(DerivedWalletSyncTimestamp {
-				address_type: wallet_account.address_type,
-				account_index: wallet_account.account_index,
-				timestamp,
-			});
+			self.monitored_wallet_sync_timestamps.push((wallet_account.address_type, timestamp));
 		}
 	}
 }
@@ -2540,7 +2513,6 @@ impl_writeable_tlv_based!(NodeMetrics, {
 	(14, last_known_total_onchain_balance_sats, option),
 	(16, last_known_total_lightning_balance_sats, option),
 	(18, monitored_wallet_sync_timestamps, optional_vec),
-	(20, derived_wallet_sync_timestamps, optional_vec),
 });
 
 // Check if balances have changed and emit BalanceChanged event if so.

@@ -383,11 +383,21 @@ where
 
 	// ─── Chain Tip ──────────────────────────────────────────────────────
 
-	/// The latest checkpoint from the primary wallet, returned as
+	/// The latest checkpoint with the lowest height across all wallets, returned as
 	/// `(block_hash, height)`.
+	///
+	/// Using the oldest tip lets Bitcoind Listen catch up wallets that were re-loaded below the
+	/// primary tip (e.g. derived accounts re-registered after a restart).
 	pub fn current_best_block(&self) -> (BlockHash, u32) {
-		let checkpoint = self.primary_wallet().latest_checkpoint();
-		(checkpoint.hash(), checkpoint.height())
+		self.wallets
+			.values()
+			.map(|wallet| wallet.latest_checkpoint())
+			.min_by_key(|checkpoint| checkpoint.height())
+			.map(|checkpoint| (checkpoint.hash(), checkpoint.height()))
+			.unwrap_or_else(|| {
+				let checkpoint = self.primary_wallet().latest_checkpoint();
+				(checkpoint.hash(), checkpoint.height())
+			})
 	}
 
 	// ─── Address Generation ─────────────────────────────────────────────
