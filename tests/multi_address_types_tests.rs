@@ -3159,6 +3159,199 @@ mod dynamic_address_type_changes {
 }
 
 // ---------------------------------------------------------------------------
+// Derived on-chain wallet accounts
+// ---------------------------------------------------------------------------
+mod derived_accounts {
+	use std::str::FromStr;
+
+	use bitcoin::bip32::{ChildNumber, Xpub};
+	use bitcoin::secp256k1::Secp256k1;
+	use bitcoin::{Address, CompressedPublicKey, Network};
+	use ldk_node::config::{AddressType, OnchainWalletAccount};
+
+	use crate::common::{
+		open_channel, setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
+		TestStoreType,
+	};
+	use crate::helpers::{
+		confirm_and_sync, fund_and_sync, fund_peer_node_and_sync, node_config, read_node_seed,
+		test_recipient, CHANNEL_PEER_FUNDING_SATS,
+	};
+
+	#[cfg(not(feature = "uniffi"))]
+	fn api_seed_bytes(seed: [u8; 64]) -> [u8; 64] {
+		seed
+	}
+
+	#[cfg(feature = "uniffi")]
+	fn api_seed_bytes(seed: [u8; 64]) -> Vec<u8> {
+		seed.to_vec()
+	}
+
+	fn native_segwit_receive_address(account_xpub: &str, address_index: u32) -> Address {
+		let xpub = Xpub::from_str(account_xpub).unwrap();
+		let child = xpub
+			.derive_pub(
+				&Secp256k1::new(),
+				&[
+					ChildNumber::from_normal_idx(0).unwrap(),
+					ChildNumber::from_normal_idx(address_index).unwrap(),
+				],
+			)
+			.unwrap();
+		Address::p2wpkh(&CompressedPublicKey(child.public_key), Network::Regtest)
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn account_readded_after_restart_recovers_spendable_funds() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+		let mut config = node_config(AddressType::NativeSegwit, vec![]);
+		config.store_type = TestStoreType::Sqlite;
+		let node = setup_node(&chain_source, config.clone(), None);
+		let account =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+
+		let account_xpub = node
+			.add_onchain_wallet_account(account, api_seed_bytes(read_node_seed(&node)))
+			.unwrap();
+		assert!(account_xpub.starts_with("tpub"));
+		assert_eq!(
+			node.add_onchain_wallet_account(account, api_seed_bytes(read_node_seed(&node)))
+				.unwrap(),
+			account_xpub
+		);
+		assert!(node.list_onchain_wallet_accounts().contains(&account));
+		assert_eq!(node.list_monitored_address_types(), vec![AddressType::NativeSegwit]);
+
+		let account_address = native_segwit_receive_address(&account_xpub, 0);
+		assert_ne!(node.onchain_payment().new_address().unwrap(), account_address);
+		fund_and_sync(&bitcoind, &electrsd, &node, account_address, 100_000).await;
+
+		let account_balance = node.get_balance_for_onchain_wallet_account(account).unwrap();
+		assert!(account_balance.total_sats >= 99_000);
+		assert!(node.list_balances().total_onchain_balance_sats >= account_balance.total_sats);
+
+		node.stop().unwrap();
+		drop(node);
+
+		let node = setup_node(&chain_source, config, None);
+		assert!(!node.list_onchain_wallet_accounts().contains(&account));
+		assert_eq!(
+			node.add_onchain_wallet_account(account, api_seed_bytes(read_node_seed(&node)))
+				.unwrap(),
+			account_xpub
+		);
+		node.sync_wallets().unwrap();
+		assert!(node.get_balance_for_onchain_wallet_account(account).unwrap().total_sats >= 99_000);
+
+		let txid =
+			node.onchain_payment().send_to_address(&test_recipient(), 50_000, None, None).unwrap();
+		wait_for_tx(&electrsd.client, txid).await;
+		confirm_and_sync(&bitcoind, &electrsd, 1, &[&node]).await;
+
+		assert_eq!(node.get_balance_for_onchain_wallet_account(account).unwrap().total_sats, 0);
+		assert!(node.list_balances().total_onchain_balance_sats > 0);
+		assert!(
+			node.get_balance_for_address_type(AddressType::NativeSegwit).unwrap().total_sats > 0
+		);
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn derived_account_rejects_reserved_index_and_wrong_seed() {
+		let (_bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+		let account_zero =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 0 };
+		let account_one =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+
+		assert_eq!(
+			node.add_onchain_wallet_account(account_zero, api_seed_bytes(read_node_seed(&node))),
+			Err(ldk_node::NodeError::InvalidQuantity)
+		);
+		assert_eq!(
+			node.add_onchain_wallet_account(account_one, api_seed_bytes([7u8; 64])),
+			Err(ldk_node::NodeError::InvalidSeedBytes)
+		);
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn derived_account_discovers_new_xpub_addresses_with_electrum() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Electrum(&electrsd);
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+		let account =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let account_xpub = node
+			.add_onchain_wallet_account(account, api_seed_bytes(read_node_seed(&node)))
+			.unwrap();
+		let first_account_address = native_segwit_receive_address(&account_xpub, 0);
+
+		fund_and_sync(&bitcoind, &electrsd, &node, first_account_address, 60_000).await;
+		assert!(node.get_balance_for_onchain_wallet_account(account).unwrap().total_sats >= 59_000);
+
+		let next_account_address = native_segwit_receive_address(&account_xpub, 1);
+		fund_and_sync(&bitcoind, &electrsd, &node, next_account_address, 70_000).await;
+		assert!(
+			node.get_balance_for_onchain_wallet_account(account).unwrap().total_sats >= 129_000
+		);
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn legacy_primary_keeps_change_on_account_zero_with_derived_inputs() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+		let node_a = setup_node(
+			&chain_source,
+			node_config(AddressType::Legacy, vec![AddressType::NativeSegwit]),
+			None,
+		);
+		let node_b = setup_node(&chain_source, crate::common::random_config(true), None);
+		let account =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let account_xpub = node_a
+			.add_onchain_wallet_account(account, api_seed_bytes(read_node_seed(&node_a)))
+			.unwrap();
+
+		fund_and_sync(
+			&bitcoind,
+			&electrsd,
+			&node_a,
+			native_segwit_receive_address(&account_xpub, 0),
+			200_000,
+		)
+		.await;
+		let peer_address = node_b.onchain_payment().new_address().unwrap();
+		fund_peer_node_and_sync(
+			&bitcoind,
+			&electrsd,
+			&node_b,
+			peer_address,
+			CHANNEL_PEER_FUNDING_SATS,
+		)
+		.await;
+
+		open_channel(&node_a, &node_b, 100_000, false, &electrsd).await;
+		confirm_and_sync(&bitcoind, &electrsd, 6, &[&node_a, &node_b]).await;
+
+		assert_eq!(node_a.get_balance_for_onchain_wallet_account(account).unwrap().total_sats, 0);
+		assert!(
+			node_a.get_balance_for_address_type(AddressType::NativeSegwit).unwrap().total_sats > 0
+		);
+
+		node_a.stop().unwrap();
+		node_b.stop().unwrap();
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Event deduplication and payment direction regression tests
 // ---------------------------------------------------------------------------
 mod events {

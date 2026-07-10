@@ -1,4 +1,4 @@
-# 0.7.0-rc.52 (Synonym Fork)
+# 0.7.0-rc.53 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -65,6 +65,11 @@
 
 ## Synonym Fork Additions
 
+- Added spendable derived on-chain wallet accounts. `add_onchain_wallet_account` exports the
+  account-level xpub and includes the account in sync, balances, coin selection, and signing.
+  Registration must be repeated after each node build; persisted wallet state is recovered when the
+  account is re-added. Receive and change addresses remain on account `0`. Added account listing and
+  per-account balance APIs.
 - Added configurable routing scorer parameters `scoring_fee_params` and `scoring_decay_params`
 - Added `AddressInfo` (`index`, `address`, `keychain`) and `KeychainKind`.
 - Added `OnchainPayment` methods `new_address_info`, `new_address_info_for_type`,

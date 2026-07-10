@@ -102,6 +102,9 @@ pub(crate) const RGS_SYNC_TIMEOUT_SECS: u64 = 5;
 /// The length in bytes of our wallets' keys seed.
 pub const WALLET_KEYS_SEED_LEN: usize = 64;
 
+/// The highest valid BIP 32 account index.
+pub const MAX_ONCHAIN_WALLET_ACCOUNT_INDEX: u32 = (1 << 31) - 1;
+
 // The timeout after which we abort a external scores sync operation.
 pub(crate) const EXTERNAL_PATHFINDING_SCORES_SYNC_TIMEOUT_SECS: u64 = 5;
 
@@ -170,6 +173,53 @@ impl lightning::util::ser::Readable for AddressType {
 	}
 }
 
+/// Identifies a BIP 44-style on-chain wallet account.
+///
+/// The path is `m/purpose'/coin_type'/account'`, with purpose selected by the address type.
+/// Non-Bitcoin networks use coin type `1`. Account `0` identifies an address-type wallet; derived
+/// accounts use indices from `1` through [`MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OnchainWalletAccount {
+	/// The address type and corresponding BIP purpose used by the account.
+	pub address_type: AddressType,
+	/// The hardened account index in the derivation path.
+	pub account_index: u32,
+}
+
+impl OnchainWalletAccount {
+	pub(crate) const fn for_address_type(address_type: AddressType) -> Self {
+		Self { address_type, account_index: 0 }
+	}
+
+	pub(crate) fn storage_suffix(&self) -> String {
+		if self.account_index == 0 {
+			self.address_type.storage_suffix().to_string()
+		} else {
+			format!("{}_account_{}", self.address_type.storage_suffix(), self.account_index)
+		}
+	}
+}
+
+impl lightning::util::ser::Writeable for OnchainWalletAccount {
+	fn write<W: lightning::util::ser::Writer>(
+		&self, writer: &mut W,
+	) -> Result<(), bitcoin::io::Error> {
+		self.address_type.write(writer)?;
+		self.account_index.write(writer)
+	}
+}
+
+impl lightning::util::ser::Readable for OnchainWalletAccount {
+	fn read<R: bitcoin::io::Read>(
+		reader: &mut R,
+	) -> Result<Self, lightning::ln::msgs::DecodeError> {
+		Ok(Self {
+			address_type: lightning::util::ser::Readable::read(reader)?,
+			account_index: lightning::util::ser::Readable::read(reader)?,
+		})
+	}
+}
+
 impl Config {
 	/// Returns the additional address types to monitor, excluding the primary.
 	pub fn additional_address_types(&self) -> Vec<AddressType> {
@@ -182,30 +232,28 @@ impl Config {
 	}
 }
 
-/// Runtime address-type configuration, initialized from [`Config`] and updated at runtime.
+/// Runtime wallet configuration, initialized from [`Config`] and runtime additions.
 #[derive(Debug, Clone)]
-pub(crate) struct AddressTypeRuntimeConfig {
-	/// The primary address type for new addresses and change outputs.
-	pub(crate) primary: AddressType,
-	/// Additional address types to monitor for existing funds.
-	pub(crate) monitored: Vec<AddressType>,
+pub(crate) struct OnchainWalletRuntimeConfig {
+	/// The primary account for new addresses and change outputs.
+	pub(crate) primary: OnchainWalletAccount,
+	/// Additional accounts to monitor for existing funds.
+	pub(crate) monitored: Vec<OnchainWalletAccount>,
 }
 
-impl AddressTypeRuntimeConfig {
+impl OnchainWalletRuntimeConfig {
 	pub(crate) fn from_config(config: &Config) -> Self {
+		let primary = OnchainWalletAccount::for_address_type(config.address_type);
 		let monitored = config
-			.address_types_to_monitor
-			.iter()
-			.copied()
-			.filter(|&at| at != config.address_type)
+			.additional_address_types()
+			.into_iter()
+			.map(OnchainWalletAccount::for_address_type)
 			.collect();
-		Self { primary: config.address_type, monitored }
+		Self { primary, monitored }
 	}
 
-	/// Returns the additional address types to monitor, deduplicating.
-	pub(crate) fn additional_address_types(&self) -> Vec<AddressType> {
-		let mut seen = std::collections::HashSet::new();
-		self.monitored.iter().copied().filter(|&at| seen.insert(at)).collect()
+	pub(crate) fn additional_accounts(&self) -> Vec<OnchainWalletAccount> {
+		self.monitored.clone()
 	}
 }
 
@@ -899,7 +947,13 @@ pub enum AsyncPaymentsRole {
 mod tests {
 	use std::str::FromStr;
 
-	use super::{may_announce_channel, AnnounceError, Config, NodeAlias, SocketAddress};
+	use lightning::io::Cursor;
+	use lightning::util::ser::{Readable, Writeable};
+
+	use super::{
+		may_announce_channel, AddressType, AnnounceError, Config, NodeAlias, OnchainWalletAccount,
+		OnchainWalletRuntimeConfig, SocketAddress,
+	};
 
 	#[test]
 	fn node_announce_channel() {
@@ -945,5 +999,44 @@ mod tests {
 			addresses.push(socket_address);
 		}
 		assert!(may_announce_channel(&node_config).is_ok());
+	}
+
+	#[test]
+	fn account_zero_uses_address_type_storage_namespace() {
+		let account = OnchainWalletAccount::for_address_type(AddressType::NativeSegwit);
+		assert_eq!(account.storage_suffix(), "native_segwit");
+	}
+
+	#[test]
+	fn derived_wallet_account_storage_suffix_includes_account_index() {
+		let account = OnchainWalletAccount { address_type: AddressType::Taproot, account_index: 7 };
+		assert_eq!(account.storage_suffix(), "taproot_account_7");
+	}
+
+	#[test]
+	fn wallet_account_serialization_roundtrip() {
+		let account =
+			OnchainWalletAccount { address_type: AddressType::NestedSegwit, account_index: 42 };
+		let mut reader = Cursor::new(account.encode());
+		assert_eq!(OnchainWalletAccount::read(&mut reader).unwrap(), account);
+	}
+
+	#[test]
+	fn wallet_runtime_config_maps_configured_address_types_to_account_zero() {
+		let mut config = Config::default();
+		config.address_type = AddressType::NativeSegwit;
+		config.address_types_to_monitor =
+			vec![AddressType::Legacy, AddressType::NativeSegwit, AddressType::Legacy];
+
+		let runtime = OnchainWalletRuntimeConfig::from_config(&config);
+
+		assert_eq!(
+			runtime.primary,
+			OnchainWalletAccount::for_address_type(AddressType::NativeSegwit)
+		);
+		assert_eq!(
+			runtime.additional_accounts(),
+			vec![OnchainWalletAccount::for_address_type(AddressType::Legacy)]
+		);
 	}
 }

@@ -152,7 +152,7 @@ pub enum Error {
 	AddressTypeIsPrimary,
 	/// The address type is not currently being monitored.
 	AddressTypeNotMonitored,
-	/// The given seed bytes have an invalid length.
+	/// The given seed bytes have an invalid length or do not match the node seed.
 	InvalidSeedBytes,
 }
 
@@ -257,7 +257,7 @@ impl fmt::Display for Error {
 				write!(f, "The address type is not currently being monitored.")
 			},
 			Self::InvalidSeedBytes => {
-				write!(f, "The given seed bytes have an invalid length.")
+				write!(f, "The given seed bytes are invalid or do not match the node seed.")
 			},
 		}
 	}

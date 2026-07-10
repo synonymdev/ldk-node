@@ -421,14 +421,14 @@ macro_rules! impl_read_write_change_set_type {
 		$key:expr
 	) => {
 		pub(crate) fn $read_name<L: Deref>(
-			kv_store: Arc<DynStore>, logger: L, address_type: crate::config::AddressType,
+			kv_store: Arc<DynStore>, logger: L, account: crate::config::OnchainWalletAccount,
 		) -> Result<Option<$change_set_type>, std::io::Error>
 		where
 			L::Target: LdkLogger,
 		{
-			let suffix = address_type.storage_suffix();
+			let suffix = account.storage_suffix();
 			let secondary_namespace = if $secondary_namespace.is_empty() {
-				suffix.to_string()
+				suffix
 			} else {
 				format!("{}/{}", $secondary_namespace, suffix)
 			};
@@ -439,7 +439,11 @@ macro_rules! impl_read_write_change_set_type {
 					Err(e) => {
 						if e.kind() == lightning::io::ErrorKind::NotFound {
 							// Fallback: try the un-namespaced key for pre-multi-wallet data.
-							if address_type == crate::config::AddressType::NativeSegwit {
+							if account
+								== crate::config::OnchainWalletAccount::for_address_type(
+									crate::config::AddressType::NativeSegwit,
+								)
+							{
 								match KVStoreSync::read(
 									&*kv_store,
 									$primary_namespace,
@@ -497,14 +501,14 @@ macro_rules! impl_read_write_change_set_type {
 
 		pub(crate) fn $write_name<L: Deref>(
 			value: &$change_set_type, kv_store: Arc<DynStore>, logger: L,
-			address_type: crate::config::AddressType,
+			account: crate::config::OnchainWalletAccount,
 		) -> Result<(), std::io::Error>
 		where
 			L::Target: LdkLogger,
 		{
-			let suffix = address_type.storage_suffix();
+			let suffix = account.storage_suffix();
 			let secondary_namespace = if $secondary_namespace.is_empty() {
-				suffix.to_string()
+				suffix
 			} else {
 				format!("{}/{}", $secondary_namespace, suffix)
 			};
@@ -581,13 +585,13 @@ impl_read_write_change_set_type!(
 
 // Reads the full BdkWalletChangeSet or returns default fields
 pub(crate) fn read_bdk_wallet_change_set(
-	kv_store: Arc<DynStore>, logger: Arc<Logger>, address_type: crate::config::AddressType,
+	kv_store: Arc<DynStore>, logger: Arc<Logger>, account: crate::config::OnchainWalletAccount,
 ) -> Result<Option<BdkWalletChangeSet>, std::io::Error> {
 	let mut change_set = BdkWalletChangeSet::default();
 
 	// We require a descriptor and return `None` to signal creation of a new wallet otherwise.
 	if let Some(descriptor) =
-		read_bdk_wallet_descriptor(Arc::clone(&kv_store), Arc::clone(&logger), address_type)?
+		read_bdk_wallet_descriptor(Arc::clone(&kv_store), Arc::clone(&logger), account)?
 	{
 		change_set.descriptor = Some(descriptor);
 	} else {
@@ -596,7 +600,7 @@ pub(crate) fn read_bdk_wallet_change_set(
 
 	// We require a change_descriptor and return `None` to signal creation of a new wallet otherwise.
 	if let Some(change_descriptor) =
-		read_bdk_wallet_change_descriptor(Arc::clone(&kv_store), Arc::clone(&logger), address_type)?
+		read_bdk_wallet_change_descriptor(Arc::clone(&kv_store), Arc::clone(&logger), account)?
 	{
 		change_set.change_descriptor = Some(change_descriptor);
 	} else {
@@ -605,18 +609,18 @@ pub(crate) fn read_bdk_wallet_change_set(
 
 	// We require a network and return `None` to signal creation of a new wallet otherwise.
 	if let Some(network) =
-		read_bdk_wallet_network(Arc::clone(&kv_store), Arc::clone(&logger), address_type)?
+		read_bdk_wallet_network(Arc::clone(&kv_store), Arc::clone(&logger), account)?
 	{
 		change_set.network = Some(network);
 	} else {
 		return Ok(None);
 	}
 
-	read_bdk_wallet_local_chain(Arc::clone(&kv_store), Arc::clone(&logger), address_type)?
+	read_bdk_wallet_local_chain(Arc::clone(&kv_store), Arc::clone(&logger), account)?
 		.map(|local_chain| change_set.local_chain = local_chain);
-	read_bdk_wallet_tx_graph(Arc::clone(&kv_store), Arc::clone(&logger), address_type)?
+	read_bdk_wallet_tx_graph(Arc::clone(&kv_store), Arc::clone(&logger), account)?
 		.map(|tx_graph| change_set.tx_graph = tx_graph);
-	read_bdk_wallet_indexer(Arc::clone(&kv_store), Arc::clone(&logger), address_type)?
+	read_bdk_wallet_indexer(Arc::clone(&kv_store), Arc::clone(&logger), account)?
 		.map(|indexer| change_set.indexer = indexer);
 	Ok(Some(change_set))
 }

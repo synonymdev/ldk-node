@@ -426,6 +426,12 @@ interface NodeInterface {
     @Throws(NodeException::class)
     fun `addAddressTypeToMonitorWithMnemonic`(`addressType`: AddressType, `mnemonic`: Mnemonic, `passphrase`: kotlin.String?)
     
+    @Throws(NodeException::class)
+    fun `addOnchainWalletAccount`(`account`: OnchainWalletAccount, `seedBytes`: List<kotlin.UByte>): kotlin.String
+
+    @Throws(NodeException::class)
+    fun `addOnchainWalletAccountWithMnemonic`(`account`: OnchainWalletAccount, `mnemonic`: Mnemonic, `passphrase`: kotlin.String?): kotlin.String
+
     fun `announcementAddresses`(): List<SocketAddress>?
     
     fun `bolt11Payment`(): Bolt11Payment
@@ -460,6 +466,9 @@ interface NodeInterface {
     @Throws(NodeException::class)
     fun `getBalanceForAddressType`(`addressType`: AddressType): AddressTypeBalance
     
+    @Throws(NodeException::class)
+    fun `getBalanceForOnchainWalletAccount`(`account`: OnchainWalletAccount): AddressTypeBalance
+
     fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
     
     fun `listBalances`(): BalanceDetails
@@ -468,6 +477,8 @@ interface NodeInterface {
     
     fun `listMonitoredAddressTypes`(): List<AddressType>
     
+    fun `listOnchainWalletAccounts`(): List<OnchainWalletAccount>
+
     fun `listPayments`(): List<PaymentDetails>
     
     fun `listPeers`(): List<PeerDetails>
@@ -1103,6 +1114,16 @@ data class NodeStatus (
     val `latestPathfindingScoresSyncTimestamp`: kotlin.ULong?, 
     val `latestNodeAnnouncementBroadcastTimestamp`: kotlin.ULong?, 
     val `latestChannelMonitorArchivalHeight`: kotlin.UInt?
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class OnchainWalletAccount (
+    val `addressType`: AddressType,
+    val `accountIndex`: kotlin.UInt
 ) {
     companion object
 }
@@ -2357,6 +2378,8 @@ enum class WordCount {
 
 
 
+
+
 /**
  * Typealias from the type name used in the UDL file to the builtin type.  This
  * is needed because the UDL type name is used in function/method signatures.
@@ -2516,4 +2539,3 @@ typealias UntrustedString = kotlin.String
  * It's also what we have an external type that references a custom type.
  */
 typealias UserChannelId = kotlin.String
-

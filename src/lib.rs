@@ -123,7 +123,7 @@ use chain::ChainSource;
 pub use config::{battery_saving_sync_intervals, RuntimeSyncIntervals};
 use config::{
 	default_user_config, may_announce_channel, AddressType, AsyncPaymentsRole,
-	BackgroundSyncConfig, ChannelConfig, Config, NODE_ANN_BCAST_INTERVAL,
+	BackgroundSyncConfig, ChannelConfig, Config, OnchainWalletAccount, NODE_ANN_BCAST_INTERVAL,
 	PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
 };
 use connection::ConnectionManager;
@@ -2102,9 +2102,77 @@ impl Node {
 		Ok(AddressTypeBalance { total_sats, spendable_sats })
 	}
 
+	/// Returns the on-chain balance for a loaded wallet account.
+	pub fn get_balance_for_onchain_wallet_account(
+		&self, account: OnchainWalletAccount,
+	) -> Result<AddressTypeBalance, Error> {
+		let (total_sats, spendable_sats) = self.wallet.get_balance_for_account(account)?;
+		Ok(AddressTypeBalance { total_sats, spendable_sats })
+	}
+
 	/// Returns all address types currently loaded and monitored by the wallet.
 	pub fn list_monitored_address_types(&self) -> Vec<AddressType> {
 		self.wallet.get_loaded_address_types()
+	}
+
+	/// Returns all loaded account-`0` and derived on-chain wallets.
+	pub fn list_onchain_wallet_accounts(&self) -> Vec<OnchainWalletAccount> {
+		self.wallet.get_loaded_accounts()
+	}
+
+	/// Adds a spendable derived account and returns its account-level xpub.
+	///
+	/// The account participates in wallet sync, balances, coin selection, and signing. Account `0` is
+	/// reserved, and `seed_bytes` must match the 64-byte seed used to build the node.
+	///
+	/// Registration is idempotent and runtime-only. Persist `{ address_type, account_index, xpub }`
+	/// in application storage and call this method after every node build. Descriptors, the
+	/// transaction graph, and derivation indexes remain persisted and are restored when re-added.
+	///
+	/// Returns [`Error::InvalidSeedBytes`] if `seed_bytes` does not match the seed used to build this
+	/// node, or [`Error::InvalidQuantity`] if the account index is reserved or out of range.
+	///
+	/// The `xpub` or `tpub` derives receive addresses at `0/*` and change addresses at `1/*`. Anyone
+	/// with it can monitor and correlate all account activity, but cannot spend funds.
+	#[cfg(not(feature = "uniffi"))]
+	pub fn add_onchain_wallet_account(
+		&self, account: OnchainWalletAccount, seed_bytes: [u8; config::WALLET_KEYS_SEED_LEN],
+	) -> Result<String, Error> {
+		self.wallet.add_onchain_wallet_account(account, &seed_bytes)
+	}
+
+	/// Adds a spendable derived account and returns its account-level xpub.
+	///
+	/// The account participates in wallet sync, balances, coin selection, and signing. Account `0` is
+	/// reserved, and `seed_bytes` must match the 64-byte seed used to build the node.
+	///
+	/// Registration is idempotent and runtime-only. Persist `{ address_type, account_index, xpub }`
+	/// in application storage and call this method after every node build. Descriptors, the
+	/// transaction graph, and derivation indexes remain persisted and are restored when re-added.
+	///
+	/// Returns [`Error::InvalidSeedBytes`] if `seed_bytes` has the wrong length or does not match the
+	/// seed used to build this node, or [`Error::InvalidQuantity`] if the account index is reserved
+	/// or out of range.
+	///
+	/// The `xpub` or `tpub` derives receive addresses at `0/*` and change addresses at `1/*`. Anyone
+	/// with it can monitor and correlate all account activity, but cannot spend funds.
+	#[cfg(feature = "uniffi")]
+	pub fn add_onchain_wallet_account(
+		&self, account: OnchainWalletAccount, seed_bytes: Vec<u8>,
+	) -> Result<String, Error> {
+		let seed = validate_seed_bytes(seed_bytes)?;
+		self.wallet.add_onchain_wallet_account(account, &seed)
+	}
+
+	/// Adds a derived BIP account using the node's BIP 39 mnemonic and returns its xpub.
+	///
+	/// The `mnemonic` and `passphrase` must match the values used at build time. Registration is
+	/// idempotent and runtime-only; call this method after every node build.
+	pub fn add_onchain_wallet_account_with_mnemonic(
+		&self, account: OnchainWalletAccount, mnemonic: bip39::Mnemonic, passphrase: Option<String>,
+	) -> Result<String, Error> {
+		let seed = mnemonic.to_seed(passphrase.as_deref().unwrap_or(""));
+		self.wallet.add_onchain_wallet_account(account, &seed)
 	}
 
 	/// Adds an address type to the monitored set.
@@ -2112,6 +2180,9 @@ impl Node {
 	/// The wallet is created from `seed_bytes` (or loaded from the kv-store if previously
 	/// monitored) and included in subsequent sync cycles. The seed must be the same 64-byte
 	/// entropy used to build this node.
+	///
+	/// Returns [`Error::InvalidSeedBytes`] if a wallet must be created and `seed_bytes` does not match
+	/// the seed used to build this node.
 	///
 	/// Not persisted across restarts; re-apply on each start or update [`Config`].
 	#[cfg(not(feature = "uniffi"))]
@@ -2127,8 +2198,8 @@ impl Node {
 	/// monitored) and included in subsequent sync cycles. The seed must be the same 64-byte
 	/// entropy used to build this node.
 	///
-	/// Returns [`Error::InvalidSeedBytes`] if `seed_bytes` length differs from
-	/// [`config::WALLET_KEYS_SEED_LEN`].
+	/// Returns [`Error::InvalidSeedBytes`] if `seed_bytes` has the wrong length, or if a wallet must
+	/// be created and the seed does not match the one used to build this node.
 	///
 	/// Not persisted across restarts; re-apply on each start or update [`Config`].
 	#[cfg(feature = "uniffi")]
@@ -2157,6 +2228,9 @@ impl Node {
 	/// demoted to the monitored set. If the new primary has never been synced, a full scan
 	/// is triggered on the next sync cycle.
 	///
+	/// Returns [`Error::InvalidSeedBytes`] if a wallet must be created and `seed_bytes` does not match
+	/// the seed used to build this node.
+	///
 	/// Not persisted across restarts; re-apply on each start or update [`Config`].
 	#[cfg(not(feature = "uniffi"))]
 	pub fn set_primary_address_type(
@@ -2171,8 +2245,8 @@ impl Node {
 	/// demoted to the monitored set. If the new primary has never been synced, a full scan
 	/// is triggered on the next sync cycle.
 	///
-	/// Returns [`Error::InvalidSeedBytes`] if `seed_bytes` length differs from
-	/// [`config::WALLET_KEYS_SEED_LEN`].
+	/// Returns [`Error::InvalidSeedBytes`] if `seed_bytes` has the wrong length, or if a wallet must
+	/// be created and the seed does not match the one used to build this node.
 	///
 	/// Not persisted across restarts; re-apply on each start or update [`Config`].
 	#[cfg(feature = "uniffi")]
@@ -2397,6 +2471,7 @@ pub(crate) struct NodeMetrics {
 	last_known_total_onchain_balance_sats: Option<u64>,
 	last_known_total_lightning_balance_sats: Option<u64>,
 	monitored_wallet_sync_timestamps: Vec<(AddressType, u64)>,
+	derived_wallet_sync_timestamps: Vec<(OnchainWalletAccount, u64)>,
 }
 
 impl Default for NodeMetrics {
@@ -2413,25 +2488,50 @@ impl Default for NodeMetrics {
 			last_known_total_onchain_balance_sats: None,
 			last_known_total_lightning_balance_sats: None,
 			monitored_wallet_sync_timestamps: Vec::new(),
+			derived_wallet_sync_timestamps: Vec::new(),
 		}
 	}
 }
 
 impl NodeMetrics {
-	pub(crate) fn get_wallet_sync_timestamp(&self, address_type: AddressType) -> Option<u64> {
-		self.monitored_wallet_sync_timestamps
-			.iter()
-			.find(|(at, _)| *at == address_type)
-			.map(|(_, ts)| *ts)
+	pub(crate) fn get_wallet_sync_timestamp(&self, account: OnchainWalletAccount) -> Option<u64> {
+		if account.account_index == 0 {
+			self.monitored_wallet_sync_timestamps
+				.iter()
+				.find(|(address_type, _)| *address_type == account.address_type)
+				.map(|(_, timestamp)| *timestamp)
+		} else {
+			self.derived_wallet_sync_timestamps
+				.iter()
+				.find(|(tracked_account, _)| *tracked_account == account)
+				.map(|(_, timestamp)| *timestamp)
+		}
 	}
 
-	pub(crate) fn set_wallet_sync_timestamp(&mut self, address_type: AddressType, timestamp: u64) {
+	pub(crate) fn set_wallet_sync_timestamp(
+		&mut self, account: OnchainWalletAccount, timestamp: u64,
+	) {
+		let timestamps = if account.account_index == 0 {
+			&mut self.monitored_wallet_sync_timestamps
+		} else {
+			if let Some(entry) = self
+				.derived_wallet_sync_timestamps
+				.iter_mut()
+				.find(|(tracked_account, _)| *tracked_account == account)
+			{
+				entry.1 = timestamp;
+			} else {
+				self.derived_wallet_sync_timestamps.push((account, timestamp));
+			}
+			return;
+		};
+
 		if let Some(entry) =
-			self.monitored_wallet_sync_timestamps.iter_mut().find(|(at, _)| *at == address_type)
+			timestamps.iter_mut().find(|(address_type, _)| *address_type == account.address_type)
 		{
 			entry.1 = timestamp;
 		} else {
-			self.monitored_wallet_sync_timestamps.push((address_type, timestamp));
+			timestamps.push((account.address_type, timestamp));
 		}
 	}
 }
@@ -2448,6 +2548,7 @@ impl_writeable_tlv_based!(NodeMetrics, {
 	(14, last_known_total_onchain_balance_sats, option),
 	(16, last_known_total_lightning_balance_sats, option),
 	(18, monitored_wallet_sync_timestamps, optional_vec),
+	(20, derived_wallet_sync_timestamps, optional_vec),
 });
 
 // Check if balances have changed and emit BalanceChanged event if so.
@@ -2542,7 +2643,39 @@ mod tests {
 	use std::thread;
 	use std::time::Duration;
 
+	use lightning::io::Cursor;
+	use lightning::util::ser::{Readable, Writeable};
+
 	use super::*;
+
+	#[derive(Default)]
+	struct LegacyNodeMetrics {
+		latest_lightning_wallet_sync_timestamp: Option<u64>,
+		latest_onchain_wallet_sync_timestamp: Option<u64>,
+		latest_fee_rate_cache_update_timestamp: Option<u64>,
+		latest_rgs_snapshot_timestamp: Option<u32>,
+		latest_pathfinding_scores_sync_timestamp: Option<u64>,
+		latest_node_announcement_broadcast_timestamp: Option<u64>,
+		latest_channel_monitor_archival_height: Option<u32>,
+		last_known_spendable_onchain_balance_sats: Option<u64>,
+		last_known_total_onchain_balance_sats: Option<u64>,
+		last_known_total_lightning_balance_sats: Option<u64>,
+		monitored_wallet_sync_timestamps: Vec<(AddressType, u64)>,
+	}
+
+	lightning::impl_writeable_tlv_based!(LegacyNodeMetrics, {
+		(0, latest_lightning_wallet_sync_timestamp, option),
+		(1, latest_pathfinding_scores_sync_timestamp, option),
+		(2, latest_onchain_wallet_sync_timestamp, option),
+		(4, latest_fee_rate_cache_update_timestamp, option),
+		(6, latest_rgs_snapshot_timestamp, option),
+		(8, latest_node_announcement_broadcast_timestamp, option),
+		(10, latest_channel_monitor_archival_height, option),
+		(12, last_known_spendable_onchain_balance_sats, option),
+		(14, last_known_total_onchain_balance_sats, option),
+		(16, last_known_total_lightning_balance_sats, option),
+		(18, monitored_wallet_sync_timestamps, optional_vec),
+	});
 
 	fn test_node_id() -> PublicKey {
 		PublicKey::from_str("0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993")
@@ -2559,6 +2692,35 @@ mod tests {
 			node_id,
 			address: SocketAddress::from_str(&format!("127.0.0.1:{port}")).unwrap(),
 		}
+	}
+
+	#[test]
+	fn node_metrics_tracks_account_zero_and_derived_accounts_separately() {
+		let account_zero = OnchainWalletAccount::for_address_type(AddressType::NativeSegwit);
+		let derived =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let mut metrics = NodeMetrics::default();
+
+		metrics.set_wallet_sync_timestamp(account_zero, 10);
+		metrics.set_wallet_sync_timestamp(derived, 20);
+
+		assert_eq!(metrics.get_wallet_sync_timestamp(account_zero), Some(10));
+		assert_eq!(metrics.get_wallet_sync_timestamp(derived), Some(20));
+	}
+
+	#[test]
+	fn node_metrics_reads_legacy_address_type_timestamps() {
+		let legacy = LegacyNodeMetrics {
+			monitored_wallet_sync_timestamps: vec![(AddressType::Taproot, 42)],
+			..Default::default()
+		};
+		let mut reader = Cursor::new(legacy.encode());
+
+		let metrics = NodeMetrics::read(&mut reader).unwrap();
+
+		let account = OnchainWalletAccount::for_address_type(AddressType::Taproot);
+		assert_eq!(metrics.get_wallet_sync_timestamp(account), Some(42));
+		assert!(metrics.derived_wallet_sync_timestamps.is_empty());
 	}
 
 	#[test]

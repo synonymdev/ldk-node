@@ -14,11 +14,11 @@ use std::sync::{Arc, Mutex, Once, RwLock};
 use std::time::SystemTime;
 use std::{fmt, fs};
 
-use bdk_wallet::template::{Bip44, Bip49, Bip84, Bip86};
+use bdk_wallet::template::{Bip44, Bip49, Bip84, Bip86, P2Pkh, P2Wpkh, P2Wpkh_P2Sh, P2TR};
 use bdk_wallet::{KeychainKind, PersistedWallet, Wallet as BdkWallet};
 use bip39::Mnemonic;
-use bitcoin::bip32::{ChildNumber, Xpriv};
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv, Xpub};
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::{BlockHash, Network};
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::chain::{chainmonitor, BestBlock, Watch};
@@ -49,10 +49,11 @@ use vss_client::headers::{FixedHeaders, LnurlAuthToJwtProvider, VssHeaderProvide
 
 use crate::chain::ChainSource;
 use crate::config::{
-	default_user_config, may_announce_channel, AddressType, AddressTypeRuntimeConfig,
-	AnnounceError, AsyncPaymentsRole, BitcoindRestClientConfig, Config, ElectrumSyncConfig,
-	EsploraSyncConfig, RuntimeSyncIntervals, ScoringDecayParameters, ScoringFeeParameters,
-	DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME, DEFAULT_LOG_LEVEL, WALLET_KEYS_SEED_LEN,
+	default_user_config, may_announce_channel, AddressType, AnnounceError, AsyncPaymentsRole,
+	BitcoindRestClientConfig, Config, ElectrumSyncConfig, EsploraSyncConfig, OnchainWalletAccount,
+	OnchainWalletRuntimeConfig, RuntimeSyncIntervals, ScoringDecayParameters, ScoringFeeParameters,
+	DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME, DEFAULT_LOG_LEVEL,
+	MAX_ONCHAIN_WALLET_ACCOUNT_INDEX, WALLET_KEYS_SEED_LEN,
 };
 use crate::connection::ConnectionManager;
 use crate::event::EventQueue;
@@ -1278,8 +1279,8 @@ impl ArcedNodeBuilder {
 	}
 }
 
-pub(crate) fn get_or_create_wallet_for_address_type(
-	address_type: AddressType, xprv: Xpriv, network: Network,
+pub(crate) fn get_or_create_wallet_for_account(
+	account: OnchainWalletAccount, xprv: Xpriv, network: Network,
 	persister: &mut KVStoreWalletPersister,
 ) -> Result<PersistedWallet<KVStoreWalletPersister>, BuildError> {
 	macro_rules! load_or_create {
@@ -1319,50 +1320,114 @@ pub(crate) fn get_or_create_wallet_for_address_type(
 		}};
 	}
 
-	match address_type {
-		AddressType::Legacy => load_or_create!(
-			Bip44(xprv, KeychainKind::External),
-			Bip44(xprv, KeychainKind::Internal)
-		),
-		AddressType::NestedSegwit => load_or_create!(
-			Bip49(xprv, KeychainKind::External),
-			Bip49(xprv, KeychainKind::Internal)
-		),
-		AddressType::NativeSegwit => load_or_create!(
-			Bip84(xprv, KeychainKind::External),
-			Bip84(xprv, KeychainKind::Internal)
-		),
-		AddressType::Taproot => load_or_create!(
-			Bip86(xprv, KeychainKind::External),
-			Bip86(xprv, KeychainKind::Internal)
-		),
+	if account.account_index == 0 {
+		return match account.address_type {
+			AddressType::Legacy => load_or_create!(
+				Bip44(xprv, KeychainKind::External),
+				Bip44(xprv, KeychainKind::Internal)
+			),
+			AddressType::NestedSegwit => load_or_create!(
+				Bip49(xprv, KeychainKind::External),
+				Bip49(xprv, KeychainKind::Internal)
+			),
+			AddressType::NativeSegwit => load_or_create!(
+				Bip84(xprv, KeychainKind::External),
+				Bip84(xprv, KeychainKind::Internal)
+			),
+			AddressType::Taproot => load_or_create!(
+				Bip86(xprv, KeychainKind::External),
+				Bip86(xprv, KeychainKind::Internal)
+			),
+		};
+	}
+
+	let external_key =
+		(xprv, account_keychain_derivation_path(account, network, KeychainKind::External)?);
+	let internal_key =
+		(xprv, account_keychain_derivation_path(account, network, KeychainKind::Internal)?);
+
+	match account.address_type {
+		AddressType::Legacy => {
+			load_or_create!(P2Pkh(external_key.clone()), P2Pkh(internal_key.clone()))
+		},
+		AddressType::NestedSegwit => {
+			load_or_create!(P2Wpkh_P2Sh(external_key.clone()), P2Wpkh_P2Sh(internal_key.clone()))
+		},
+		AddressType::NativeSegwit => {
+			load_or_create!(P2Wpkh(external_key.clone()), P2Wpkh(internal_key.clone()))
+		},
+		AddressType::Taproot => {
+			load_or_create!(P2TR(external_key.clone()), P2TR(internal_key.clone()))
+		},
 	}
 }
 
+pub(crate) fn derive_onchain_wallet_account_xpub(
+	account: OnchainWalletAccount, xprv: Xpriv, network: Network,
+) -> Result<Xpub, BuildError> {
+	let account_path = account_derivation_path(account, network)?;
+	let secp_ctx = Secp256k1::new();
+	let account_xpriv =
+		xprv.derive_priv(&secp_ctx, &account_path).map_err(|_| BuildError::WalletSetupFailed)?;
+	Ok(Xpub::from_priv(&secp_ctx, &account_xpriv))
+}
+
+fn account_derivation_path(
+	account: OnchainWalletAccount, network: Network,
+) -> Result<DerivationPath, BuildError> {
+	if account.account_index > MAX_ONCHAIN_WALLET_ACCOUNT_INDEX {
+		return Err(BuildError::WalletSetupFailed);
+	}
+
+	let purpose = match account.address_type {
+		AddressType::Legacy => 44,
+		AddressType::NestedSegwit => 49,
+		AddressType::NativeSegwit => 84,
+		AddressType::Taproot => 86,
+	};
+	let coin_type = if network == Network::Bitcoin { 0 } else { 1 };
+	let path = vec![
+		ChildNumber::from_hardened_idx(purpose).map_err(|_| BuildError::WalletSetupFailed)?,
+		ChildNumber::from_hardened_idx(coin_type).map_err(|_| BuildError::WalletSetupFailed)?,
+		ChildNumber::from_hardened_idx(account.account_index)
+			.map_err(|_| BuildError::WalletSetupFailed)?,
+	];
+	Ok(path.into())
+}
+
+fn account_keychain_derivation_path(
+	account: OnchainWalletAccount, network: Network, keychain: KeychainKind,
+) -> Result<DerivationPath, BuildError> {
+	let mut path =
+		account_derivation_path(account, network)?.into_iter().copied().collect::<Vec<_>>();
+	let keychain_index = match keychain {
+		KeychainKind::External => 0,
+		KeychainKind::Internal => 1,
+	};
+	path.push(
+		ChildNumber::from_normal_idx(keychain_index).map_err(|_| BuildError::WalletSetupFailed)?,
+	);
+	Ok(path.into())
+}
+
 fn build_additional_wallets(
-	config: &Config, xprv: Xpriv, kv_store: Arc<DynStore>, logger: Arc<Logger>,
-	chain_tip_opt: Option<&BestBlock>,
-) -> Vec<(AddressType, PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister)> {
+	accounts: &[OnchainWalletAccount], network: Network, xprv: Xpriv, kv_store: Arc<DynStore>,
+	logger: Arc<Logger>, chain_tip_opt: Option<&BestBlock>,
+) -> Vec<(OnchainWalletAccount, PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister)> {
 	let mut additional_wallets = Vec::new();
 
-	for address_type in config.additional_address_types() {
+	for account in accounts.iter().copied() {
 		match (|| -> Result<_, BuildError> {
-			let mut persister = KVStoreWalletPersister::new(
-				Arc::clone(&kv_store),
-				Arc::clone(&logger),
-				address_type,
-			);
+			let mut persister =
+				KVStoreWalletPersister::new(Arc::clone(&kv_store), Arc::clone(&logger), account);
 
-			let mut wallet = get_or_create_wallet_for_address_type(
-				address_type,
-				xprv,
-				config.network,
-				&mut persister,
-			)
-			.map_err(|e| {
-				log_error!(logger, "Failed to setup wallet for {:?}: {}", address_type, e);
-				e
-			})?;
+			let mut wallet =
+				get_or_create_wallet_for_account(account, xprv, network, &mut persister).map_err(
+					|e| {
+						log_error!(logger, "Failed to setup wallet for {:?}: {}", account, e);
+						e
+					},
+				)?;
 
 			// For newly created wallets, set the chain tip checkpoint.
 			if let Some(best_block) = chain_tip_opt {
@@ -1372,11 +1437,11 @@ fn build_additional_wallets(
 				cp = cp.insert(block_id);
 				let update = bdk_wallet::Update { chain: Some(cp), ..Default::default() };
 				wallet.apply_update(update).map_err(|e| {
-					log_error!(logger, "Failed to apply checkpoint for {:?}: {}", address_type, e);
+					log_error!(logger, "Failed to apply checkpoint for {:?}: {}", account, e);
 					BuildError::WalletSetupFailed
 				})?;
 			}
-			Ok((address_type, wallet, persister))
+			Ok((account, wallet, persister))
 		})() {
 			Ok(tuple) => {
 				log_info!(logger, "Created additional wallet for {:?}", tuple.0);
@@ -1386,7 +1451,7 @@ fn build_additional_wallets(
 				log_error!(
 					logger,
 					"Failed to create additional wallet for {:?}: {}. Continuing without it.",
-					address_type,
+					account,
 					e
 				);
 			},
@@ -1601,16 +1666,12 @@ fn build_with_store_internal(
 			read_payments_async(payments_store, payments_logger),
 			tokio::task::spawn_blocking({
 				let network = config.network;
-				let address_type = config.address_type;
+				let account = OnchainWalletAccount::for_address_type(config.address_type);
 				move || {
 					let mut persister =
-						KVStoreWalletPersister::new(wallet_store, wallet_logger, address_type);
-					let result = get_or_create_wallet_for_address_type(
-						address_type,
-						xprv,
-						network,
-						&mut persister,
-					);
+						KVStoreWalletPersister::new(wallet_store, wallet_logger, account);
+					let result =
+						get_or_create_wallet_for_account(account, xprv, network, &mut persister);
 					(result, persister)
 				}
 			})
@@ -1659,8 +1720,9 @@ fn build_with_store_internal(
 	};
 	let bdk_wallet_loaded = wallet_load_result?;
 
-	let address_type_runtime_config =
-		Arc::new(RwLock::new(AddressTypeRuntimeConfig::from_config(&config)));
+	let runtime_config = OnchainWalletRuntimeConfig::from_config(&config);
+	let additional_accounts = runtime_config.additional_accounts();
+	let onchain_wallet_runtime_config = Arc::new(RwLock::new(runtime_config));
 
 	// Chain source setup
 	let (chain_source, chain_tip_opt) = match chain_data_source_config {
@@ -1674,7 +1736,7 @@ fn build_with_store_internal(
 				Arc::clone(&tx_broadcaster),
 				Arc::clone(&kv_store),
 				Arc::clone(&config),
-				Arc::clone(&address_type_runtime_config),
+				Arc::clone(&onchain_wallet_runtime_config),
 				Arc::clone(&logger),
 				Arc::clone(&node_metrics),
 			)
@@ -1688,7 +1750,7 @@ fn build_with_store_internal(
 				Arc::clone(&tx_broadcaster),
 				Arc::clone(&kv_store),
 				Arc::clone(&config),
-				Arc::clone(&address_type_runtime_config),
+				Arc::clone(&onchain_wallet_runtime_config),
 				Arc::clone(&logger),
 				Arc::clone(&node_metrics),
 			)
@@ -1745,7 +1807,7 @@ fn build_with_store_internal(
 				Arc::clone(&tx_broadcaster),
 				Arc::clone(&kv_store),
 				Arc::clone(&config),
-				Arc::clone(&address_type_runtime_config),
+				Arc::clone(&onchain_wallet_runtime_config),
 				Arc::clone(&logger),
 				Arc::clone(&node_metrics),
 			)
@@ -1767,7 +1829,8 @@ fn build_with_store_internal(
 	}
 
 	let additional_wallets = build_additional_wallets(
-		&config,
+		&additional_accounts,
+		config.network,
 		xprv,
 		Arc::clone(&kv_store),
 		Arc::clone(&logger),
@@ -1783,7 +1846,8 @@ fn build_with_store_internal(
 		Arc::clone(&payment_store),
 		Arc::clone(&config),
 		Arc::clone(&kv_store),
-		Arc::clone(&address_type_runtime_config),
+		Xpub::from_priv(&Secp256k1::new(), &xprv),
+		Arc::clone(&onchain_wallet_runtime_config),
 		Arc::clone(&node_metrics),
 		Arc::clone(&logger),
 	));
@@ -2543,8 +2607,12 @@ pub(crate) fn sanitize_alias(alias_str: &str) -> Result<NodeAlias, BuildError> {
 mod tests {
 	use std::future::Future;
 	use std::pin::Pin;
+	use std::str::FromStr;
 	use std::sync::Arc;
 
+	use bitcoin::bip32::{DerivationPath, Xpriv, Xpub};
+	use bitcoin::secp256k1::Secp256k1;
+	use bitcoin::Network;
 	use lightning::io;
 	use lightning::ln::functional_test_utils::{
 		create_announced_chan_between_nodes, create_chanmon_cfgs, create_network, create_node_cfgs,
@@ -2561,13 +2629,16 @@ mod tests {
 	use lightning::util::ser::Writeable;
 
 	use super::{
-		apply_channel_data_migration, sanitize_alias, BuildError, ChannelDataMigration, Config,
-		NodeAlias, NodeBuilder, ScoringDecayParameters, ScoringFeeParameters,
+		apply_channel_data_migration, derive_onchain_wallet_account_xpub,
+		get_or_create_wallet_for_account, sanitize_alias, BuildError, ChannelDataMigration, Config,
+		KeychainKind, NodeAlias, NodeBuilder, ScoringDecayParameters, ScoringFeeParameters,
 	};
+	use crate::config::{AddressType, OnchainWalletAccount};
 	use crate::io::test_utils::InMemoryStore;
 	use crate::logger::Logger;
 	use crate::runtime::Runtime;
 	use crate::types::DynStore;
+	use crate::wallet::persist::KVStoreWalletPersister;
 
 	#[test]
 	fn sanitize_empty_node_alias() {
@@ -2579,6 +2650,62 @@ mod tests {
 		let expected_node_alias = NodeAlias([0; 32]);
 		let node_alias = sanitize_alias(alias).unwrap();
 		assert_eq!(node_alias, expected_node_alias);
+	}
+
+	#[test]
+	fn account_xpub_uses_standard_bip_account_path() {
+		let seed = [42u8; 64];
+		let secp = Secp256k1::new();
+
+		for network in [Network::Bitcoin, Network::Testnet] {
+			let master = Xpriv::new_master(network, &seed).unwrap();
+			let coin_type = if network == Network::Bitcoin { 0 } else { 1 };
+			for (address_type, purpose) in [
+				(AddressType::Legacy, 44),
+				(AddressType::NestedSegwit, 49),
+				(AddressType::NativeSegwit, 84),
+				(AddressType::Taproot, 86),
+			] {
+				let account = OnchainWalletAccount { address_type, account_index: 7 };
+				let expected_path =
+					DerivationPath::from_str(&format!("m/{}h/{}h/7h", purpose, coin_type)).unwrap();
+				let expected_xpriv = master.derive_priv(&secp, &expected_path).unwrap();
+
+				let account_xpub =
+					derive_onchain_wallet_account_xpub(account, master, network).unwrap();
+
+				assert_eq!(account_xpub, Xpub::from_priv(&secp, &expected_xpriv));
+			}
+		}
+	}
+
+	#[test]
+	fn derived_account_wallet_uses_requested_address_type() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(Logger::new_log_facade());
+		let network = Network::Regtest;
+		let master = Xpriv::new_master(network, &[42u8; 64]).unwrap();
+
+		for address_type in [
+			AddressType::Legacy,
+			AddressType::NestedSegwit,
+			AddressType::NativeSegwit,
+			AddressType::Taproot,
+		] {
+			let account = OnchainWalletAccount { address_type, account_index: 1 };
+			let mut persister =
+				KVStoreWalletPersister::new(Arc::clone(&store), Arc::clone(&logger), account);
+			let wallet =
+				get_or_create_wallet_for_account(account, master, network, &mut persister).unwrap();
+			let script = wallet.peek_address(KeychainKind::External, 0).address.script_pubkey();
+
+			match address_type {
+				AddressType::Legacy => assert!(script.is_p2pkh()),
+				AddressType::NestedSegwit => assert!(script.is_p2sh()),
+				AddressType::NativeSegwit => assert!(script.is_p2wpkh()),
+				AddressType::Taproot => assert!(script.is_p2tr()),
+			}
+		}
 	}
 
 	#[test]

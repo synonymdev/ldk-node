@@ -95,6 +95,11 @@ enum AddressType {
 	"Taproot",
 };
 
+dictionary OnchainWalletAccount {
+	AddressType address_type;
+	u32 account_index;
+};
+
 enum KeychainKind {
 	"External",
 	"Internal",
@@ -232,7 +237,14 @@ interface Node {
 	BalanceDetails list_balances();
 	[Throws=NodeError]
 	AddressTypeBalance get_balance_for_address_type(AddressType address_type);
+	[Throws=NodeError]
+	AddressTypeBalance get_balance_for_onchain_wallet_account(OnchainWalletAccount account);
 	sequence<AddressType> list_monitored_address_types();
+	sequence<OnchainWalletAccount> list_onchain_wallet_accounts();
+	[Throws=NodeError]
+	string add_onchain_wallet_account(OnchainWalletAccount account, sequence<u8> seed_bytes);
+	[Throws=NodeError]
+	string add_onchain_wallet_account_with_mnemonic(OnchainWalletAccount account, Mnemonic mnemonic, string? passphrase);
 	[Throws=NodeError]
 	void add_address_type_to_monitor(AddressType address_type, sequence<u8> seed_bytes);
 	[Throws=NodeError]

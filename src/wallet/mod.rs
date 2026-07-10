@@ -18,7 +18,7 @@ use bdk_wallet::{
 };
 use bdk_wallet_aggregate::AggregateWallet;
 use bitcoin::address::NetworkUnchecked;
-use bitcoin::bip32::Xpriv;
+use bitcoin::bip32::{Xpriv, Xpub};
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::hashes::Hash;
@@ -48,7 +48,10 @@ use lightning::util::message_signing;
 use lightning_invoice::RawBolt11Invoice;
 use persist::KVStoreWalletPersister;
 
-use crate::config::{AddressType, AddressTypeRuntimeConfig, Config, WALLET_KEYS_SEED_LEN};
+use crate::config::{
+	AddressType, Config, OnchainWalletAccount, OnchainWalletRuntimeConfig,
+	MAX_ONCHAIN_WALLET_ACCOUNT_INDEX, WALLET_KEYS_SEED_LEN,
+};
 use crate::event::{TxInput, TxOutput};
 use crate::fee_estimator::{ConfirmationTarget, FeeEstimator, OnchainFeeEstimator};
 use crate::logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
@@ -82,6 +85,13 @@ fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> 
 	validate_derivation_index(last_index)
 }
 
+fn validate_wallet_account(account: OnchainWalletAccount) -> Result<(), Error> {
+	if account.account_index == 0 || account.account_index > MAX_ONCHAIN_WALLET_ACCOUNT_INDEX {
+		return Err(Error::InvalidQuantity);
+	}
+	Ok(())
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum OnchainSendAmount {
 	ExactRetainingReserve { amount_sats: u64, cur_anchor_reserve_sats: u64 },
@@ -106,15 +116,16 @@ pub(crate) mod persist;
 pub(crate) mod ser;
 
 pub(crate) struct Wallet {
-	inner: Mutex<AggregateWallet<AddressType, KVStoreWalletPersister>>,
-	// Serializes add/remove/set_primary to keep aggregate and runtime config in sync.
+	inner: Mutex<AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>>,
+	// Serializes wallet membership and primary-account updates.
 	operation_lock: Mutex<()>,
 	broadcaster: Arc<Broadcaster>,
 	fee_estimator: Arc<OnchainFeeEstimator>,
 	payment_store: Arc<PaymentStore>,
 	config: Arc<Config>,
 	kv_store: Arc<DynStore>,
-	address_type_runtime_config: Arc<RwLock<AddressTypeRuntimeConfig>>,
+	master_xpub: Xpub,
+	onchain_wallet_runtime_config: Arc<RwLock<OnchainWalletRuntimeConfig>>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
 	logger: Arc<Logger>,
 }
@@ -124,17 +135,18 @@ impl Wallet {
 		wallet: bdk_wallet::PersistedWallet<KVStoreWalletPersister>,
 		wallet_persister: KVStoreWalletPersister,
 		additional_wallets: Vec<(
-			AddressType,
+			OnchainWalletAccount,
 			PersistedWallet<KVStoreWalletPersister>,
 			KVStoreWalletPersister,
 		)>,
 		broadcaster: Arc<Broadcaster>, fee_estimator: Arc<OnchainFeeEstimator>,
 		payment_store: Arc<PaymentStore>, config: Arc<Config>, kv_store: Arc<DynStore>,
-		address_type_runtime_config: Arc<RwLock<AddressTypeRuntimeConfig>>,
+		master_xpub: Xpub, onchain_wallet_runtime_config: Arc<RwLock<OnchainWalletRuntimeConfig>>,
 		node_metrics: Arc<RwLock<NodeMetrics>>, logger: Arc<Logger>,
 	) -> Self {
+		let primary_account = OnchainWalletAccount::for_address_type(config.address_type);
 		let aggregate =
-			AggregateWallet::new(wallet, wallet_persister, config.address_type, additional_wallets);
+			AggregateWallet::new(wallet, wallet_persister, primary_account, additional_wallets);
 		let inner = Mutex::new(aggregate);
 		let operation_lock = Mutex::new(());
 		Self {
@@ -145,7 +157,8 @@ impl Wallet {
 			payment_store,
 			config,
 			kv_store,
-			address_type_runtime_config,
+			master_xpub,
+			onchain_wallet_runtime_config,
 			node_metrics,
 			logger,
 		}
@@ -184,15 +197,15 @@ impl Wallet {
 	}
 
 	pub(crate) fn get_wallet_full_scan_request(
-		&self, address_type: AddressType,
+		&self, account: OnchainWalletAccount,
 	) -> Result<FullScanRequest<BdkKeychainKind>, bdk_wallet_aggregate::Error> {
-		self.inner.lock().unwrap().wallet_full_scan_request(&address_type)
+		self.inner.lock().unwrap().wallet_full_scan_request(&account)
 	}
 
 	pub(crate) fn get_wallet_incremental_sync_request(
-		&self, address_type: AddressType,
+		&self, account: OnchainWalletAccount,
 	) -> Result<SyncRequest<(BdkKeychainKind, u32)>, bdk_wallet_aggregate::Error> {
-		self.inner.lock().unwrap().wallet_incremental_sync_request(&address_type)
+		self.inner.lock().unwrap().wallet_incremental_sync_request(&account)
 	}
 
 	pub(crate) fn get_cached_txs(&self) -> Vec<Arc<Transaction>> {
@@ -221,7 +234,32 @@ impl Wallet {
 
 	/// Returns the list of all loaded address types (primary + monitored).
 	pub(crate) fn get_loaded_address_types(&self) -> Vec<AddressType> {
+		let mut seen = std::collections::HashSet::new();
+		self.inner
+			.lock()
+			.unwrap()
+			.loaded_keys()
+			.into_iter()
+			.filter(|account| account.account_index == 0 && seen.insert(account.address_type))
+			.map(|account| account.address_type)
+			.collect()
+	}
+
+	pub(crate) fn get_loaded_accounts(&self) -> Vec<OnchainWalletAccount> {
 		self.inner.lock().unwrap().loaded_keys()
+	}
+
+	fn validated_master_xpriv(
+		&self, seed_bytes: &[u8; WALLET_KEYS_SEED_LEN],
+	) -> Result<Xpriv, Error> {
+		let xprv = Xpriv::new_master(self.config.network, seed_bytes).map_err(|e| {
+			log_error!(self.logger, "Failed to derive master secret: {}", e);
+			Error::InvalidSeedBytes
+		})?;
+		if Xpub::from_priv(&Secp256k1::new(), &xprv) != self.master_xpub {
+			return Err(Error::InvalidSeedBytes);
+		}
+		Ok(xprv)
 	}
 
 	/// Adds an address type to the monitored set, creating its wallet if not already loaded.
@@ -229,21 +267,23 @@ impl Wallet {
 		&self, address_type: AddressType, seed_bytes: &[u8; WALLET_KEYS_SEED_LEN],
 	) -> Result<(), Error> {
 		let _op = self.operation_lock.lock().unwrap();
+		let account = OnchainWalletAccount::for_address_type(address_type);
 
 		{
-			let runtime_config = self.address_type_runtime_config.read().unwrap();
-			if runtime_config.primary == address_type {
+			let runtime_config = self.onchain_wallet_runtime_config.read().unwrap();
+			if runtime_config.primary == account {
 				return Err(Error::AddressTypeIsPrimary);
 			}
-			if runtime_config.monitored.contains(&address_type) {
+			if runtime_config.monitored.contains(&account) {
 				return Err(Error::AddressTypeAlreadyMonitored);
 			}
 		}
 
-		let (wallet, persister) = create_wallet_for_address_type(
-			seed_bytes,
+		let xprv = self.validated_master_xpriv(seed_bytes)?;
+		let (wallet, persister) = create_wallet_for_account(
+			xprv,
 			self.config.network,
-			address_type,
+			account,
 			self.current_best_block(),
 			Arc::clone(&self.kv_store),
 			Arc::clone(&self.logger),
@@ -251,15 +291,52 @@ impl Wallet {
 
 		{
 			let mut aggregate = self.inner.lock().unwrap();
-			aggregate.add_wallet(address_type, wallet, persister).map_err(|e| {
+			aggregate.add_wallet(account, wallet, persister).map_err(|e| {
 				log_error!(self.logger, "Failed to add wallet for {:?}: {}", address_type, e);
 				Error::WalletOperationFailed
 			})?;
-			self.address_type_runtime_config.write().unwrap().monitored.push(address_type);
+			self.onchain_wallet_runtime_config.write().unwrap().monitored.push(account);
 		}
 
 		log_info!(self.logger, "Added address type {:?} to monitor", address_type);
 		Ok(())
+	}
+
+	pub(crate) fn add_onchain_wallet_account(
+		&self, account: OnchainWalletAccount, seed_bytes: &[u8; WALLET_KEYS_SEED_LEN],
+	) -> Result<String, Error> {
+		validate_wallet_account(account)?;
+		let xprv = self.validated_master_xpriv(seed_bytes)?;
+		let account_xpub =
+			crate::builder::derive_onchain_wallet_account_xpub(account, xprv, self.config.network)
+				.map_err(|e| {
+					log_error!(self.logger, "Failed to derive xpub for {:?}: {}", account, e);
+					Error::WalletOperationFailed
+				})?;
+		let _op = self.operation_lock.lock().unwrap();
+
+		if self.inner.lock().unwrap().loaded_keys().contains(&account) {
+			return Ok(account_xpub.to_string());
+		}
+
+		let (wallet, persister) = create_wallet_for_account(
+			xprv,
+			self.config.network,
+			account,
+			self.current_best_block(),
+			Arc::clone(&self.kv_store),
+			Arc::clone(&self.logger),
+		)?;
+
+		let mut aggregate = self.inner.lock().unwrap();
+		aggregate.add_wallet(account, wallet, persister).map_err(|e| {
+			log_error!(self.logger, "Failed to add wallet account {:?}: {}", account, e);
+			Error::WalletOperationFailed
+		})?;
+		self.onchain_wallet_runtime_config.write().unwrap().monitored.push(account);
+
+		log_info!(self.logger, "Added on-chain wallet account {:?}", account);
+		Ok(account_xpub.to_string())
 	}
 
 	/// Removes an address type from monitoring and unloads its wallet.
@@ -268,20 +345,21 @@ impl Wallet {
 		&self, address_type: AddressType,
 	) -> Result<(), Error> {
 		let _op = self.operation_lock.lock().unwrap();
+		let account = OnchainWalletAccount::for_address_type(address_type);
 
 		{
-			let runtime_config = self.address_type_runtime_config.read().unwrap();
-			if runtime_config.primary == address_type {
+			let runtime_config = self.onchain_wallet_runtime_config.read().unwrap();
+			if runtime_config.primary == account {
 				return Err(Error::AddressTypeIsPrimary);
 			}
-			if !runtime_config.monitored.contains(&address_type) {
+			if !runtime_config.monitored.contains(&account) {
 				return Err(Error::AddressTypeNotMonitored);
 			}
 		}
 
 		{
 			let mut aggregate = self.inner.lock().unwrap();
-			match aggregate.remove_wallet(address_type) {
+			match aggregate.remove_wallet(account) {
 				Ok(()) => {},
 				Err(bdk_wallet_aggregate::Error::CannotRemovePrimary) => {
 					return Err(Error::AddressTypeIsPrimary);
@@ -298,11 +376,11 @@ impl Wallet {
 					return Err(Error::WalletOperationFailed);
 				},
 			}
-			self.address_type_runtime_config
+			self.onchain_wallet_runtime_config
 				.write()
 				.unwrap()
 				.monitored
-				.retain(|&at| at != address_type);
+				.retain(|tracked_account| *tracked_account != account);
 		}
 
 		log_info!(self.logger, "Removed address type {:?} from monitor", address_type);
@@ -315,19 +393,21 @@ impl Wallet {
 		&self, address_type: AddressType, seed_bytes: &[u8; WALLET_KEYS_SEED_LEN],
 	) -> Result<(), Error> {
 		let _op = self.operation_lock.lock().unwrap();
+		let account = OnchainWalletAccount::for_address_type(address_type);
 
-		let old_primary = self.address_type_runtime_config.read().unwrap().primary;
-		if address_type == old_primary {
+		let old_primary = self.onchain_wallet_runtime_config.read().unwrap().primary;
+		if account == old_primary {
 			return Ok(());
 		}
 
-		let already_loaded = self.inner.lock().unwrap().loaded_keys().contains(&address_type);
+		let already_loaded = self.inner.lock().unwrap().loaded_keys().contains(&account);
 
 		let new_wallet = if !already_loaded {
-			Some(create_wallet_for_address_type(
-				seed_bytes,
+			let xprv = self.validated_master_xpriv(seed_bytes)?;
+			Some(create_wallet_for_account(
+				xprv,
 				self.config.network,
-				address_type,
+				account,
 				self.current_best_block(),
 				Arc::clone(&self.kv_store),
 				Arc::clone(&self.logger),
@@ -339,13 +419,13 @@ impl Wallet {
 		{
 			let mut aggregate = self.inner.lock().unwrap();
 			if let Some((wallet, persister)) = new_wallet {
-				aggregate.add_wallet(address_type, wallet, persister).map_err(|e| {
+				aggregate.add_wallet(account, wallet, persister).map_err(|e| {
 					log_error!(self.logger, "Failed to add wallet for {:?}: {}", address_type, e);
 					Error::WalletOperationFailed
 				})?;
 			}
 
-			aggregate.set_primary(address_type).map_err(|e| {
+			aggregate.set_primary(account).map_err(|e| {
 				log_error!(
 					self.logger,
 					"Failed to set primary address type to {:?}: {}",
@@ -355,18 +435,17 @@ impl Wallet {
 				Error::WalletOperationFailed
 			})?;
 
-			let mut runtime_config = self.address_type_runtime_config.write().unwrap();
-			runtime_config.primary = address_type;
-			runtime_config.monitored.retain(|&at| at != address_type);
+			let mut runtime_config = self.onchain_wallet_runtime_config.write().unwrap();
+			runtime_config.primary = account;
+			runtime_config.monitored.retain(|tracked_account| *tracked_account != account);
 			if !runtime_config.monitored.contains(&old_primary) {
 				runtime_config.monitored.push(old_primary);
 			}
 		}
 
-		// Clear primary sync timestamp for never-synced types so the next cycle does a full
-		// scan. Additional wallets have independent per-type timestamps in node_metrics.
+		// Force a full scan when promoting an account-zero wallet that has never synced.
 		let needs_full_scan =
-			self.node_metrics.read().unwrap().get_wallet_sync_timestamp(address_type).is_none();
+			self.node_metrics.read().unwrap().get_wallet_sync_timestamp(account).is_none();
 		if needs_full_scan {
 			self.node_metrics.write().unwrap().latest_onchain_wallet_sync_timestamp = None;
 		}
@@ -392,17 +471,17 @@ impl Wallet {
 
 	/// Callers are responsible for calling `update_payment_store_for_all_transactions`
 	/// after all updates have been applied.
-	pub(crate) fn apply_update_for_address_type(
-		&self, address_type: AddressType, update: impl Into<Update>,
+	pub(crate) fn apply_update_for_account(
+		&self, account: OnchainWalletAccount, update: impl Into<Update>,
 	) -> Result<Vec<WalletEvent>, Error> {
 		let mut locked_wallet = self.inner.lock().unwrap();
-		match locked_wallet.apply_update_to_wallet(address_type, update) {
+		match locked_wallet.apply_update_to_wallet(account, update) {
 			Ok((events, _txids)) => Ok(events),
 			Err(e) => {
 				log_error!(
 					self.logger,
-					"Failed to apply update for address type {:?}: {}",
-					address_type,
+					"Failed to apply update for wallet account {:?}: {}",
+					account,
 					e
 				);
 				Err(Error::WalletOperationFailed)
@@ -597,7 +676,7 @@ impl Wallet {
 	}
 
 	fn update_payment_store(
-		&self, locked_wallet: &AggregateWallet<AddressType, KVStoreWalletPersister>,
+		&self, locked_wallet: &AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>,
 	) -> Result<(), Error> {
 		let mut seen_txids = std::collections::HashSet::new();
 		let cur_height = locked_wallet.latest_checkpoint().height();
@@ -686,9 +765,9 @@ impl Wallet {
 	) -> Result<Transaction, Error> {
 		let fee_rate = self.fee_estimator.estimate_fee_rate(confirmation_target);
 		let mut locked_wallet = self.inner.lock().unwrap();
-		let primary_type = locked_wallet.primary_key();
+		let primary_account = locked_wallet.primary_key();
 
-		let tx = if primary_type == AddressType::Legacy {
+		let tx = if primary_account.address_type == AddressType::Legacy {
 			log_info!(
 				self.logger,
 				"Primary is Legacy, using best SegWit wallet for channel funding"
@@ -698,7 +777,7 @@ impl Wallet {
 				amount,
 				fee_rate,
 				locktime,
-				|k| *k != AddressType::Legacy,
+				|account| account.account_index == 0 && account.address_type != AddressType::Legacy,
 			)
 		} else {
 			locked_wallet.build_and_sign_funding_tx(output_script, amount, fee_rate, locktime)
@@ -738,8 +817,9 @@ impl Wallet {
 	pub(crate) fn get_new_address_info_for_type(
 		&self, address_type: AddressType,
 	) -> Result<AddressInfo, Error> {
+		let account = OnchainWalletAccount::for_address_type(address_type);
 		let mut locked_wallet = self.inner.lock().unwrap();
-		locked_wallet.new_address_info_for(&address_type).map_err(|e| {
+		locked_wallet.new_address_info_for(&account).map_err(|e| {
 			log_error!(self.logger, "Failed to get new address for type {:?}: {}", address_type, e);
 			Error::WalletOperationFailed
 		})
@@ -749,9 +829,10 @@ impl Wallet {
 		&self, address_type: AddressType, keychain: KeychainKind, index: u32,
 	) -> Result<AddressInfo, Error> {
 		validate_derivation_index(index)?;
+		let account = OnchainWalletAccount::for_address_type(address_type);
 
 		let locked_wallet = self.inner.lock().unwrap();
-		locked_wallet.address_info_for(&address_type, keychain.into(), index).map_err(|e| {
+		locked_wallet.address_info_for(&account, keychain.into(), index).map_err(|e| {
 			log_error!(
 				self.logger,
 				"Failed to get address info for type {:?} keychain {:?} at index {}: {}",
@@ -768,9 +849,10 @@ impl Wallet {
 		&self, address_type: AddressType, keychain: KeychainKind, start_index: u32, count: u32,
 	) -> Result<Vec<AddressInfo>, Error> {
 		validate_derivation_range(start_index, count)?;
+		let account = OnchainWalletAccount::for_address_type(address_type);
 
 		let locked_wallet = self.inner.lock().unwrap();
-		locked_wallet.address_infos_for(&address_type, keychain.into(), start_index, count).map_err(
+		locked_wallet.address_infos_for(&account, keychain.into(), start_index, count).map_err(
 			|e| {
 				log_error!(
 					self.logger,
@@ -790,9 +872,10 @@ impl Wallet {
 		&self, address_type: AddressType, index: u32,
 	) -> Result<(), Error> {
 		validate_derivation_index(index)?;
+		let account = OnchainWalletAccount::for_address_type(address_type);
 
 		let mut locked_wallet = self.inner.lock().unwrap();
-		locked_wallet.reveal_addresses_to(&address_type, index).map_err(|e| {
+		locked_wallet.reveal_addresses_to(&account, index).map_err(|e| {
 			log_error!(
 				self.logger,
 				"Failed to reveal receive addresses through {} for type {:?}: {}",
@@ -810,16 +893,19 @@ impl Wallet {
 		let locked_wallet = self.inner.lock().unwrap();
 		let primary = locked_wallet.primary_key();
 
-		if primary.is_native_witness() {
+		if primary.address_type.is_native_witness() {
 			drop(locked_wallet);
 			return self.get_new_address();
 		}
 
-		let witness_key = locked_wallet.loaded_keys().into_iter().find(|k| k.is_native_witness());
+		let witness_account = locked_wallet
+			.loaded_keys()
+			.into_iter()
+			.find(|account| account.account_index == 0 && account.address_type.is_native_witness());
 		drop(locked_wallet);
 
-		match witness_key {
-			Some(key) => self.get_new_address_for_type(key),
+		match witness_account {
+			Some(account) => self.get_new_address_for_type(account.address_type),
 			None => {
 				log_error!(self.logger, "No native witness wallet loaded for Lightning operations");
 				Err(Error::WalletOperationFailed)
@@ -864,9 +950,15 @@ impl Wallet {
 	pub(crate) fn get_balance_for_address_type(
 		&self, address_type: AddressType,
 	) -> Result<(u64, u64), Error> {
+		self.get_balance_for_account(OnchainWalletAccount::for_address_type(address_type))
+	}
+
+	pub(crate) fn get_balance_for_account(
+		&self, account: OnchainWalletAccount,
+	) -> Result<(u64, u64), Error> {
 		let locked_wallet = self.inner.lock().unwrap();
-		let balance = locked_wallet.balance_for(&address_type).map_err(|e| {
-			log_error!(self.logger, "Failed to get balance for {:?}: {}", address_type, e);
+		let balance = locked_wallet.balance_for(&account).map_err(|e| {
+			log_error!(self.logger, "Failed to get balance for {:?}: {}", account, e);
 			Error::WalletOperationFailed
 		})?;
 
@@ -900,7 +992,8 @@ impl Wallet {
 		&self, total_anchor_channels_reserve_sats: u64,
 	) -> Result<u64, Error> {
 		let locked_wallet = self.inner.lock().unwrap();
-		let balance = locked_wallet.balance_filtered(|k| *k != AddressType::Legacy);
+		let balance =
+			locked_wallet.balance_filtered(|account| account.address_type != AddressType::Legacy);
 		self.get_balances_inner(&balance, total_anchor_channels_reserve_sats).map(|(_, s)| s)
 	}
 
@@ -1020,8 +1113,10 @@ impl Wallet {
 	fn build_transaction_psbt(
 		&self, address: &Address, send_amount: OnchainSendAmount, fee_rate: FeeRate,
 		utxos_to_spend: Option<Vec<OutPoint>>, channel_manager: &ChannelManager,
-	) -> Result<(Psbt, MutexGuard<'_, AggregateWallet<AddressType, KVStoreWalletPersister>>), Error>
-	{
+	) -> Result<
+		(Psbt, MutexGuard<'_, AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>>),
+		Error,
+	> {
 		let mut locked_wallet = self.inner.lock().unwrap();
 
 		let all_utxos = locked_wallet.list_unspent();
@@ -1468,7 +1563,7 @@ impl Wallet {
 
 		// Splicing requires native witness (P2WPKH/P2TR) primary because
 		// FundingTxInput only supports native witness script types.
-		if !locked_wallet.primary_key().is_native_witness() {
+		if !locked_wallet.primary_key().address_type.is_native_witness() {
 			log_error!(
 				self.logger,
 				"Splicing requires a native witness primary wallet (NativeSegwit or Taproot)"
@@ -1696,35 +1791,26 @@ impl Listen for Wallet {
 	}
 }
 
-fn create_wallet_for_address_type(
-	seed_bytes: &[u8; WALLET_KEYS_SEED_LEN], network: Network, address_type: AddressType,
-	chain_tip: BestBlock, kv_store: Arc<DynStore>, logger: Arc<Logger>,
+fn create_wallet_for_account(
+	xprv: Xpriv, network: Network, account: OnchainWalletAccount, chain_tip: BestBlock,
+	kv_store: Arc<DynStore>, logger: Arc<Logger>,
 ) -> Result<(PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister), Error> {
-	let xprv = Xpriv::new_master(network, seed_bytes).map_err(|e| {
-		log_error!(logger, "Failed to derive master secret: {}", e);
-		Error::WalletOperationFailed
-	})?;
-
 	let mut persister =
-		KVStoreWalletPersister::new(Arc::clone(&kv_store), Arc::clone(&logger), address_type);
+		KVStoreWalletPersister::new(Arc::clone(&kv_store), Arc::clone(&logger), account);
 
-	let mut wallet = crate::builder::get_or_create_wallet_for_address_type(
-		address_type,
-		xprv,
-		network,
-		&mut persister,
-	)
-	.map_err(|e| {
-		log_error!(logger, "Failed to setup wallet for {:?}: {}", address_type, e);
-		Error::WalletOperationFailed
-	})?;
+	let mut wallet =
+		crate::builder::get_or_create_wallet_for_account(account, xprv, network, &mut persister)
+			.map_err(|e| {
+				log_error!(logger, "Failed to setup wallet for {:?}: {}", account, e);
+				Error::WalletOperationFailed
+			})?;
 
 	let block_id = bdk_chain::BlockId { height: chain_tip.height, hash: chain_tip.block_hash };
 	let mut cp = wallet.latest_checkpoint();
 	cp = cp.insert(block_id);
 	let update = bdk_wallet::Update { chain: Some(cp), ..Default::default() };
 	wallet.apply_update(update).map_err(|e| {
-		log_error!(logger, "Failed to apply checkpoint for {:?}: {}", address_type, e);
+		log_error!(logger, "Failed to apply checkpoint for {:?}: {}", account, e);
 		Error::WalletOperationFailed
 	})?;
 
@@ -1912,9 +1998,10 @@ impl ChangeDestinationSource for WalletKeysManager {
 #[cfg(test)]
 mod tests {
 	use super::{
-		validate_derivation_index, validate_derivation_range, BIP32_MAX_NORMAL_INDEX,
-		MAX_ADDRESS_INFO_BATCH_COUNT,
+		validate_derivation_index, validate_derivation_range, validate_wallet_account,
+		BIP32_MAX_NORMAL_INDEX, MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
+	use crate::config::{AddressType, OnchainWalletAccount, MAX_ONCHAIN_WALLET_ACCOUNT_INDEX};
 	use crate::Error;
 
 	#[test]
@@ -1948,5 +2035,23 @@ mod tests {
 	#[test]
 	fn derivation_range_validation_allows_empty_ranges_at_valid_start() {
 		assert_eq!(validate_derivation_range(BIP32_MAX_NORMAL_INDEX, 0), Ok(()));
+	}
+
+	#[test]
+	fn wallet_account_validation_requires_nonzero_normal_index() {
+		let account_zero =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 0 };
+		let max_account = OnchainWalletAccount {
+			address_type: AddressType::NativeSegwit,
+			account_index: MAX_ONCHAIN_WALLET_ACCOUNT_INDEX,
+		};
+		let hardened_range = OnchainWalletAccount {
+			address_type: AddressType::NativeSegwit,
+			account_index: MAX_ONCHAIN_WALLET_ACCOUNT_INDEX + 1,
+		};
+
+		assert_eq!(validate_wallet_account(account_zero), Err(Error::InvalidQuantity));
+		assert_eq!(validate_wallet_account(max_account), Ok(()));
+		assert_eq!(validate_wallet_account(hardened_range), Err(Error::InvalidQuantity));
 	}
 }

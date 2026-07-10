@@ -2535,6 +2535,10 @@ public protocol NodeProtocol: AnyObject {
 
     func addAddressTypeToMonitorWithMnemonic(addressType: AddressType, mnemonic: Mnemonic, passphrase: String?) throws
 
+    func addOnchainWalletAccount(account: OnchainWalletAccount, seedBytes: [UInt8]) throws -> String
+
+    func addOnchainWalletAccountWithMnemonic(account: OnchainWalletAccount, mnemonic: Mnemonic, passphrase: String?) throws -> String
+
     func announcementAddresses() -> [SocketAddress]?
 
     func bolt11Payment() -> Bolt11Payment
@@ -2561,6 +2565,8 @@ public protocol NodeProtocol: AnyObject {
 
     func getBalanceForAddressType(addressType: AddressType) throws -> AddressTypeBalance
 
+    func getBalanceForOnchainWalletAccount(account: OnchainWalletAccount) throws -> AddressTypeBalance
+
     func getTransactionDetails(txid: Txid) -> TransactionDetails?
 
     func listBalances() -> BalanceDetails
@@ -2568,6 +2574,8 @@ public protocol NodeProtocol: AnyObject {
     func listChannels() -> [ChannelDetails]
 
     func listMonitoredAddressTypes() -> [AddressType]
+
+    func listOnchainWalletAccounts() -> [OnchainWalletAccount]
 
     func listPayments() -> [PaymentDetails]
 
@@ -2696,6 +2704,23 @@ open class Node:
         }
     }
 
+    open func addOnchainWalletAccount(account: OnchainWalletAccount, seedBytes: [UInt8]) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_node_add_onchain_wallet_account(self.uniffiClonePointer(),
+                                                                      FfiConverterTypeOnchainWalletAccount.lower(account),
+                                                                      FfiConverterSequenceUInt8.lower(seedBytes), $0)
+        })
+    }
+
+    open func addOnchainWalletAccountWithMnemonic(account: OnchainWalletAccount, mnemonic: Mnemonic, passphrase: String?) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_node_add_onchain_wallet_account_with_mnemonic(self.uniffiClonePointer(),
+                                                                                    FfiConverterTypeOnchainWalletAccount.lower(account),
+                                                                                    FfiConverterTypeMnemonic.lower(mnemonic),
+                                                                                    FfiConverterOptionString.lower(passphrase), $0)
+        })
+    }
+
     open func announcementAddresses() -> [SocketAddress]? {
         return try! FfiConverterOptionSequenceTypeSocketAddress.lift(try! rustCall {
             uniffi_ldk_node_fn_method_node_announcement_addresses(self.uniffiClonePointer(), $0)
@@ -2785,6 +2810,13 @@ open class Node:
         })
     }
 
+    open func getBalanceForOnchainWalletAccount(account: OnchainWalletAccount) throws -> AddressTypeBalance {
+        return try FfiConverterTypeAddressTypeBalance.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_node_get_balance_for_onchain_wallet_account(self.uniffiClonePointer(),
+                                                                                  FfiConverterTypeOnchainWalletAccount.lower(account), $0)
+        })
+    }
+
     open func getTransactionDetails(txid: Txid) -> TransactionDetails? {
         return try! FfiConverterOptionTypeTransactionDetails.lift(try! rustCall {
             uniffi_ldk_node_fn_method_node_get_transaction_details(self.uniffiClonePointer(),
@@ -2807,6 +2839,12 @@ open class Node:
     open func listMonitoredAddressTypes() -> [AddressType] {
         return try! FfiConverterSequenceTypeAddressType.lift(try! rustCall {
             uniffi_ldk_node_fn_method_node_list_monitored_address_types(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func listOnchainWalletAccounts() -> [OnchainWalletAccount] {
+        return try! FfiConverterSequenceTypeOnchainWalletAccount.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_node_list_onchain_wallet_accounts(self.uniffiClonePointer(), $0)
         })
     }
 
@@ -6464,6 +6502,67 @@ public func FfiConverterTypeNodeStatus_lift(_ buf: RustBuffer) throws -> NodeSta
 #endif
 public func FfiConverterTypeNodeStatus_lower(_ value: NodeStatus) -> RustBuffer {
     return FfiConverterTypeNodeStatus.lower(value)
+}
+
+public struct OnchainWalletAccount {
+    public var addressType: AddressType
+    public var accountIndex: UInt32
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(addressType: AddressType, accountIndex: UInt32) {
+        self.addressType = addressType
+        self.accountIndex = accountIndex
+    }
+}
+
+extension OnchainWalletAccount: Equatable, Hashable {
+    public static func == (lhs: OnchainWalletAccount, rhs: OnchainWalletAccount) -> Bool {
+        if lhs.addressType != rhs.addressType {
+            return false
+        }
+        if lhs.accountIndex != rhs.accountIndex {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(addressType)
+        hasher.combine(accountIndex)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOnchainWalletAccount: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OnchainWalletAccount {
+        return
+            try OnchainWalletAccount(
+                addressType: FfiConverterTypeAddressType.read(from: &buf),
+                accountIndex: FfiConverterUInt32.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: OnchainWalletAccount, into buf: inout [UInt8]) {
+        FfiConverterTypeAddressType.write(value.addressType, into: &buf)
+        FfiConverterUInt32.write(value.accountIndex, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainWalletAccount_lift(_ buf: RustBuffer) throws -> OnchainWalletAccount {
+    return try FfiConverterTypeOnchainWalletAccount.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainWalletAccount_lower(_ value: OnchainWalletAccount) -> RustBuffer {
+    return FfiConverterTypeOnchainWalletAccount.lower(value)
 }
 
 public struct OutPoint {
@@ -11436,6 +11535,31 @@ private struct FfiConverterSequenceTypeCustomTlvRecord: FfiConverterRustBuffer {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterSequenceTypeOnchainWalletAccount: FfiConverterRustBuffer {
+    typealias SwiftType = [OnchainWalletAccount]
+
+    static func write(_ value: [OnchainWalletAccount], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOnchainWalletAccount.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OnchainWalletAccount] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OnchainWalletAccount]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeOnchainWalletAccount.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceTypePaymentDetails: FfiConverterRustBuffer {
     typealias SwiftType = [PaymentDetails]
 
@@ -13066,6 +13190,12 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_node_add_address_type_to_monitor_with_mnemonic() != 4517 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_node_add_onchain_wallet_account() != 8042 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_node_add_onchain_wallet_account_with_mnemonic() != 62673 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_node_announcement_addresses() != 61426 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13105,6 +13235,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_node_get_balance_for_address_type() != 34906 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_node_get_balance_for_onchain_wallet_account() != 14472 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13115,6 +13248,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_list_monitored_address_types() != 25084 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_node_list_onchain_wallet_accounts() != 4403 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_list_payments() != 35002 {

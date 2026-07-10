@@ -26,8 +26,8 @@ use crate::chain::bitcoind::BitcoindChainSource;
 use crate::chain::electrum::ElectrumChainSource;
 use crate::chain::esplora::EsploraChainSource;
 use crate::config::{
-	AddressType, AddressTypeRuntimeConfig, BackgroundSyncConfig, BitcoindRestClientConfig, Config,
-	ElectrumSyncConfig, EsploraSyncConfig, RESOLVED_CHANNEL_MONITOR_ARCHIVAL_INTERVAL,
+	BackgroundSyncConfig, BitcoindRestClientConfig, Config, ElectrumSyncConfig, EsploraSyncConfig,
+	OnchainWalletAccount, OnchainWalletRuntimeConfig, RESOLVED_CHANNEL_MONITOR_ARCHIVAL_INTERVAL,
 	WALLET_SYNC_INTERVAL_MINIMUM_SECS,
 };
 use crate::event::{Event, EventQueue, SyncType, TransactionDetails};
@@ -172,28 +172,29 @@ fn get_transaction_details(
 }
 
 pub(super) fn collect_additional_sync_requests(
-	additional_types: &[AddressType], onchain_wallet: &Wallet,
+	additional_accounts: &[OnchainWalletAccount], onchain_wallet: &Wallet,
 	node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
-) -> Vec<(AddressType, WalletSyncRequest)> {
-	additional_types
+) -> Vec<(OnchainWalletAccount, WalletSyncRequest)> {
+	additional_accounts
 		.iter()
 		.copied()
-		.filter_map(|address_type| {
-			let do_incremental =
-				node_metrics.read().unwrap().get_wallet_sync_timestamp(address_type).is_some();
+		.filter_map(|account| {
+			// Derived accounts use a gap-limit scan because addresses may be issued externally.
+			let do_incremental = account.account_index == 0
+				&& node_metrics.read().unwrap().get_wallet_sync_timestamp(account).is_some();
 			let request = if do_incremental {
 				onchain_wallet
-					.get_wallet_incremental_sync_request(address_type)
+					.get_wallet_incremental_sync_request(account)
 					.map(WalletSyncRequest::Incremental)
 			} else {
 				onchain_wallet
-					.get_wallet_full_scan_request(address_type)
+					.get_wallet_full_scan_request(account)
 					.map(WalletSyncRequest::FullScan)
 			};
 			match request {
-				Ok(req) => Some((address_type, req)),
+				Ok(req) => Some((account, req)),
 				Err(e) => {
-					log_info!(logger, "Skipping sync for wallet {:?}: {}", address_type, e);
+					log_info!(logger, "Skipping sync for wallet {:?}: {}", account, e);
 					None
 				},
 			}
@@ -204,25 +205,25 @@ pub(super) fn collect_additional_sync_requests(
 /// Returns `(events, any_applied)` where `any_applied` is true if at least one
 /// additional wallet update was successfully applied.
 pub(super) fn apply_additional_sync_results(
-	results: Vec<(AddressType, Option<BdkUpdate>)>, onchain_wallet: &Wallet,
+	results: Vec<(OnchainWalletAccount, Option<BdkUpdate>)>, onchain_wallet: &Wallet,
 	node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
 ) -> (Vec<BdkWalletEvent>, bool) {
 	let mut events = Vec::new();
 	let mut any_applied = false;
-	for (address_type, update_opt) in results {
+	for (account, update_opt) in results {
 		if let Some(update) = update_opt {
-			match onchain_wallet.apply_update_for_address_type(address_type, update) {
+			match onchain_wallet.apply_update_for_account(account, update) {
 				Ok(wallet_events) => {
 					any_applied = true;
 					if let Some(ts) =
 						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 					{
-						node_metrics.write().unwrap().set_wallet_sync_timestamp(address_type, ts);
+						node_metrics.write().unwrap().set_wallet_sync_timestamp(account, ts);
 					}
 					events.extend(wallet_events);
 				},
 				Err(e) => {
-					log_warn!(logger, "Failed to apply update to wallet {:?}: {}", address_type, e);
+					log_warn!(logger, "Failed to apply update to wallet {:?}: {}", account, e);
 				},
 			}
 		}
@@ -374,8 +375,8 @@ impl ChainSource {
 		server_url: String, headers: HashMap<String, String>, sync_config: EsploraSyncConfig,
 		fee_estimator: Arc<OnchainFeeEstimator>, tx_broadcaster: Arc<Broadcaster>,
 		kv_store: Arc<DynStore>, config: Arc<Config>,
-		address_type_runtime_config: Arc<RwLock<AddressTypeRuntimeConfig>>, logger: Arc<Logger>,
-		node_metrics: Arc<RwLock<NodeMetrics>>,
+		onchain_wallet_runtime_config: Arc<RwLock<OnchainWalletRuntimeConfig>>,
+		logger: Arc<Logger>, node_metrics: Arc<RwLock<NodeMetrics>>,
 	) -> (Self, Option<BestBlock>) {
 		// Create watch channel for runtime sync config updates if background sync is enabled
 		let sync_config_sender = sync_config.background_sync_config.as_ref().map(|cfg| {
@@ -390,7 +391,7 @@ impl ChainSource {
 			fee_estimator,
 			kv_store,
 			config,
-			address_type_runtime_config,
+			onchain_wallet_runtime_config,
 			Arc::clone(&logger),
 			node_metrics,
 		);
@@ -412,8 +413,8 @@ impl ChainSource {
 		server_url: String, sync_config: ElectrumSyncConfig,
 		fee_estimator: Arc<OnchainFeeEstimator>, tx_broadcaster: Arc<Broadcaster>,
 		kv_store: Arc<DynStore>, config: Arc<Config>,
-		address_type_runtime_config: Arc<RwLock<AddressTypeRuntimeConfig>>, logger: Arc<Logger>,
-		node_metrics: Arc<RwLock<NodeMetrics>>,
+		onchain_wallet_runtime_config: Arc<RwLock<OnchainWalletRuntimeConfig>>,
+		logger: Arc<Logger>, node_metrics: Arc<RwLock<NodeMetrics>>,
 	) -> (Self, Option<BestBlock>) {
 		// Create watch channel for runtime sync config updates if background sync is enabled
 		let sync_config_sender = sync_config.background_sync_config.as_ref().map(|cfg| {
@@ -427,7 +428,7 @@ impl ChainSource {
 			fee_estimator,
 			kv_store,
 			config,
-			address_type_runtime_config,
+			onchain_wallet_runtime_config,
 			Arc::clone(&logger),
 			node_metrics,
 		);
