@@ -383,39 +383,37 @@ where
 
 	// ─── Chain Tip ──────────────────────────────────────────────────────
 
-	/// The oldest wallet tip across loaded wallets, returned as `(block_hash, height)`.
+	/// Tips of every loaded wallet as `(block_hash, height)`.
 	///
-	/// Using the oldest tip lets Bitcoind Listen catch up wallets that were re-loaded below the
-	/// primary tip (e.g. derived accounts re-registered after a restart).
+	/// Bitcoind catch-up should start from each tip that is behind or on a stale fork relative to
+	/// the canonical shared tip, rather than assuming a single aggregate cursor is sufficient.
+	pub fn chain_tips(&self) -> Vec<(BlockHash, u32)> {
+		self.wallets
+			.values()
+			.map(|wallet| {
+				let checkpoint = wallet.latest_checkpoint();
+				(checkpoint.hash(), checkpoint.height())
+			})
+			.collect()
+	}
+
+	/// A Listen-oriented aggregate tip: the oldest height across wallets.
 	///
-	/// When multiple wallets share that minimum height but disagree on the hash (fork), prefer the
-	/// primary tip if it is among them; otherwise pick the lexicographically smallest hash for a
-	/// stable cursor.
+	/// When multiple wallets share that minimum height but disagree on the hash (fork), pick the
+	/// lexicographically smallest hash. Preferring the primary here would hide stale secondary
+	/// tips from Bitcoind catch-up when heights match after an equal-height reorg.
+	///
+	/// Callers that need to reconcile every loaded wallet (including same-height forks) should use
+	/// [`Self::chain_tips`] and sync from each divergent tip.
 	pub fn current_best_block(&self) -> (BlockHash, u32) {
-		let mut min_height = None;
-		for wallet in self.wallets.values() {
-			let height = wallet.latest_checkpoint().height();
-			min_height = Some(match min_height {
-				Some(current) if current <= height => current,
-				_ => height,
-			});
-		}
-		let Some(min_height) = min_height else {
-			let checkpoint = self.primary_wallet().latest_checkpoint();
-			return (checkpoint.hash(), checkpoint.height());
-		};
-
-		if let Some(primary_cp) = self.wallets.get(&self.primary).map(|w| w.latest_checkpoint()) {
-			if primary_cp.height() == min_height {
-				return (primary_cp.hash(), primary_cp.height());
-			}
-		}
-
 		self.wallets
 			.values()
 			.map(|wallet| wallet.latest_checkpoint())
-			.filter(|checkpoint| checkpoint.height() == min_height)
-			.min_by_key(|checkpoint| checkpoint.hash().to_byte_array())
+			.min_by(|a, b| {
+				a.height()
+					.cmp(&b.height())
+					.then_with(|| a.hash().to_byte_array().cmp(&b.hash().to_byte_array()))
+			})
 			.map(|checkpoint| (checkpoint.hash(), checkpoint.height()))
 			.unwrap_or_else(|| {
 				let checkpoint = self.primary_wallet().latest_checkpoint();
@@ -704,14 +702,15 @@ where
 
 	/// Apply a connected block to wallets that still need it, then persist.
 	///
-	/// A wallet is skipped only when it already contains this **exact** block hash at `height`.
-	/// That allows linear catch-up from an older sibling tip without re-applying history to wallets
-	/// already ahead, while still applying same-height reorg replacements (different hash). The
-	/// node wallet's `Listen::blocks_disconnected` is intentionally a no-op, so BDK must receive
-	/// replacement blocks through `apply_block`.
-	///
-	/// If apply previously succeeded but persist failed, the in-memory tip already has the block;
-	/// we still attempt `persist` on that skip path so staged changes are not stranded.
+	/// Skip rules per wallet:
+	/// - Exact hash already present at `height` → skip (and still `persist` for stranded changesets)
+	/// - Different hash at `height` → apply (same-height reorg replacement; `blocks_disconnected`
+	///   is a no-op in the node wallet, so BDK must see replacements here)
+	/// - No checkpoint at `height` but tip height is already above `height` → skip. Brand-new
+	///   wallets may only store a sparse `{genesis, tip}` chain; `get(height)` returning `None`
+	///   means "unknown", not "different block". Applying historical blocks into that sparse tip
+	///   makes BDK reject the update because a higher unmatched checkpoint already exists.
+	/// - Otherwise → apply (linear catch-up / extension)
 	///
 	/// Returns the set of all transaction IDs across all wallets.
 	pub fn apply_block(&mut self, block: &Block, height: u32) -> Result<HashSet<Txid>, Error> {
@@ -726,20 +725,26 @@ where
 
 		for (key, wallet) in self.wallets.iter_mut() {
 			let tip = wallet.latest_checkpoint();
-			let already_has_block =
-				tip.get(height).map(|checkpoint| checkpoint.hash() == block_hash).unwrap_or(false);
-			if already_has_block {
+			let checkpoint_at_height = tip.get(height);
+			let already_has_block = checkpoint_at_height
+				.as_ref()
+				.map(|checkpoint| checkpoint.hash() == block_hash)
+				.unwrap_or(false);
+			let sparse_ahead = checkpoint_at_height.is_none() && tip.height() > height;
+			if already_has_block || sparse_ahead {
 				// Persist any changeset left from a prior apply that failed to persist.
-				if let Some(persister) = self.persisters.get_mut(key) {
-					wallet.persist(persister).map_err(|e| {
-						log::error!(
-							"Failed to persist wallet {:?} after recognizing block {}: {}",
-							key,
-							block_hash,
-							e
-						);
-						Error::PersistenceFailed
-					})?;
+				if already_has_block {
+					if let Some(persister) = self.persisters.get_mut(key) {
+						wallet.persist(persister).map_err(|e| {
+							log::error!(
+								"Failed to persist wallet {:?} after recognizing block {}: {}",
+								key,
+								block_hash,
+								e
+							);
+							Error::PersistenceFailed
+						})?;
+					}
 				}
 				continue;
 			}
@@ -2082,7 +2087,95 @@ mod tests {
 	}
 
 	#[test]
-	fn current_best_block_prefers_primary_on_equal_height_fork() {
+	fn apply_block_skips_sparse_ahead_wallet_during_catch_up() {
+		use bdk_chain::BlockId;
+		use bdk_wallet::Update;
+		use bitcoin::blockdata::constants::genesis_block;
+
+		let mut primary_persister = NoopPersister;
+		let mut primary = create_empty_wallet(&mut primary_persister);
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+		let block1 = regtest_child_block(&genesis, 1);
+		let block2 = regtest_child_block(&block1, 1);
+		// Brand-new wallets insert only `{genesis, tip}` — intermediate heights are absent.
+		let sparse_tip = BlockId { height: 2, hash: block2.block_hash() };
+		let checkpoint = primary.latest_checkpoint().insert(sparse_tip);
+		primary.apply_update(Update { chain: Some(checkpoint), ..Default::default() }).unwrap();
+		assert_eq!(primary.latest_checkpoint().height(), 2);
+		assert!(primary.latest_checkpoint().get(1).is_none());
+
+		let mut secondary_persister = NoopPersister;
+		let mut secondary = create_empty_wallet(&mut secondary_persister);
+		secondary.apply_block(&genesis, 0).unwrap();
+
+		let mut agg = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		agg.apply_block(&block1, 1)
+			.expect("sparse ahead wallet must skip unknown intermediate heights");
+		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().height(), 2);
+		assert_eq!(agg.wallet(&1u8).unwrap().latest_checkpoint().height(), 1);
+		agg.apply_block(&block2, 2).expect("lagging wallet catches up to sparse tip");
+		assert_eq!(agg.current_best_block().1, 2);
+	}
+
+	#[test]
+	fn apply_block_retries_persist_on_exact_hash_skip() {
+		use std::sync::atomic::{AtomicUsize, Ordering};
+
+		use bitcoin::blockdata::constants::genesis_block;
+
+		struct FailOncePersister {
+			failures: Arc<AtomicUsize>,
+			inner: MemoryPersister,
+		}
+
+		impl WalletPersister for FailOncePersister {
+			type Error = std::io::Error;
+
+			fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error> {
+				Ok(persister.inner.change_set.lock().unwrap().clone())
+			}
+
+			fn persist(persister: &mut Self, change_set: &ChangeSet) -> Result<(), Self::Error> {
+				if persister.failures.load(Ordering::SeqCst) > 0 {
+					persister.failures.fetch_sub(1, Ordering::SeqCst);
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::Other,
+						"injected persist failure",
+					));
+				}
+				persister.inner.change_set.lock().unwrap().merge(change_set.clone());
+				Ok(())
+			}
+		}
+
+		let failures = Arc::new(AtomicUsize::new(0));
+		let mut primary_persister = FailOncePersister {
+			failures: Arc::clone(&failures),
+			inner: MemoryPersister::default(),
+		};
+		let mut primary = create_empty_wallet(&mut primary_persister);
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+		let block1 = regtest_child_block(&genesis, 1);
+
+		let mut agg = AggregateWallet::new(primary, primary_persister, 0u8, vec![]);
+		failures.store(1, Ordering::SeqCst);
+		let first = agg.apply_block(&block1, 1);
+		assert!(first.is_err(), "first persist must fail");
+		assert_eq!(agg.primary_wallet().latest_checkpoint().hash(), block1.block_hash());
+
+		agg.apply_block(&block1, 1).expect("exact-hash skip must retry stranded persist");
+		assert_eq!(failures.load(Ordering::SeqCst), 0);
+	}
+
+	#[test]
+	fn current_best_block_uses_lexicographic_hash_on_equal_height_fork() {
 		use bitcoin::blockdata::constants::genesis_block;
 
 		let mut primary_persister = NoopPersister;
@@ -2107,6 +2200,18 @@ mod tests {
 		);
 		let (hash, height) = agg.current_best_block();
 		assert_eq!(height, 1);
-		assert_eq!(hash, block1_a.block_hash(), "equal-height fork must prefer primary tip");
+		// Must not hide a secondary tip behind primary preference: pick lex-smallest hash so
+		// Bitcoind catch-up can start from a divergent equal-height checkpoint.
+		let expected =
+			if block1_a.block_hash().to_byte_array() <= block1_b.block_hash().to_byte_array() {
+				block1_a.block_hash()
+			} else {
+				block1_b.block_hash()
+			};
+		assert_eq!(hash, expected);
+		let tips = agg.chain_tips();
+		assert_eq!(tips.len(), 2);
+		assert!(tips.contains(&(block1_a.block_hash(), 1)));
+		assert!(tips.contains(&(block1_b.block_hash(), 1)));
 	}
 }

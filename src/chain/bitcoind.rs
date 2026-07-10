@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, FeeRate, Network, Transaction, Txid};
 use lightning::chain::chaininterface::ConfirmationTarget as LdkConfirmationTarget;
 use lightning::chain::{BestBlock, Listen};
@@ -152,7 +153,14 @@ impl BitcoindChainSource {
 
 			let channel_manager_best_block_hash = channel_manager.current_best_block().block_hash;
 			let sweeper_best_block_hash = output_sweeper.current_best_block().block_hash;
-			let onchain_wallet_best_block_hash = onchain_wallet.current_best_block().block_hash;
+			// Start the on-chain aggregate from its oldest/divergent wallet tip so re-loaded
+			// accounts on a stale equal-height fork are included in the initial sync walk.
+			let onchain_wallet_best_block_hash = onchain_wallet
+				.chain_tips()
+				.into_iter()
+				.min_by_key(|tip| (tip.height, tip.block_hash.to_byte_array()))
+				.unwrap_or_else(|| onchain_wallet.current_best_block())
+				.block_hash;
 
 			let mut chain_listeners = vec![
 				(onchain_wallet_best_block_hash, &*onchain_wallet as &(dyn Listen + Send + Sync)),
@@ -399,25 +407,38 @@ impl BitcoindChainSource {
 		let shared_chain_tip =
 			if let Some(tip) = latest_chain_tip_opt { tip } else { self.poll_chain_tip().await? };
 
-		// When a lagging wallet is (re)loaded below the known chain tip (e.g. a derived account
-		// re-registered after the primary has advanced), tip polling alone will not replay the
-		// gap. Catch the on-chain aggregate up from its oldest wallet tip first. Wallets that
-		// already contain each replayed block skip it in `AggregateWallet::apply_block`.
+		// When a wallet is (re)loaded on a stale tip — either behind the shared height or on an
+		// equal-height fork after a reorg while unloaded — tip polling alone will not replay the
+		// gap. Catch each divergent on-chain tip up from its own checkpoint first. Wallets that
+		// already contain each replayed block (or that only have a sparse ahead tip) skip it in
+		// `AggregateWallet::apply_block`.
 		//
 		// Intentionally do **not** publish the wallet-only sync tip into `latest_chain_tip`: if
 		// Bitcoind advanced past `shared_chain_tip`, publishing that newer tip would make the
 		// combined poll below start too far ahead and Lightning listeners would miss blocks.
-		let onchain_best = onchain_wallet.current_best_block();
-		if onchain_best.height < shared_chain_tip.height {
+		let wallet_tips = onchain_wallet.chain_tips();
+		let catch_up_starts: Vec<_> = wallet_tips
+			.iter()
+			.filter(|tip| {
+				tip.height < shared_chain_tip.height
+					|| (tip.height == shared_chain_tip.height
+						&& tip.block_hash != shared_chain_tip.block_hash)
+			})
+			.collect();
+		if let Some(start_tip) =
+			catch_up_starts.iter().min_by_key(|tip| (tip.height, tip.block_hash.to_byte_array()))
+		{
 			log_info!(
 				self.logger,
-				"On-chain wallet tip {} is behind shared chain tip {}; synchronizing the wallet gap",
-				onchain_best.height,
-				shared_chain_tip.height
+				"On-chain wallet tip {} ({}) diverges from shared chain tip {} ({}); synchronizing from the wallet checkpoint",
+				start_tip.height,
+				start_tip.block_hash,
+				shared_chain_tip.height,
+				shared_chain_tip.block_hash
 			);
 			let mut locked_header_cache = self.header_cache.lock().await;
 			let chain_listeners =
-				vec![(onchain_best.block_hash, &*onchain_wallet as &(dyn Listen + Send + Sync))];
+				vec![(start_tip.block_hash, &*onchain_wallet as &(dyn Listen + Send + Sync))];
 			if let Err(e) = synchronize_listeners(
 				self.api_client.as_ref(),
 				self.config.network,

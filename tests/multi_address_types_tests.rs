@@ -3638,15 +3638,18 @@ mod derived_accounts {
 			assert!(!input.witness.is_empty(), "funding inputs must be SegWit");
 		}
 
-		let channel_output = funding_tx
-			.output
-			.iter()
-			.find(|output| output.value == Amount::from_sat(150_000))
-			.expect("channel funding output");
+		let channel_output = &funding_tx.output[funding_txo.vout as usize];
+		assert_eq!(
+			channel_output.value,
+			Amount::from_sat(150_000),
+			"funding_txo.vout must point at the channel output"
+		);
 		let non_channel_outputs: Vec<_> = funding_tx
 			.output
 			.iter()
-			.filter(|output| output.value != Amount::from_sat(150_000))
+			.enumerate()
+			.filter(|(idx, _)| *idx as u32 != funding_txo.vout)
+			.map(|(_, output)| output)
 			.collect();
 		assert!(
 			!non_channel_outputs.is_empty(),
@@ -3663,16 +3666,34 @@ mod derived_accounts {
 			"change must be distinct from the channel output"
 		);
 
-		let script_on_account_zero = |script: &bitcoin::Script| -> bool {
-			for keychain in [KeychainKind::External, KeychainKind::Internal] {
-				for index in 0..20 {
-					let info = node_a
-						.onchain_payment()
-						.address_info_for_type_at_index(AddressType::NativeSegwit, keychain, index)
-						.unwrap();
-					if info.address.script_pubkey() == *script {
-						return true;
-					}
+		let script_on_account_zero_internal = |script: &bitcoin::Script| -> bool {
+			for index in 0..20 {
+				let info = node_a
+					.onchain_payment()
+					.address_info_for_type_at_index(
+						AddressType::NativeSegwit,
+						KeychainKind::Internal,
+						index,
+					)
+					.unwrap();
+				if info.address.script_pubkey() == *script {
+					return true;
+				}
+			}
+			false
+		};
+		let script_on_account_zero_external = |script: &bitcoin::Script| -> bool {
+			for index in 0..20 {
+				let info = node_a
+					.onchain_payment()
+					.address_info_for_type_at_index(
+						AddressType::NativeSegwit,
+						KeychainKind::External,
+						index,
+					)
+					.unwrap();
+				if info.address.script_pubkey() == *script {
+					return true;
 				}
 			}
 			false
@@ -3720,7 +3741,7 @@ mod derived_accounts {
 			false
 		};
 
-		let mut account_zero_owned = 0usize;
+		let mut account_zero_internal_owned = 0usize;
 		for output in &non_channel_outputs {
 			assert!(
 				!script_on_derived(output.script_pubkey.as_script()),
@@ -3730,14 +3751,18 @@ mod derived_accounts {
 				!script_on_legacy(output.script_pubkey.as_script()),
 				"wallet-owned non-channel output must not belong to Legacy account 0"
 			);
-			if script_on_account_zero(output.script_pubkey.as_script()) {
-				account_zero_owned += 1;
+			assert!(
+				!script_on_account_zero_external(output.script_pubkey.as_script()),
+				"change must not land on account-0 external chain"
+			);
+			if script_on_account_zero_internal(output.script_pubkey.as_script()) {
+				account_zero_internal_owned += 1;
 			}
 		}
 		assert_eq!(
-			account_zero_owned,
+			account_zero_internal_owned,
 			non_channel_outputs.len(),
-			"every wallet-owned non-channel output must belong to account-0 native segwit"
+			"every wallet-owned non-channel output must belong to account-0 native segwit internal chain"
 		);
 
 		confirm_and_sync(&bitcoind, &electrsd, 6, &[&node_a, &node_b]).await;
@@ -4010,6 +4035,105 @@ mod derived_accounts {
 		assert!(
 			balance_after >= balance_before + 69_000,
 			"derived account must recover persisted funds and gap payments, before={}, after={}",
+			balance_before,
+			balance_after
+		);
+
+		node3.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_bitcoind_readd_after_equal_height_reorg_recovers_replacement_funds() {
+		use bitcoin::Amount;
+
+		use crate::common::{
+			distribute_funds_unconfirmed, generate_blocks_and_wait, invalidate_blocks,
+		};
+
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::BitcoindRpcSync(&bitcoind);
+
+		let mut config = node_config(AddressType::NativeSegwit, vec![]);
+		config.store_type = crate::common::TestStoreType::Sqlite;
+		let storage_path = config.node_config.storage_dir_path.clone();
+		let node = setup_node(&chain_source, config, None);
+		let seed = read_node_seed(&node);
+
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub.clone()).unwrap();
+
+		let first_addr =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
+		let second_addr =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
+		// fund_and_sync confirms with 6 blocks so a later 2-block invalidate keeps the 100k UTXO.
+		fund_and_sync(&bitcoind, &electrsd, &node, first_addr, 100_000).await;
+		let balance_before = node
+			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+			.unwrap()
+			.total_sats;
+		assert!(balance_before >= 99_000);
+
+		let height_before =
+			bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u32;
+		let tip_before = bitcoind
+			.client
+			.get_block_hash(height_before as u64)
+			.expect("tip hash")
+			.block_hash()
+			.expect("tip hash present");
+		node.stop().unwrap();
+		drop(node);
+
+		// Restart without the derived account so only the primary advances through the reorg.
+		let mut config2 = node_config(AddressType::NativeSegwit, vec![]);
+		config2.store_type = crate::common::TestStoreType::Sqlite;
+		config2.node_config.storage_dir_path = storage_path.clone();
+		let node2 = setup_node(&chain_source, config2, Some(seed.to_vec()));
+		node2.sync_wallets().unwrap();
+
+		invalidate_blocks(&bitcoind.client, 2);
+		distribute_funds_unconfirmed(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![second_addr],
+			Amount::from_sat(70_000),
+		)
+		.await;
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 2).await;
+		let height_after =
+			bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u32;
+		let tip_after = bitcoind
+			.client
+			.get_block_hash(height_after as u64)
+			.expect("tip hash")
+			.block_hash()
+			.expect("tip hash present");
+		assert_eq!(height_after, height_before, "replacement chain must keep tip height");
+		assert_ne!(tip_before, tip_after, "replacement chain must change tip hash");
+		node2.sync_wallets().unwrap();
+		node2.stop().unwrap();
+		drop(node2);
+
+		// Re-add account 1 while primary sits on the canonical equal-height tip. Catch-up must
+		// start from account 1's stale checkpoint (not the primary tip) so replacement funds apply.
+		let mut config3 = node_config(AddressType::NativeSegwit, vec![]);
+		config3.store_type = crate::common::TestStoreType::Sqlite;
+		config3.node_config.storage_dir_path = storage_path;
+		let node3 = setup_node(&chain_source, config3, Some(seed.to_vec()));
+		node3.sync_wallets().unwrap();
+		node3.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+		node3.sync_wallets().expect("equal-height reorg catch-up must replay replacement blocks");
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
+		node3.sync_wallets().unwrap();
+
+		let balance_after = node3
+			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+			.unwrap()
+			.total_sats;
+		assert!(
+			balance_after >= balance_before + 69_000,
+			"derived account must recover persisted funds and equal-height replacement payment, before={}, after={}",
 			balance_before,
 			balance_after
 		);

@@ -218,6 +218,18 @@ impl Wallet {
 		BestBlock { block_hash, height }
 	}
 
+	/// Tips of every loaded on-chain wallet, used by Bitcoind to catch up stale or forked accounts
+	/// from their individual checkpoints instead of a single aggregate cursor.
+	pub(crate) fn chain_tips(&self) -> Vec<BestBlock> {
+		self.inner
+			.lock()
+			.unwrap()
+			.chain_tips()
+			.into_iter()
+			.map(|(block_hash, height)| BestBlock { block_hash, height })
+			.collect()
+	}
+
 	// Get a drain script for change outputs.
 	pub(crate) fn get_drain_script(&self) -> Result<ScriptBuf, Error> {
 		let locked_wallet = self.inner.lock().unwrap();
