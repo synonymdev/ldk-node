@@ -383,16 +383,39 @@ where
 
 	// ─── Chain Tip ──────────────────────────────────────────────────────
 
-	/// The latest checkpoint with the lowest height across all wallets, returned as
-	/// `(block_hash, height)`.
+	/// The oldest wallet tip across loaded wallets, returned as `(block_hash, height)`.
 	///
 	/// Using the oldest tip lets Bitcoind Listen catch up wallets that were re-loaded below the
 	/// primary tip (e.g. derived accounts re-registered after a restart).
+	///
+	/// When multiple wallets share that minimum height but disagree on the hash (fork), prefer the
+	/// primary tip if it is among them; otherwise pick the lexicographically smallest hash for a
+	/// stable cursor.
 	pub fn current_best_block(&self) -> (BlockHash, u32) {
+		let mut min_height = None;
+		for wallet in self.wallets.values() {
+			let height = wallet.latest_checkpoint().height();
+			min_height = Some(match min_height {
+				Some(current) if current <= height => current,
+				_ => height,
+			});
+		}
+		let Some(min_height) = min_height else {
+			let checkpoint = self.primary_wallet().latest_checkpoint();
+			return (checkpoint.hash(), checkpoint.height());
+		};
+
+		if let Some(primary_cp) = self.wallets.get(&self.primary).map(|w| w.latest_checkpoint()) {
+			if primary_cp.height() == min_height {
+				return (primary_cp.hash(), primary_cp.height());
+			}
+		}
+
 		self.wallets
 			.values()
 			.map(|wallet| wallet.latest_checkpoint())
-			.min_by_key(|checkpoint| checkpoint.height())
+			.filter(|checkpoint| checkpoint.height() == min_height)
+			.min_by_key(|checkpoint| checkpoint.hash().to_byte_array())
 			.map(|checkpoint| (checkpoint.hash(), checkpoint.height()))
 			.unwrap_or_else(|| {
 				let checkpoint = self.primary_wallet().latest_checkpoint();
@@ -681,14 +704,18 @@ where
 
 	/// Apply a connected block to wallets that still need it, then persist.
 	///
-	/// Wallets whose tip is already at or above `height` are skipped. This matters when
-	/// [`Self::current_best_block`] returns the oldest tip among loaded wallets (e.g. a
-	/// re-registered derived account below the primary tip): Bitcoind replays the gap to the
-	/// aggregate, and BDK rejects applying those historical blocks to wallets that are already
-	/// ahead.
+	/// A wallet is skipped only when it already contains this **exact** block hash at `height`.
+	/// That allows linear catch-up from an older sibling tip without re-applying history to wallets
+	/// already ahead, while still applying same-height reorg replacements (different hash). The
+	/// node wallet's `Listen::blocks_disconnected` is intentionally a no-op, so BDK must receive
+	/// replacement blocks through `apply_block`.
+	///
+	/// If apply previously succeeded but persist failed, the in-memory tip already has the block;
+	/// we still attempt `persist` on that skip path so staged changes are not stranded.
 	///
 	/// Returns the set of all transaction IDs across all wallets.
 	pub fn apply_block(&mut self, block: &Block, height: u32) -> Result<HashSet<Txid>, Error> {
+		let block_hash = block.block_hash();
 		let pre_checkpoint = self.primary_wallet().latest_checkpoint();
 		if height > 0
 			&& (pre_checkpoint.height() != height - 1
@@ -698,17 +725,32 @@ where
 		}
 
 		for (key, wallet) in self.wallets.iter_mut() {
-			let tip_height = wallet.latest_checkpoint().height();
-			if tip_height >= height {
+			let tip = wallet.latest_checkpoint();
+			let already_has_block =
+				tip.get(height).map(|checkpoint| checkpoint.hash() == block_hash).unwrap_or(false);
+			if already_has_block {
+				// Persist any changeset left from a prior apply that failed to persist.
+				if let Some(persister) = self.persisters.get_mut(key) {
+					wallet.persist(persister).map_err(|e| {
+						log::error!(
+							"Failed to persist wallet {:?} after recognizing block {}: {}",
+							key,
+							block_hash,
+							e
+						);
+						Error::PersistenceFailed
+					})?;
+				}
 				continue;
 			}
 
 			wallet.apply_block(block, height).map_err(|e| {
 				log::error!(
-					"Failed to apply connected block at height {} to wallet {:?} (tip {}): {}",
+					"Failed to apply connected block {} at height {} to wallet {:?} (tip {}): {}",
+					block_hash,
 					height,
 					key,
-					tip_height,
+					tip.height(),
 					e
 				);
 				Error::WalletOperationFailed
@@ -1927,7 +1969,7 @@ mod tests {
 		}
 	}
 
-	fn regtest_child_block(prev: &Block) -> Block {
+	fn regtest_child_block(prev: &Block, distinct: u8) -> Block {
 		use bitcoin::block::Header;
 		use bitcoin::blockdata::locktime::absolute::LockTime;
 		use bitcoin::hashes::Hash as _;
@@ -1938,13 +1980,13 @@ mod tests {
 			lock_time: LockTime::ZERO,
 			input: vec![TxIn {
 				previous_output: OutPoint::null(),
-				script_sig: ScriptBuf::new(),
+				script_sig: ScriptBuf::builder().push_int(distinct as i64).into_script(),
 				sequence: Sequence::MAX,
 				witness: Witness::new(),
 			}],
 			output: vec![TxOut {
 				value: Amount::from_sat(50_0000_0000),
-				script_pubkey: ScriptBuf::new_op_return(&[]),
+				script_pubkey: ScriptBuf::new_op_return([distinct]),
 			}],
 		};
 		let merkle_root = TxMerkleNode::from_byte_array(coinbase.compute_txid().to_byte_array());
@@ -1955,7 +1997,7 @@ mod tests {
 				merkle_root,
 				time: prev.header.time.saturating_add(1),
 				bits: prev.header.bits,
-				nonce: 0,
+				nonce: distinct as u32,
 			},
 			txdata: vec![coinbase],
 		}
@@ -1969,9 +2011,9 @@ mod tests {
 		let mut primary = create_empty_wallet(&mut primary_persister);
 		let genesis = genesis_block(Network::Regtest);
 		primary.apply_block(&genesis, 0).unwrap();
-		let block1 = regtest_child_block(&genesis);
+		let block1 = regtest_child_block(&genesis, 1);
 		primary.apply_block(&block1, 1).unwrap();
-		let block2 = regtest_child_block(&block1);
+		let block2 = regtest_child_block(&block1, 1);
 		primary.apply_block(&block2, 2).unwrap();
 		assert_eq!(primary.latest_checkpoint().height(), 2);
 
@@ -1993,5 +2035,78 @@ mod tests {
 		assert_eq!(agg.current_best_block().1, 1);
 		agg.apply_block(&block2, 2).expect("catch-up must bring the lagging wallet to tip");
 		assert_eq!(agg.current_best_block().1, 2);
+	}
+
+	#[test]
+	fn apply_block_applies_same_height_reorg_replacement_when_tip_ahead() {
+		use bitcoin::blockdata::constants::genesis_block;
+
+		let mut primary_persister = NoopPersister;
+		let mut primary = create_empty_wallet(&mut primary_persister);
+		let mut secondary_persister = NoopPersister;
+		let mut secondary = create_empty_wallet(&mut secondary_persister);
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+		secondary.apply_block(&genesis, 0).unwrap();
+
+		let block1_a = regtest_child_block(&genesis, 1);
+		let block2_a = regtest_child_block(&block1_a, 1);
+		primary.apply_block(&block1_a, 1).unwrap();
+		primary.apply_block(&block2_a, 2).unwrap();
+		secondary.apply_block(&block1_a, 1).unwrap();
+		secondary.apply_block(&block2_a, 2).unwrap();
+
+		let mut agg = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		assert_eq!(agg.current_best_block().1, 2);
+
+		// Height-only skipping would ignore this replacement because tip_height (2) >= 1.
+		let block1_b = regtest_child_block(&genesis, 2);
+		assert_ne!(block1_a.block_hash(), block1_b.block_hash());
+		agg.apply_block(&block1_b, 1).expect("reorg replacement must be applied");
+
+		for key in [0u8, 1u8] {
+			let tip = agg.wallet(&key).unwrap().latest_checkpoint();
+			assert_eq!(tip.height(), 1, "wallet {:?} must reorg to replacement height", key);
+			assert_eq!(
+				tip.hash(),
+				block1_b.block_hash(),
+				"wallet {:?} must adopt replacement hash",
+				key
+			);
+		}
+	}
+
+	#[test]
+	fn current_best_block_prefers_primary_on_equal_height_fork() {
+		use bitcoin::blockdata::constants::genesis_block;
+
+		let mut primary_persister = NoopPersister;
+		let mut primary = create_empty_wallet(&mut primary_persister);
+		let mut secondary_persister = NoopPersister;
+		let mut secondary = create_empty_wallet(&mut secondary_persister);
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+		secondary.apply_block(&genesis, 0).unwrap();
+
+		let block1_a = regtest_child_block(&genesis, 1);
+		let block1_b = regtest_child_block(&genesis, 2);
+		assert_ne!(block1_a.block_hash(), block1_b.block_hash());
+		primary.apply_block(&block1_a, 1).unwrap();
+		secondary.apply_block(&block1_b, 1).unwrap();
+
+		let agg = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		let (hash, height) = agg.current_best_block();
+		assert_eq!(height, 1);
+		assert_eq!(hash, block1_a.block_hash(), "equal-height fork must prefer primary tip");
 	}
 }

@@ -3643,41 +3643,55 @@ mod derived_accounts {
 			.iter()
 			.find(|output| output.value == Amount::from_sat(150_000))
 			.expect("channel funding output");
-		let change_output = funding_tx
+		let non_channel_outputs: Vec<_> = funding_tx
 			.output
 			.iter()
-			.find(|output| output.value != Amount::from_sat(150_000))
-			.expect("change output");
+			.filter(|output| output.value != Amount::from_sat(150_000))
+			.collect();
 		assert!(
-			change_output.script_pubkey.is_p2wpkh(),
+			!non_channel_outputs.is_empty(),
+			"funding transaction must include at least one non-channel output"
+		);
+		assert!(
+			non_channel_outputs.iter().all(|output| output.script_pubkey.is_p2wpkh()),
 			"Legacy-primary funding must change to account-0 native segwit"
 		);
-		assert_ne!(
-			change_output.script_pubkey, channel_output.script_pubkey,
+		assert!(
+			non_channel_outputs
+				.iter()
+				.all(|output| output.script_pubkey != channel_output.script_pubkey),
 			"change must be distinct from the channel output"
 		);
 
-		let mut change_on_account_zero = false;
-		for index in 0..20 {
-			let info = node_a
-				.onchain_payment()
-				.address_info_for_type_at_index(
-					AddressType::NativeSegwit,
-					KeychainKind::Internal,
-					index,
-				)
-				.unwrap();
-			if info.address.script_pubkey() == change_output.script_pubkey {
-				change_on_account_zero = true;
-				break;
+		let script_on_account_zero = |script: &bitcoin::Script| -> bool {
+			for keychain in [KeychainKind::External, KeychainKind::Internal] {
+				for index in 0..20 {
+					let info = node_a
+						.onchain_payment()
+						.address_info_for_type_at_index(AddressType::NativeSegwit, keychain, index)
+						.unwrap();
+					if info.address.script_pubkey() == *script {
+						return true;
+					}
+				}
 			}
-		}
-		assert!(
-			change_on_account_zero,
-			"change output must belong to account-0 native segwit internal chain"
-		);
-
-		{
+			false
+		};
+		let script_on_legacy = |script: &bitcoin::Script| -> bool {
+			for keychain in [KeychainKind::External, KeychainKind::Internal] {
+				for index in 0..20 {
+					let info = node_a
+						.onchain_payment()
+						.address_info_for_type_at_index(AddressType::Legacy, keychain, index)
+						.unwrap();
+					if info.address.script_pubkey() == *script {
+						return true;
+					}
+				}
+			}
+			false
+		};
+		let script_on_derived = |script: &bitcoin::Script| -> bool {
 			use std::str::FromStr;
 
 			use bitcoin::bip32::{ChildNumber, Xpub};
@@ -3685,26 +3699,46 @@ mod derived_accounts {
 			use bitcoin::{Address, CompressedPublicKey, Network};
 
 			let account_xpub = Xpub::from_str(&xpub).unwrap();
-			for index in 0..20 {
-				let child = account_xpub
-					.derive_pub(
-						&Secp256k1::new(),
-						&[
-							ChildNumber::from_normal_idx(1).unwrap(),
-							ChildNumber::from_normal_idx(index).unwrap(),
-						],
-					)
-					.unwrap();
-				let derived_internal =
-					Address::p2wpkh(&CompressedPublicKey(child.public_key), Network::Regtest);
-				assert_ne!(
-					derived_internal.script_pubkey(),
-					change_output.script_pubkey,
-					"change must not land on derived account internal index {}",
-					index
-				);
+			for chain in [0u32, 1u32] {
+				for index in 0..20 {
+					let child = account_xpub
+						.derive_pub(
+							&Secp256k1::new(),
+							&[
+								ChildNumber::from_normal_idx(chain).unwrap(),
+								ChildNumber::from_normal_idx(index).unwrap(),
+							],
+						)
+						.unwrap();
+					let derived =
+						Address::p2wpkh(&CompressedPublicKey(child.public_key), Network::Regtest);
+					if derived.script_pubkey() == *script {
+						return true;
+					}
+				}
+			}
+			false
+		};
+
+		let mut account_zero_owned = 0usize;
+		for output in &non_channel_outputs {
+			assert!(
+				!script_on_derived(output.script_pubkey.as_script()),
+				"wallet-owned non-channel output must not belong to derived account 1"
+			);
+			assert!(
+				!script_on_legacy(output.script_pubkey.as_script()),
+				"wallet-owned non-channel output must not belong to Legacy account 0"
+			);
+			if script_on_account_zero(output.script_pubkey.as_script()) {
+				account_zero_owned += 1;
 			}
 		}
+		assert_eq!(
+			account_zero_owned,
+			non_channel_outputs.len(),
+			"every wallet-owned non-channel output must belong to account-0 native segwit"
+		);
 
 		confirm_and_sync(&bitcoind, &electrsd, 6, &[&node_a, &node_b]).await;
 
@@ -3953,8 +3987,21 @@ mod derived_accounts {
 		assert!(!node3.list_onchain_wallet_accounts().iter().any(|a| a.account_index == 1));
 
 		node3.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+		let tip_before_catch_up = node3.status().current_best_block.height;
 		node3.sync_wallets().expect("bitcoind catch-up must not fail when primary is ahead");
 		std::thread::sleep(std::time::Duration::from_secs(2));
+
+		let bitcoind_height =
+			bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u32;
+		assert!(
+			node3.status().current_best_block.height >= tip_before_catch_up,
+			"wallet-only catch-up must not rewind the shared Lightning tip"
+		);
+		assert_eq!(
+			node3.status().current_best_block.height,
+			bitcoind_height,
+			"combined poll after wallet-only catch-up must advance Lightning to Bitcoind tip"
+		);
 
 		let balance_after = node3
 			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
@@ -3968,6 +4015,87 @@ mod derived_accounts {
 		);
 
 		node3.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_bitcoind_equal_height_reorg_updates_primary_and_derived() {
+		use bitcoin::Amount;
+
+		use crate::common::{
+			generate_blocks_and_wait, invalidate_blocks, premine_and_distribute_funds,
+		};
+
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::BitcoindRpcSync(&bitcoind);
+
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+
+		let primary_addr = node.onchain_payment().new_address().unwrap();
+		let derived_addr =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
+		premine_and_distribute_funds(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![primary_addr, derived_addr],
+			Amount::from_sat(100_000),
+		)
+		.await;
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
+		node.sync_wallets().unwrap();
+
+		let primary_before =
+			node.get_balance_for_address_type(AddressType::NativeSegwit).unwrap().total_sats;
+		let derived_before = node
+			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+			.unwrap()
+			.total_sats;
+		assert!(primary_before >= 99_000);
+		assert!(derived_before >= 99_000);
+
+		let height_before =
+			bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u32;
+		let tip_before = bitcoind
+			.client
+			.get_block_hash(height_before as u64)
+			.expect("tip hash")
+			.block_hash()
+			.expect("tip hash present");
+
+		// Two-block fork: invalidate and replace so same heights get new hashes.
+		invalidate_blocks(&bitcoind.client, 2);
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 2).await;
+		let height_after =
+			bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u32;
+		let tip_after = bitcoind
+			.client
+			.get_block_hash(height_after as u64)
+			.expect("tip hash")
+			.block_hash()
+			.expect("tip hash present");
+		assert_ne!(tip_before, tip_after, "bitcoind must be on a replacement tip");
+		assert_eq!(height_after, height_before, "reorg should preserve tip height");
+
+		node.sync_wallets().expect("bitcoind reorg sync must apply replacement blocks");
+		assert_eq!(node.status().current_best_block.height, height_after);
+		assert_eq!(
+			node.status().current_best_block.block_hash,
+			tip_after,
+			"Lightning tip must follow the replacement chain"
+		);
+
+		let primary_after =
+			node.get_balance_for_address_type(AddressType::NativeSegwit).unwrap().total_sats;
+		let derived_after = node
+			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+			.unwrap()
+			.total_sats;
+		assert_eq!(primary_after, primary_before, "primary funds must survive equal-height reorg");
+		assert_eq!(derived_after, derived_before, "derived funds must survive equal-height reorg");
+
+		node.stop().unwrap();
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]

@@ -394,25 +394,31 @@ impl BitcoindChainSource {
 		chain_monitor: Arc<ChainMonitor>, output_sweeper: Arc<Sweeper>,
 	) -> Result<(), Error> {
 		let latest_chain_tip_opt = self.latest_chain_tip.read().unwrap().clone();
-		let chain_tip =
+		// Shared cursor for combined Listen updates (wallet + Lightning). Must not jump ahead of
+		// ChannelManager/ChainMonitor/Sweeper when catching up a lagging on-chain wallet alone.
+		let shared_chain_tip =
 			if let Some(tip) = latest_chain_tip_opt { tip } else { self.poll_chain_tip().await? };
 
 		// When a lagging wallet is (re)loaded below the known chain tip (e.g. a derived account
 		// re-registered after the primary has advanced), tip polling alone will not replay the
-		// gap. Catch the on-chain aggregate up from its oldest wallet tip first. Wallets already
-		// ahead skip each replayed height in `AggregateWallet::apply_block`.
+		// gap. Catch the on-chain aggregate up from its oldest wallet tip first. Wallets that
+		// already contain each replayed block skip it in `AggregateWallet::apply_block`.
+		//
+		// Intentionally do **not** publish the wallet-only sync tip into `latest_chain_tip`: if
+		// Bitcoind advanced past `shared_chain_tip`, publishing that newer tip would make the
+		// combined poll below start too far ahead and Lightning listeners would miss blocks.
 		let onchain_best = onchain_wallet.current_best_block();
-		if onchain_best.height < chain_tip.height {
+		if onchain_best.height < shared_chain_tip.height {
 			log_info!(
 				self.logger,
-				"On-chain wallet tip {} is behind chain tip {}; synchronizing the gap",
+				"On-chain wallet tip {} is behind shared chain tip {}; synchronizing the wallet gap",
 				onchain_best.height,
-				chain_tip.height
+				shared_chain_tip.height
 			);
 			let mut locked_header_cache = self.header_cache.lock().await;
 			let chain_listeners =
 				vec![(onchain_best.block_hash, &*onchain_wallet as &(dyn Listen + Send + Sync))];
-			match synchronize_listeners(
+			if let Err(e) = synchronize_listeners(
 				self.api_client.as_ref(),
 				self.config.network,
 				&mut *locked_header_cache,
@@ -420,21 +426,14 @@ impl BitcoindChainSource {
 			)
 			.await
 			{
-				Ok(synced_tip) => {
-					*self.latest_chain_tip.write().unwrap() = Some(synced_tip);
-				},
-				Err(e) => {
-					log_error!(
-						self.logger,
-						"Failed to synchronize lagging on-chain wallet tip: {:?}",
-						e
-					);
-					return Err(Error::TxSyncFailed);
-				},
+				log_error!(
+					self.logger,
+					"Failed to synchronize lagging on-chain wallet tip: {:?}",
+					e
+				);
+				return Err(Error::TxSyncFailed);
 			}
 		}
-
-		let chain_tip = self.latest_chain_tip.read().unwrap().clone().unwrap_or(chain_tip);
 
 		let mut locked_header_cache = self.header_cache.lock().await;
 		let chain_poller = ChainPoller::new(Arc::clone(&self.api_client), self.config.network);
@@ -444,8 +443,12 @@ impl BitcoindChainSource {
 			chain_monitor: Arc::clone(&chain_monitor),
 			output_sweeper,
 		};
-		let mut spv_client =
-			SpvClient::new(chain_tip, chain_poller, &mut *locked_header_cache, &chain_listener);
+		let mut spv_client = SpvClient::new(
+			shared_chain_tip,
+			chain_poller,
+			&mut *locked_header_cache,
+			&chain_listener,
+		);
 
 		let now = SystemTime::now();
 		match spv_client.poll_best_tip().await {
