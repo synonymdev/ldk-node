@@ -679,7 +679,13 @@ where
 		Ok(())
 	}
 
-	/// Apply a connected block to all wallets and persist.
+	/// Apply a connected block to wallets that still need it, then persist.
+	///
+	/// Wallets whose tip is already at or above `height` are skipped. This matters when
+	/// [`Self::current_best_block`] returns the oldest tip among loaded wallets (e.g. a
+	/// re-registered derived account below the primary tip): Bitcoind replays the gap to the
+	/// aggregate, and BDK rejects applying those historical blocks to wallets that are already
+	/// ahead.
 	///
 	/// Returns the set of all transaction IDs across all wallets.
 	pub fn apply_block(&mut self, block: &Block, height: u32) -> Result<HashSet<Txid>, Error> {
@@ -692,8 +698,19 @@ where
 		}
 
 		for (key, wallet) in self.wallets.iter_mut() {
+			let tip_height = wallet.latest_checkpoint().height();
+			if tip_height >= height {
+				continue;
+			}
+
 			wallet.apply_block(block, height).map_err(|e| {
-				log::error!("Failed to apply connected block to wallet {:?}: {}", key, e);
+				log::error!(
+					"Failed to apply connected block at height {} to wallet {:?} (tip {}): {}",
+					height,
+					key,
+					tip_height,
+					e
+				);
 				Error::WalletOperationFailed
 			})?;
 
@@ -1451,7 +1468,9 @@ mod tests {
 	use bdk_wallet::template::Bip84;
 	use bdk_wallet::{ChangeSet, KeychainKind, PersistedWallet, Wallet, WalletPersister};
 	use bitcoin::bip32::Xpriv;
-	use bitcoin::{Amount, FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid};
+	use bitcoin::{
+		Amount, Block, FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid,
+	};
 
 	use super::*;
 
@@ -1906,5 +1925,73 @@ mod tests {
 				"Real tx should reuse the same change address as the cancelled dry-run"
 			);
 		}
+	}
+
+	fn regtest_child_block(prev: &Block) -> Block {
+		use bitcoin::block::Header;
+		use bitcoin::blockdata::locktime::absolute::LockTime;
+		use bitcoin::hashes::Hash as _;
+		use bitcoin::{Sequence, TxMerkleNode, Witness};
+
+		let coinbase = Transaction {
+			version: bitcoin::transaction::Version::ONE,
+			lock_time: LockTime::ZERO,
+			input: vec![TxIn {
+				previous_output: OutPoint::null(),
+				script_sig: ScriptBuf::new(),
+				sequence: Sequence::MAX,
+				witness: Witness::new(),
+			}],
+			output: vec![TxOut {
+				value: Amount::from_sat(50_0000_0000),
+				script_pubkey: ScriptBuf::new_op_return(&[]),
+			}],
+		};
+		let merkle_root = TxMerkleNode::from_byte_array(coinbase.compute_txid().to_byte_array());
+		Block {
+			header: Header {
+				version: bitcoin::block::Version::ONE,
+				prev_blockhash: prev.block_hash(),
+				merkle_root,
+				time: prev.header.time.saturating_add(1),
+				bits: prev.header.bits,
+				nonce: 0,
+			},
+			txdata: vec![coinbase],
+		}
+	}
+
+	#[test]
+	fn apply_block_skips_wallets_already_ahead_during_catch_up() {
+		use bitcoin::blockdata::constants::genesis_block;
+
+		let mut primary_persister = NoopPersister;
+		let mut primary = create_empty_wallet(&mut primary_persister);
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+		let block1 = regtest_child_block(&genesis);
+		primary.apply_block(&block1, 1).unwrap();
+		let block2 = regtest_child_block(&block1);
+		primary.apply_block(&block2, 2).unwrap();
+		assert_eq!(primary.latest_checkpoint().height(), 2);
+
+		let mut secondary_persister = NoopPersister;
+		let mut secondary = create_empty_wallet(&mut secondary_persister);
+		secondary.apply_block(&genesis, 0).unwrap();
+		assert_eq!(secondary.latest_checkpoint().height(), 0);
+
+		let mut agg = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		assert_eq!(agg.current_best_block().1, 0);
+
+		// Replaying the gap must not fail on the primary wallet that is already at height 2.
+		agg.apply_block(&block1, 1).expect("catch-up must skip wallets already ahead");
+		assert_eq!(agg.current_best_block().1, 1);
+		agg.apply_block(&block2, 2).expect("catch-up must bring the lagging wallet to tip");
+		assert_eq!(agg.current_best_block().1, 2);
 	}
 }

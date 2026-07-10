@@ -3592,6 +3592,9 @@ mod derived_accounts {
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 	async fn test_legacy_primary_funding_change_never_uses_derived_account() {
+		use bitcoin::Amount;
+		use ldk_node::payment::KeychainKind;
+
 		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 		let chain_source = TestChainSource::Esplora(&electrsd);
 
@@ -3601,7 +3604,7 @@ mod derived_accounts {
 		let node_b = setup_node(&chain_source, config_b, None);
 
 		let xpub = node_a.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
-		node_a.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+		node_a.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub.clone()).unwrap();
 
 		let legacy_addr = node_a.onchain_payment().new_address().unwrap();
 		let native0_addr =
@@ -3620,6 +3623,10 @@ mod derived_accounts {
 		fund_peer_node_and_sync(&bitcoind, &electrsd, &node_b, addr_b, CHANNEL_PEER_FUNDING_SATS)
 			.await;
 
+		let legacy_before =
+			node_a.get_balance_for_address_type(AddressType::Legacy).unwrap().total_sats;
+		let native0_before =
+			node_a.get_balance_for_address_type(AddressType::NativeSegwit).unwrap().total_sats;
 		let derived_before = node_a
 			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
 			.unwrap()
@@ -3631,13 +3638,92 @@ mod derived_accounts {
 			assert!(!input.witness.is_empty(), "funding inputs must be SegWit");
 		}
 
+		let channel_output = funding_tx
+			.output
+			.iter()
+			.find(|output| output.value == Amount::from_sat(150_000))
+			.expect("channel funding output");
+		let change_output = funding_tx
+			.output
+			.iter()
+			.find(|output| output.value != Amount::from_sat(150_000))
+			.expect("change output");
+		assert!(
+			change_output.script_pubkey.is_p2wpkh(),
+			"Legacy-primary funding must change to account-0 native segwit"
+		);
+		assert_ne!(
+			change_output.script_pubkey, channel_output.script_pubkey,
+			"change must be distinct from the channel output"
+		);
+
+		let mut change_on_account_zero = false;
+		for index in 0..20 {
+			let info = node_a
+				.onchain_payment()
+				.address_info_for_type_at_index(
+					AddressType::NativeSegwit,
+					KeychainKind::Internal,
+					index,
+				)
+				.unwrap();
+			if info.address.script_pubkey() == change_output.script_pubkey {
+				change_on_account_zero = true;
+				break;
+			}
+		}
+		assert!(
+			change_on_account_zero,
+			"change output must belong to account-0 native segwit internal chain"
+		);
+
+		{
+			use std::str::FromStr;
+
+			use bitcoin::bip32::{ChildNumber, Xpub};
+			use bitcoin::secp256k1::Secp256k1;
+			use bitcoin::{Address, CompressedPublicKey, Network};
+
+			let account_xpub = Xpub::from_str(&xpub).unwrap();
+			for index in 0..20 {
+				let child = account_xpub
+					.derive_pub(
+						&Secp256k1::new(),
+						&[
+							ChildNumber::from_normal_idx(1).unwrap(),
+							ChildNumber::from_normal_idx(index).unwrap(),
+						],
+					)
+					.unwrap();
+				let derived_internal =
+					Address::p2wpkh(&CompressedPublicKey(child.public_key), Network::Regtest);
+				assert_ne!(
+					derived_internal.script_pubkey(),
+					change_output.script_pubkey,
+					"change must not land on derived account internal index {}",
+					index
+				);
+			}
+		}
+
 		confirm_and_sync(&bitcoind, &electrsd, 6, &[&node_a, &node_b]).await;
 
+		let legacy_after =
+			node_a.get_balance_for_address_type(AddressType::Legacy).unwrap().total_sats;
+		let native0_after =
+			node_a.get_balance_for_address_type(AddressType::NativeSegwit).unwrap().total_sats;
 		let derived_after = node_a
 			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
 			.unwrap()
 			.total_sats;
-		assert!(derived_after <= derived_before);
+
+		assert_eq!(legacy_after, legacy_before, "Legacy wallet must not fund or receive change");
+		assert!(derived_after < derived_before, "derived inputs should be spent");
+		assert!(
+			native0_after + derived_after < native0_before + derived_before,
+			"channel value must leave the combined SegWit wallets"
+		);
+		assert!(native0_after > 0, "account-0 native segwit must retain the change output");
 		assert!(!node_a.list_channels().is_empty());
 
 		node_a.stop().unwrap();
@@ -3804,6 +3890,74 @@ mod derived_accounts {
 			)
 			.unwrap();
 		Address::p2wpkh(&CompressedPublicKey(child.public_key), Network::Regtest)
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_bitcoind_readd_derived_catches_up_gap_while_primary_ahead() {
+		use bitcoin::Amount;
+
+		use crate::common::{generate_blocks_and_wait, premine_and_distribute_funds};
+
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::BitcoindRpcSync(&bitcoind);
+
+		let mut config = node_config(AddressType::NativeSegwit, vec![]);
+		config.store_type = crate::common::TestStoreType::Sqlite;
+		let storage_path = config.node_config.storage_dir_path.clone();
+		let node = setup_node(&chain_source, config, None);
+		let seed = read_node_seed(&node);
+
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub.clone()).unwrap();
+
+		let first_addr = native_segwit_receive_address_from_xpub(&xpub, 0);
+		fund_and_sync(&bitcoind, &electrsd, &node, first_addr, 100_000).await;
+		let balance_before = node
+			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+			.unwrap()
+			.total_sats;
+		assert!(balance_before >= 99_000);
+
+		node.stop().unwrap();
+		drop(node);
+
+		// Restart without re-registering the derived account so only account 0 advances.
+		let mut config2 = node_config(AddressType::NativeSegwit, vec![]);
+		config2.store_type = crate::common::TestStoreType::Sqlite;
+		config2.node_config.storage_dir_path = storage_path;
+		let node2 = setup_node(&chain_source, config2, Some(seed.to_vec()));
+		node2.sync_wallets().unwrap();
+
+		// Confirm a second payment to the derived account while it is unloaded. These blocks sit
+		// in the gap between the persisted derived tip and the advanced primary tip.
+		let second_addr = native_segwit_receive_address_from_xpub(&xpub, 1);
+		premine_and_distribute_funds(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![second_addr],
+			Amount::from_sat(70_000),
+		)
+		.await;
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+		node2.sync_wallets().unwrap();
+
+		assert!(!node2.list_onchain_wallet_accounts().iter().any(|a| a.account_index == 1));
+		node2.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+		node2.sync_wallets().expect("bitcoind catch-up must not fail when primary is ahead");
+		std::thread::sleep(std::time::Duration::from_secs(2));
+
+		let balance_after = node2
+			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+			.unwrap()
+			.total_sats;
+		assert!(
+			balance_after >= balance_before + 69_000,
+			"derived account must recover persisted funds and gap payments, before={}, after={}",
+			balance_before,
+			balance_after
+		);
+
+		node2.stop().unwrap();
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
