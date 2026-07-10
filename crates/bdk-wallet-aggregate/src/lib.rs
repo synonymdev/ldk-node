@@ -424,10 +424,11 @@ where
 		false
 	}
 
-	/// Replace a sparse tip at `height` with `block` by connecting it to genesis.
+	/// Replace a sparse tip at `height` with canonical `block` via [`Wallet::apply_block_connected_to`].
 	///
-	/// This invalidates a stale sparse tip in one update (BDK requires the tip height to appear in
-	/// the update to drop it) and applies the replacement block's transactions.
+	/// Connecting through genesis drops the stale sparse tip (BDK requires the tip height to appear
+	/// in the update) and installs the replacement tip plus its header parent, so subsequent
+	/// catch-up can apply or exact-hash-skip without `CannotConnect`.
 	pub fn rebase_sparse_tip_to_block(
 		&mut self, key: &K, block: &Block, height: u32,
 	) -> Result<(), Error> {
@@ -2312,6 +2313,55 @@ mod tests {
 		agg.apply_block_to(&1u8, &block1, 1).expect("targeted apply");
 		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().height(), 0);
 		assert_eq!(agg.wallet(&1u8).unwrap().latest_checkpoint().height(), 1);
+	}
+
+	#[test]
+	fn per_wallet_apply_reconciles_lagging_and_sparse_stale_tips() {
+		use bdk_chain::BlockId;
+		use bdk_wallet::Update;
+		use bitcoin::blockdata::constants::genesis_block;
+
+		// Mirrors Bitcoind catch-up with distinct divergent tips: wallet 0 one block behind on the
+		// canonical chain, wallet 1 sparse on a stale tip that must be rebased before replacement.
+		let mut primary_persister = NoopPersister;
+		let mut primary = create_empty_wallet(&mut primary_persister);
+		let mut secondary_persister = NoopPersister;
+		let mut secondary = create_empty_wallet(&mut secondary_persister);
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+		secondary.apply_block(&genesis, 0).unwrap();
+
+		let block1_a = regtest_child_block(&genesis, 1);
+		let block2_a = regtest_child_block(&block1_a, 1);
+		let block1_b = regtest_child_block(&genesis, 2);
+		let block2_b = regtest_child_block(&block1_b, 2);
+		assert_ne!(block2_a.block_hash(), block2_b.block_hash());
+
+		primary.apply_block(&block1_b, 1).unwrap();
+
+		let sparse_stale = BlockId { height: 2, hash: block2_a.block_hash() };
+		let checkpoint = secondary.latest_checkpoint().insert(sparse_stale);
+		secondary.apply_update(Update { chain: Some(checkpoint), ..Default::default() }).unwrap();
+
+		let mut agg = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		assert!(agg.has_sparse_checkpoint_chain(&1u8));
+
+		// A single shared start at wallet 0's tip cannot connect wallet 1's stale sparse tip.
+		assert!(
+			agg.apply_block(&block2_b, 2).is_err(),
+			"aggregate apply from the lagging tip must not be treated as sufficient for a deeper stale fork"
+		);
+
+		agg.rebase_sparse_tip_to_block(&1u8, &block2_b, 2).expect("rebase sparse stale tip");
+		agg.apply_block_to(&0u8, &block2_b, 2).expect("lagging wallet catches up from its tip");
+		agg.apply_block_to(&1u8, &block2_b, 2).expect("rebased wallet exact-hash skips tip");
+		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().hash(), block2_b.block_hash());
+		assert_eq!(agg.wallet(&1u8).unwrap().latest_checkpoint().hash(), block2_b.block_hash());
 	}
 
 	#[test]

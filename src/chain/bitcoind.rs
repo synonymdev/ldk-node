@@ -154,6 +154,52 @@ impl BitcoindChainSource {
 			let channel_manager_best_block_hash = channel_manager.current_best_block().block_hash;
 			let sweeper_best_block_hash = output_sweeper.current_best_block().block_hash;
 
+			// Sparse tips that sit on a stale hash must be rebased before per-account listeners
+			// walk the canonical chain; otherwise intermediate heights are skipped as "ahead"
+			// and the replacement tip fails to connect.
+			let bitcoind_tip = match self.poll_chain_tip().await {
+				Ok(tip) => tip.to_best_block(),
+				Err(e) => {
+					log_error!(
+						self.logger,
+						"Failed to poll Bitcoind tip before initial wallet sync: {:?}. Retrying in {} seconds.",
+						e,
+						backoff
+					);
+					tokio::select! {
+						biased;
+						_ = stop_sync_receiver.changed() => {
+							log_trace!(self.logger, "Stopping initial chain sync.");
+							return;
+						}
+						_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+					}
+					backoff = (backoff * 2).min(MAX_BACKOFF_SECS);
+					continue;
+				},
+			};
+			if let Err(e) = self
+				.rebase_sparse_stale_wallet_tips(Arc::clone(&onchain_wallet), bitcoind_tip)
+				.await
+			{
+				log_error!(
+					self.logger,
+					"Failed to rebase sparse stale wallet tips before initial sync: {:?}. Retrying in {} seconds.",
+					e,
+					backoff
+				);
+				tokio::select! {
+					biased;
+					_ = stop_sync_receiver.changed() => {
+						log_trace!(self.logger, "Stopping initial chain sync.");
+						return;
+					}
+					_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+				}
+				backoff = (backoff * 2).min(MAX_BACKOFF_SECS);
+				continue;
+			}
+
 			// Each on-chain account participates with its own tip so equal-height forks and
 			// differently-lagging wallets are all walked to the canonical tip.
 			let account_tips = onchain_wallet.chain_tips_by_account();

@@ -218,18 +218,6 @@ impl Wallet {
 		BestBlock { block_hash, height }
 	}
 
-	/// Tips of every loaded on-chain wallet, used by Bitcoind to catch up stale or forked accounts
-	/// from their individual checkpoints instead of a single aggregate cursor.
-	pub(crate) fn chain_tips(&self) -> Vec<BestBlock> {
-		self.inner
-			.lock()
-			.unwrap()
-			.chain_tips()
-			.into_iter()
-			.map(|(block_hash, height)| BestBlock { block_hash, height })
-			.collect()
-	}
-
 	/// Per-account chain tips for Bitcoind per-wallet synchronization.
 	pub(crate) fn chain_tips_by_account(&self) -> Vec<(OnchainWalletAccount, BestBlock)> {
 		self.inner
