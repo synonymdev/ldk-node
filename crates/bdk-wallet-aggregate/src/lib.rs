@@ -388,13 +388,136 @@ where
 	/// Bitcoind catch-up should start from each tip that is behind or on a stale fork relative to
 	/// the canonical shared tip, rather than assuming a single aggregate cursor is sufficient.
 	pub fn chain_tips(&self) -> Vec<(BlockHash, u32)> {
+		self.chain_tips_by_key().into_iter().map(|(_, hash, height)| (hash, height)).collect()
+	}
+
+	/// Tips of every loaded wallet paired with their key.
+	pub fn chain_tips_by_key(&self) -> Vec<(K, BlockHash, u32)> {
 		self.wallets
-			.values()
-			.map(|wallet| {
+			.iter()
+			.map(|(key, wallet)| {
 				let checkpoint = wallet.latest_checkpoint();
-				(checkpoint.hash(), checkpoint.height())
+				(*key, checkpoint.hash(), checkpoint.height())
 			})
 			.collect()
+	}
+
+	/// Returns true when the wallet's checkpoint chain has height gaps (e.g. `{genesis, tip}`).
+	///
+	/// Brand-new wallets are initialized this way; a sparse tip that later becomes stale must be
+	/// rebased before intermediate canonical blocks can be applied.
+	pub fn has_sparse_checkpoint_chain(&self, key: &K) -> bool {
+		let Some(wallet) = self.wallets.get(key) else {
+			return false;
+		};
+		let tip = wallet.latest_checkpoint();
+		let mut prev_height = None;
+		for checkpoint in tip.iter() {
+			if let Some(prev) = prev_height {
+				// CheckPoint::iter is descending; a gap means height drops by more than 1.
+				if prev > checkpoint.height() + 1 {
+					return true;
+				}
+			}
+			prev_height = Some(checkpoint.height());
+		}
+		false
+	}
+
+	/// Replace a sparse tip at `height` with `block` by connecting it to genesis.
+	///
+	/// This invalidates a stale sparse tip in one update (BDK requires the tip height to appear in
+	/// the update to drop it) and applies the replacement block's transactions.
+	pub fn rebase_sparse_tip_to_block(
+		&mut self, key: &K, block: &Block, height: u32,
+	) -> Result<(), Error> {
+		use bdk_chain::BlockId;
+
+		let wallet = self.wallets.get_mut(key).ok_or(Error::WalletNotFound)?;
+		let tip = wallet.latest_checkpoint();
+		if tip.height() != height {
+			log::error!(
+				"Refusing sparse rebase for {:?} at height {}: wallet tip is {}",
+				key,
+				height,
+				tip.height()
+			);
+			return Err(Error::WalletOperationFailed);
+		}
+		let genesis = tip.get(0).ok_or(Error::WalletOperationFailed)?;
+		let genesis_id = BlockId { height: 0, hash: genesis.hash() };
+		wallet.apply_block_connected_to(block, height, genesis_id).map_err(|e| {
+			log::error!(
+				"Failed to rebase sparse tip for {:?} to {} at height {}: {}",
+				key,
+				block.block_hash(),
+				height,
+				e
+			);
+			Error::WalletOperationFailed
+		})?;
+		if let Some(persister) = self.persisters.get_mut(key) {
+			wallet.persist(persister).map_err(|e| {
+				log::error!("Failed to persist wallet {:?} after sparse rebase: {}", key, e);
+				Error::PersistenceFailed
+			})?;
+		}
+		Ok(())
+	}
+
+	/// Apply a connected block to a single wallet, then persist.
+	///
+	/// Same skip rules as [`Self::apply_block`], scoped to `key`.
+	pub fn apply_block_to(
+		&mut self, key: &K, block: &Block, height: u32,
+	) -> Result<HashSet<Txid>, Error> {
+		let block_hash = block.block_hash();
+		let wallet = self.wallets.get_mut(key).ok_or(Error::WalletNotFound)?;
+		let tip = wallet.latest_checkpoint();
+		let checkpoint_at_height = tip.get(height);
+		let already_has_block = checkpoint_at_height
+			.as_ref()
+			.map(|checkpoint| checkpoint.hash() == block_hash)
+			.unwrap_or(false);
+		// Sparse ahead on a *canonical* tip: intermediate heights are intentionally absent.
+		// Stale sparse tips must be rebased via [`Self::rebase_sparse_tip_to_block`] before catch-up
+		// replays replacements; once rebased, this skip is safe again.
+		let sparse_ahead = checkpoint_at_height.is_none() && tip.height() > height;
+		if already_has_block || sparse_ahead {
+			if already_has_block {
+				if let Some(persister) = self.persisters.get_mut(key) {
+					wallet.persist(persister).map_err(|e| {
+						log::error!(
+							"Failed to persist wallet {:?} after recognizing block {}: {}",
+							key,
+							block_hash,
+							e
+						);
+						Error::PersistenceFailed
+					})?;
+				}
+			}
+		} else {
+			wallet.apply_block(block, height).map_err(|e| {
+				log::error!(
+					"Failed to apply connected block {} at height {} to wallet {:?} (tip {}): {}",
+					block_hash,
+					height,
+					key,
+					tip.height(),
+					e
+				);
+				Error::WalletOperationFailed
+			})?;
+			if let Some(persister) = self.persisters.get_mut(key) {
+				wallet.persist(persister).map_err(|e| {
+					log::error!("Failed to persist wallet {:?}: {}", key, e);
+					Error::PersistenceFailed
+				})?;
+			}
+		}
+
+		Ok(wallet.transactions().map(|wtx| wtx.tx_node.txid).collect())
 	}
 
 	/// A Listen-oriented aggregate tip: the oldest height across wallets.
@@ -2115,12 +2238,80 @@ mod tests {
 			0u8,
 			vec![(1u8, secondary, secondary_persister)],
 		);
+		assert!(agg.has_sparse_checkpoint_chain(&0u8));
 		agg.apply_block(&block1, 1)
 			.expect("sparse ahead wallet must skip unknown intermediate heights");
 		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().height(), 2);
 		assert_eq!(agg.wallet(&1u8).unwrap().latest_checkpoint().height(), 1);
 		agg.apply_block(&block2, 2).expect("lagging wallet catches up to sparse tip");
 		assert_eq!(agg.current_best_block().1, 2);
+	}
+
+	#[test]
+	fn rebase_sparse_stale_tip_before_canonical_replacement_chain() {
+		use bdk_chain::BlockId;
+		use bdk_wallet::Update;
+		use bitcoin::blockdata::constants::genesis_block;
+
+		let mut primary_persister = NoopPersister;
+		let mut primary = create_empty_wallet(&mut primary_persister);
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+
+		let block1_a = regtest_child_block(&genesis, 1);
+		let block2_a = regtest_child_block(&block1_a, 1);
+		let block1_b = regtest_child_block(&genesis, 2);
+		let block2_b = regtest_child_block(&block1_b, 2);
+		assert_ne!(block2_a.block_hash(), block2_b.block_hash());
+
+		let sparse_stale = BlockId { height: 2, hash: block2_a.block_hash() };
+		let checkpoint = primary.latest_checkpoint().insert(sparse_stale);
+		primary.apply_update(Update { chain: Some(checkpoint), ..Default::default() }).unwrap();
+
+		let mut agg = AggregateWallet::new(primary, primary_persister, 0u8, vec![]);
+		assert!(agg.has_sparse_checkpoint_chain(&0u8));
+
+		// Without rebase, intermediate replacement is skipped and tip replacement fails.
+		agg.apply_block(&block1_b, 1).expect("sparse-ahead skip");
+		assert!(
+			agg.apply_block(&block2_b, 2).is_err(),
+			"stale sparse tip must not accept a conflicting tip block without rebase"
+		);
+
+		agg.rebase_sparse_tip_to_block(&0u8, &block2_b, 2)
+			.expect("sparse stale tip rebases to canonical tip block");
+		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().hash(), block2_b.block_hash());
+		assert_eq!(
+			agg.wallet(&0u8).unwrap().latest_checkpoint().get(1).unwrap().hash(),
+			block1_b.block_hash(),
+			"rebase inserts the canonical parent checkpoint"
+		);
+		agg.apply_block(&block1_b, 1).expect("canonical parent is already present after rebase");
+		agg.apply_block(&block2_b, 2).expect("exact-hash skip after rebase");
+	}
+
+	#[test]
+	fn apply_block_to_updates_only_the_targeted_wallet() {
+		use bitcoin::blockdata::constants::genesis_block;
+
+		let mut primary_persister = NoopPersister;
+		let mut primary = create_empty_wallet(&mut primary_persister);
+		let mut secondary_persister = NoopPersister;
+		let mut secondary = create_empty_wallet(&mut secondary_persister);
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+		secondary.apply_block(&genesis, 0).unwrap();
+
+		let block1 = regtest_child_block(&genesis, 1);
+		let mut agg = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		agg.apply_block_to(&1u8, &block1, 1).expect("targeted apply");
+		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().height(), 0);
+		assert_eq!(agg.wallet(&1u8).unwrap().latest_checkpoint().height(), 1);
 	}
 
 	#[test]

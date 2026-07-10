@@ -12,7 +12,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, FeeRate, Network, Transaction, Txid};
 use lightning::chain::chaininterface::ConfirmationTarget as LdkConfirmationTarget;
 use lightning::chain::{BestBlock, Listen};
@@ -31,7 +30,8 @@ use serde::Serialize;
 
 use super::{periodically_archive_fully_resolved_monitors, WalletSyncStatus};
 use crate::config::{
-	BitcoindRestClientConfig, Config, FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS, TX_BROADCAST_TIMEOUT_SECS,
+	BitcoindRestClientConfig, Config, OnchainWalletAccount, FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS,
+	TX_BROADCAST_TIMEOUT_SECS,
 };
 use crate::fee_estimator::{
 	apply_post_estimation_adjustments, get_all_conf_targets, get_num_block_defaults_for_target,
@@ -153,20 +153,29 @@ impl BitcoindChainSource {
 
 			let channel_manager_best_block_hash = channel_manager.current_best_block().block_hash;
 			let sweeper_best_block_hash = output_sweeper.current_best_block().block_hash;
-			// Start the on-chain aggregate from its oldest/divergent wallet tip so re-loaded
-			// accounts on a stale equal-height fork are included in the initial sync walk.
-			let onchain_wallet_best_block_hash = onchain_wallet
-				.chain_tips()
-				.into_iter()
-				.min_by_key(|tip| (tip.height, tip.block_hash.to_byte_array()))
-				.unwrap_or_else(|| onchain_wallet.current_best_block())
-				.block_hash;
 
-			let mut chain_listeners = vec![
-				(onchain_wallet_best_block_hash, &*onchain_wallet as &(dyn Listen + Send + Sync)),
-				(channel_manager_best_block_hash, &*channel_manager as &(dyn Listen + Send + Sync)),
-				(sweeper_best_block_hash, &*output_sweeper as &(dyn Listen + Send + Sync)),
-			];
+			// Each on-chain account participates with its own tip so equal-height forks and
+			// differently-lagging wallets are all walked to the canonical tip.
+			let account_tips = onchain_wallet.chain_tips_by_account();
+			let account_listeners: Vec<AccountChainListener> = account_tips
+				.iter()
+				.map(|(account, _)| {
+					AccountChainListener::new(Arc::clone(&onchain_wallet), *account)
+				})
+				.collect();
+			let mut chain_listeners: Vec<(BlockHash, &(dyn Listen + Send + Sync))> = account_tips
+				.iter()
+				.zip(account_listeners.iter())
+				.map(|((_, tip), listener)| {
+					(tip.block_hash, listener as &(dyn Listen + Send + Sync))
+				})
+				.collect();
+			chain_listeners.push((
+				channel_manager_best_block_hash,
+				&*channel_manager as &(dyn Listen + Send + Sync),
+			));
+			chain_listeners
+				.push((sweeper_best_block_hash, &*output_sweeper as &(dyn Listen + Send + Sync)));
 
 			// TODO: Eventually we might want to see if we can synchronize `ChannelMonitor`s
 			// before giving them to `ChainMonitor` it the first place. However, this isn't
@@ -198,7 +207,34 @@ impl BitcoindChainSource {
 			.await
 			{
 				Ok(chain_tip) => {
-					{
+					let mut apply_failed = false;
+					for listener in &account_listeners {
+						if let Some(err) = listener.take_error() {
+							log_error!(
+								self.logger,
+								"Per-account wallet sync apply failed for {:?}: {}",
+								listener.account(),
+								err
+							);
+							apply_failed = true;
+						}
+					}
+					if apply_failed {
+						log_error!(
+							self.logger,
+							"Initial chain sync applied headers but failed to update on-chain wallets. Retrying in {} seconds.",
+							backoff
+						);
+						tokio::select! {
+							biased;
+							_ = stop_sync_receiver.changed() => {
+								log_trace!(self.logger, "Stopping initial chain sync.");
+								return;
+							}
+							_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+						}
+						backoff = std::cmp::min(backoff * 2, MAX_BACKOFF_SECS);
+					} else {
 						log_info!(
 							self.logger,
 							"Finished synchronizing listeners in {}ms",
@@ -220,8 +256,8 @@ impl BitcoindChainSource {
 						.unwrap_or_else(|e| {
 							log_error!(self.logger, "Failed to persist node metrics: {}", e);
 						});
+						break;
 					}
-					break;
 				},
 
 				Err(e) => {
@@ -407,39 +443,52 @@ impl BitcoindChainSource {
 		let shared_chain_tip =
 			if let Some(tip) = latest_chain_tip_opt { tip } else { self.poll_chain_tip().await? };
 
-		// When a wallet is (re)loaded on a stale tip — either behind the shared height or on an
-		// equal-height fork after a reorg while unloaded — tip polling alone will not replay the
-		// gap. Catch each divergent on-chain tip up from its own checkpoint first. Wallets that
-		// already contain each replayed block (or that only have a sparse ahead tip) skip it in
-		// `AggregateWallet::apply_block`.
+		// When wallets are (re)loaded on stale tips — behind, ahead, or on an equal-height fork —
+		// tip polling alone will not reconcile them. Rebase any sparse stale tips to the canonical
+		// block at their height, then synchronize **each** divergent account from its own
+		// checkpoint via per-account listeners (a single min tip is not enough when wallets fork
+		// at different depths).
 		//
-		// Intentionally do **not** publish the wallet-only sync tip into `latest_chain_tip`: if
-		// Bitcoind advanced past `shared_chain_tip`, publishing that newer tip would make the
-		// combined poll below start too far ahead and Lightning listeners would miss blocks.
-		let wallet_tips = onchain_wallet.chain_tips();
+		// Intentionally do **not** publish the wallet-only sync tip into `latest_chain_tip`.
 		let shared_tip_block = shared_chain_tip.to_best_block();
-		let catch_up_starts: Vec<_> = wallet_tips
-			.iter()
-			.filter(|tip| {
-				tip.height < shared_tip_block.height
-					|| (tip.height == shared_tip_block.height
-						&& tip.block_hash != shared_tip_block.block_hash)
-			})
-			.collect();
-		if let Some(start_tip) =
-			catch_up_starts.iter().min_by_key(|tip| (tip.height, tip.block_hash.to_byte_array()))
+		if let Err(e) = self
+			.rebase_sparse_stale_wallet_tips(Arc::clone(&onchain_wallet), shared_tip_block)
+			.await
 		{
+			return Err(e);
+		}
+
+		let account_tips = onchain_wallet.chain_tips_by_account();
+		let mut divergent: Vec<(OnchainWalletAccount, BestBlock)> = Vec::new();
+		for (account, tip) in account_tips {
+			let diverges = tip.height != shared_tip_block.height
+				|| tip.block_hash != shared_tip_block.block_hash;
+			if diverges {
+				divergent.push((account, tip));
+			}
+		}
+		if !divergent.is_empty() {
 			log_info!(
 				self.logger,
-				"On-chain wallet tip {} ({}) diverges from shared chain tip {} ({}); synchronizing from the wallet checkpoint",
-				start_tip.height,
-				start_tip.block_hash,
+				"Synchronizing {} divergent on-chain wallet tip(s) against shared chain tip {} ({})",
+				divergent.len(),
 				shared_tip_block.height,
 				shared_tip_block.block_hash
 			);
+			let account_listeners: Vec<AccountChainListener> = divergent
+				.iter()
+				.map(|(account, _)| {
+					AccountChainListener::new(Arc::clone(&onchain_wallet), *account)
+				})
+				.collect();
+			let chain_listeners: Vec<(BlockHash, &(dyn Listen + Send + Sync))> = divergent
+				.iter()
+				.zip(account_listeners.iter())
+				.map(|((_, tip), listener)| {
+					(tip.block_hash, listener as &(dyn Listen + Send + Sync))
+				})
+				.collect();
 			let mut locked_header_cache = self.header_cache.lock().await;
-			let chain_listeners =
-				vec![(start_tip.block_hash, &*onchain_wallet as &(dyn Listen + Send + Sync))];
 			if let Err(e) = synchronize_listeners(
 				self.api_client.as_ref(),
 				self.config.network,
@@ -450,10 +499,22 @@ impl BitcoindChainSource {
 			{
 				log_error!(
 					self.logger,
-					"Failed to synchronize lagging on-chain wallet tip: {:?}",
+					"Failed to synchronize divergent on-chain wallet tips: {:?}",
 					e
 				);
 				return Err(Error::TxSyncFailed);
+			}
+			drop(locked_header_cache);
+			for listener in &account_listeners {
+				if let Some(err) = listener.take_error() {
+					log_error!(
+						self.logger,
+						"Per-account wallet sync apply failed for {:?}: {}",
+						listener.account(),
+						err
+					);
+					return Err(Error::WalletOperationFailed);
+				}
 			}
 		}
 
@@ -700,6 +761,69 @@ impl BitcoindChainSource {
 				},
 			}
 		}
+	}
+
+	async fn block_hash_at_height(&self, height: u32) -> Result<BlockHash, Error> {
+		match self.as_utxo_source().get_block_hash_by_height(height).await {
+			Ok(hash) => Ok(hash),
+			Err(e) => {
+				log_error!(self.logger, "Failed to fetch block hash at height {}: {:?}", height, e);
+				Err(Error::TxSyncFailed)
+			},
+		}
+	}
+
+	async fn fetch_full_block(&self, block_hash: BlockHash) -> Result<bitcoin::Block, Error> {
+		match self.api_client.get_block(&block_hash).await {
+			Ok(BlockData::FullBlock(block)) => Ok(block),
+			Ok(BlockData::HeaderOnly(_)) => {
+				log_error!(
+					self.logger,
+					"Expected full block for {} but received header-only data",
+					block_hash
+				);
+				Err(Error::TxSyncFailed)
+			},
+			Err(e) => {
+				log_error!(self.logger, "Failed to fetch block {}: {:?}", block_hash, e);
+				Err(Error::TxSyncFailed)
+			},
+		}
+	}
+
+	/// Sparse tips that sit on a stale hash cannot accept intermediate canonical blocks until the
+	/// tip height is invalidated. Rebase each such tip to the canonical block at the same height.
+	async fn rebase_sparse_stale_wallet_tips(
+		&self, onchain_wallet: Arc<Wallet>, shared_tip: BestBlock,
+	) -> Result<(), Error> {
+		for (account, tip) in onchain_wallet.chain_tips_by_account() {
+			if !onchain_wallet.has_sparse_checkpoint_chain(account) {
+				continue;
+			}
+			if tip.height == 0 {
+				continue;
+			}
+			// Canonical hash at the wallet tip height (may be below the shared tip).
+			let canonical_hash = if tip.height == shared_tip.height {
+				shared_tip.block_hash
+			} else {
+				self.block_hash_at_height(tip.height).await?
+			};
+			if canonical_hash == tip.block_hash {
+				continue;
+			}
+			log_info!(
+				self.logger,
+				"Rebasing sparse stale tip for {:?} from {} to canonical {} at height {}",
+				account,
+				tip.block_hash,
+				canonical_hash,
+				tip.height
+			);
+			let block = self.fetch_full_block(canonical_hash).await?;
+			onchain_wallet.rebase_sparse_tip_to_block(account, &block, tip.height)?;
+		}
+		Ok(())
 	}
 }
 
@@ -1484,6 +1608,46 @@ impl Cache for BoundedHeaderCache {
 	fn block_disconnected(&mut self, block_hash: &BlockHash) -> Option<ValidatedBlockHeader> {
 		self.recently_seen.retain(|e| e != block_hash);
 		self.header_map.remove(block_hash)
+	}
+}
+
+/// Listen adapter that applies connected blocks to a single aggregate account.
+struct AccountChainListener {
+	wallet: Arc<Wallet>,
+	account: OnchainWalletAccount,
+	apply_error: Mutex<Option<String>>,
+}
+
+impl AccountChainListener {
+	fn new(wallet: Arc<Wallet>, account: OnchainWalletAccount) -> Self {
+		Self { wallet, account, apply_error: Mutex::new(None) }
+	}
+
+	fn account(&self) -> OnchainWalletAccount {
+		self.account
+	}
+
+	fn take_error(&self) -> Option<String> {
+		self.apply_error.lock().unwrap().take()
+	}
+}
+
+impl Listen for AccountChainListener {
+	fn filtered_block_connected(
+		&self, _header: &bitcoin::block::Header,
+		_txdata: &lightning::chain::transaction::TransactionData, _height: u32,
+	) {
+		debug_assert!(false, "Syncing filtered blocks is currently not supported");
+	}
+
+	fn block_connected(&self, block: &bitcoin::Block, height: u32) {
+		if let Err(e) = self.wallet.apply_block_to_account(self.account, block, height) {
+			*self.apply_error.lock().unwrap() = Some(format!("{}", e));
+		}
+	}
+
+	fn blocks_disconnected(&self, _fork_point_block: BestBlock) {
+		// BDK does not require explicit disconnects; replacements are applied via block_connected.
 	}
 }
 

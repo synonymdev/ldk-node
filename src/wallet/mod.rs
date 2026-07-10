@@ -230,6 +230,56 @@ impl Wallet {
 			.collect()
 	}
 
+	/// Per-account chain tips for Bitcoind per-wallet synchronization.
+	pub(crate) fn chain_tips_by_account(&self) -> Vec<(OnchainWalletAccount, BestBlock)> {
+		self.inner
+			.lock()
+			.unwrap()
+			.chain_tips_by_key()
+			.into_iter()
+			.map(|(account, block_hash, height)| (account, BestBlock { block_hash, height }))
+			.collect()
+	}
+
+	pub(crate) fn has_sparse_checkpoint_chain(&self, account: OnchainWalletAccount) -> bool {
+		self.inner.lock().unwrap().has_sparse_checkpoint_chain(&account)
+	}
+
+	pub(crate) fn rebase_sparse_tip_to_block(
+		&self, account: OnchainWalletAccount, block: &bitcoin::Block, height: u32,
+	) -> Result<(), Error> {
+		let mut locked = self.inner.lock().unwrap();
+		locked.rebase_sparse_tip_to_block(&account, block, height).map_err(|e| {
+			log_error!(self.logger, "Failed to rebase sparse tip for {:?}: {}", account, e);
+			Error::WalletOperationFailed
+		})?;
+		self.update_payment_store(&*locked).map_err(|e| {
+			log_error!(self.logger, "Failed to update payment store after sparse rebase: {}", e);
+			e
+		})
+	}
+
+	pub(crate) fn apply_block_to_account(
+		&self, account: OnchainWalletAccount, block: &bitcoin::Block, height: u32,
+	) -> Result<(), Error> {
+		let mut locked = self.inner.lock().unwrap();
+		locked.apply_block_to(&account, block, height).map_err(|e| {
+			log_error!(
+				self.logger,
+				"Failed to apply block {} at height {} to {:?}: {}",
+				block.block_hash(),
+				height,
+				account,
+				e
+			);
+			Error::WalletOperationFailed
+		})?;
+		self.update_payment_store(&*locked).map_err(|e| {
+			log_error!(self.logger, "Failed to update payment store after account apply: {}", e);
+			e
+		})
+	}
+
 	// Get a drain script for change outputs.
 	pub(crate) fn get_drain_script(&self) -> Result<ScriptBuf, Error> {
 		let locked_wallet = self.inner.lock().unwrap();

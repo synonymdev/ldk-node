@@ -4129,8 +4129,6 @@ mod derived_accounts {
 		node3.sync_wallets().unwrap();
 		node3.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
 		node3.sync_wallets().expect("equal-height reorg catch-up must replay replacement blocks");
-		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
-		node3.sync_wallets().unwrap();
 
 		let balance_after = node3
 			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
@@ -4138,7 +4136,7 @@ mod derived_accounts {
 			.total_sats;
 		assert!(
 			balance_after >= balance_before + 69_000,
-			"derived account must recover persisted funds and equal-height replacement payment, before={}, after={}",
+			"derived account must recover persisted funds and equal-height replacement payment immediately after catch-up, before={}, after={}",
 			balance_before,
 			balance_after
 		);
