@@ -77,8 +77,9 @@
   - Derived accounts always full-scan so externally issued xpub addresses stay discoverable on
     Esplora/Electrum; descriptor origins use the real account path; channel preflight requires an
     account-`0` SegWit builder before counting non-Legacy (including derived) funds
-  - Bitcoind Listen uses the oldest loaded wallet tip for catch-up and skips wallets already at or
-    ahead of each replayed height so re-registered derived accounts can sync the gap
+  - Bitcoind Listen uses the oldest loaded wallet tip for catch-up, skips wallets already at or
+    ahead of each replayed height, and re-synchronizes the on-chain gap when `sync_wallets` finds
+    the aggregate behind the known chain tip (e.g. after re-registering a derived account)
   - Funds combine for balances, coin selection, and signing; primary receive/change stay on
     account `0`; Legacy-primary funding builds/changes only on account-0 non-Legacy wallets
     while derived UTXOs remain selectable as foreign inputs

@@ -3910,7 +3910,11 @@ mod derived_accounts {
 		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
 		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub.clone()).unwrap();
 
-		let first_addr = native_segwit_receive_address_from_xpub(&xpub, 0);
+		// Reveal two receive scripts so Bitcoind Listen can match gap payments after re-add.
+		let first_addr =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
+		let second_addr =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
 		fund_and_sync(&bitcoind, &electrsd, &node, first_addr, 100_000).await;
 		let balance_before = node
 			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
@@ -3921,16 +3925,13 @@ mod derived_accounts {
 		node.stop().unwrap();
 		drop(node);
 
-		// Restart without re-registering the derived account so only account 0 advances.
+		// Restart without the derived account so only account 0 advances with new blocks.
 		let mut config2 = node_config(AddressType::NativeSegwit, vec![]);
 		config2.store_type = crate::common::TestStoreType::Sqlite;
-		config2.node_config.storage_dir_path = storage_path;
+		config2.node_config.storage_dir_path = storage_path.clone();
 		let node2 = setup_node(&chain_source, config2, Some(seed.to_vec()));
 		node2.sync_wallets().unwrap();
 
-		// Confirm a second payment to the derived account while it is unloaded. These blocks sit
-		// in the gap between the persisted derived tip and the advanced primary tip.
-		let second_addr = native_segwit_receive_address_from_xpub(&xpub, 1);
 		premine_and_distribute_funds(
 			&bitcoind.client,
 			&electrsd.client,
@@ -3940,13 +3941,22 @@ mod derived_accounts {
 		.await;
 		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
 		node2.sync_wallets().unwrap();
+		node2.stop().unwrap();
+		drop(node2);
 
-		assert!(!node2.list_onchain_wallet_accounts().iter().any(|a| a.account_index == 1));
-		node2.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
-		node2.sync_wallets().expect("bitcoind catch-up must not fail when primary is ahead");
+		// Fresh start with primary already ahead of the persisted derived tip. Re-add, then sync.
+		let mut config3 = node_config(AddressType::NativeSegwit, vec![]);
+		config3.store_type = crate::common::TestStoreType::Sqlite;
+		config3.node_config.storage_dir_path = storage_path;
+		let node3 = setup_node(&chain_source, config3, Some(seed.to_vec()));
+		node3.sync_wallets().unwrap();
+		assert!(!node3.list_onchain_wallet_accounts().iter().any(|a| a.account_index == 1));
+
+		node3.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+		node3.sync_wallets().expect("bitcoind catch-up must not fail when primary is ahead");
 		std::thread::sleep(std::time::Duration::from_secs(2));
 
-		let balance_after = node2
+		let balance_after = node3
 			.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
 			.unwrap()
 			.total_sats;
@@ -3957,7 +3967,7 @@ mod derived_accounts {
 			balance_after
 		);
 
-		node2.stop().unwrap();
+		node3.stop().unwrap();
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
