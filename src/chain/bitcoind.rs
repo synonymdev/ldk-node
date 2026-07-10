@@ -23,7 +23,7 @@ use lightning_block_sync::poll::ValidatedBlockHeader;
 use lightning_block_sync::rest::RestClient;
 use lightning_block_sync::rpc::{RpcClient, RpcError};
 use lightning_block_sync::{
-	AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource, BlockSourceErrorKind, Cache,
+	AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource, Cache,
 };
 use serde::Serialize;
 
@@ -146,203 +146,58 @@ impl BitcoindChainSource {
 		let mut backoff = CHAIN_POLLING_INTERVAL_SECS;
 		const MAX_BACKOFF_SECS: u64 = 300;
 
+		// Use the same chain+mempool path as periodic polling. `sync_wallets` waits on this
+		// initial sync, so returning after headers alone would leave persisted unconfirmed
+		// transactions in place when Bitcoind's mempool is empty after restart.
 		loop {
-			// if the stop_sync_sender has been dropped, we should just exit
 			if stop_sync_receiver.has_changed().unwrap_or(true) {
 				log_trace!(self.logger, "Stopping initial chain sync.");
 				return;
 			}
 
-			let channel_manager_best_block_hash = channel_manager.current_best_block().block_hash;
-			let sweeper_best_block_hash = output_sweeper.current_best_block().block_hash;
-
-			if let Err(e) = onchain_wallet.finish_pending_sync(true) {
-				log_error!(
-					self.logger,
-					"Failed to finish pending wallet state before initial sync: {:?}. Retrying in {} seconds.",
-					e,
-					backoff
-				);
-				tokio::select! {
-					biased;
-					_ = stop_sync_receiver.changed() => {
-						log_trace!(self.logger, "Stopping initial chain sync.");
-						return;
-					}
-					_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
-				}
-				backoff = (backoff * 2).min(MAX_BACKOFF_SECS);
-				continue;
-			}
-
-			// Each on-chain account participates with its own tip so equal-height forks and
-			// differently-lagging wallets are all walked to the canonical tip.
-			let (account_generation, account_tips) = onchain_wallet.account_sync_snapshot();
-			let account_listeners: Vec<AccountChainListener> = account_tips
-				.iter()
-				.map(|(account, _)| {
-					AccountChainListener::new(Arc::clone(&onchain_wallet), *account)
-				})
-				.collect();
-			let mut chain_listeners: Vec<(BlockHash, &(dyn Listen + Send + Sync))> = account_tips
-				.iter()
-				.zip(account_listeners.iter())
-				.map(|((_, tip), listener)| {
-					(tip.block_hash, listener as &(dyn Listen + Send + Sync))
-				})
-				.collect();
-			chain_listeners.push((
-				channel_manager_best_block_hash,
-				&*channel_manager as &(dyn Listen + Send + Sync),
-			));
-			chain_listeners
-				.push((sweeper_best_block_hash, &*output_sweeper as &(dyn Listen + Send + Sync)));
-
-			// TODO: Eventually we might want to see if we can synchronize `ChannelMonitor`s
-			// before giving them to `ChainMonitor` it the first place. However, this isn't
-			// trivial as we load them on initialization (in the `Builder`) and only gain
-			// network access during `start`. For now, we just make sure we get the worst known
-			// block hash and sychronize them via `ChainMonitor`.
-			if let Some(worst_channel_monitor_block_hash) = chain_monitor
-				.list_monitors()
-				.iter()
-				.flat_map(|channel_id| chain_monitor.get_monitor(*channel_id))
-				.map(|m| m.current_best_block())
-				.min_by_key(|b| b.height)
-				.map(|b| b.block_hash)
+			match self
+				.poll_and_update_listeners_inner(
+					Arc::clone(&onchain_wallet),
+					Arc::clone(&channel_manager),
+					Arc::clone(&chain_monitor),
+					Arc::clone(&output_sweeper),
+				)
+				.await
 			{
-				chain_listeners.push((
-					worst_channel_monitor_block_hash,
-					&*chain_monitor as &(dyn Listen + Send + Sync),
-				));
-			}
-
-			let mut locked_header_cache = self.header_cache.lock().await;
-			let now = SystemTime::now();
-			match synchronize_listeners(
-				self.api_client.as_ref(),
-				self.config.network,
-				&mut *locked_header_cache,
-				chain_listeners.clone(),
-			)
-			.await
-			{
-				Ok(_chain_tip) => {
-					let mut apply_failed = false;
-					for listener in &account_listeners {
-						if let Err(err) = listener.finish() {
-							log_error!(
-								self.logger,
-								"Per-account wallet sync apply failed for {:?}: {}",
-								listener.account(),
-								err
-							);
-							apply_failed = true;
-						}
-					}
-					if !apply_failed {
-						if let Err(err) = onchain_wallet.finish_pending_sync(false) {
-							log_error!(
-								self.logger,
-								"Failed to finish initial on-chain wallet sync: {}",
-								err
-							);
-							apply_failed = true;
-						}
-					}
+				Ok(ListenerSyncOutcome::AccountSetChanged) => continue,
+				Ok(ListenerSyncOutcome::Complete(account_generation)) => {
 					let account_operation = onchain_wallet.lock_account_operations();
 					if onchain_wallet.account_generation() != account_generation {
-						log_info!(self.logger, "On-chain account set changed during initial sync.");
-						apply_failed = true;
-					}
-					if apply_failed {
-						drop(account_operation);
-						log_error!(
-							self.logger,
-							"Initial chain sync applied headers but failed to update on-chain wallets. Retrying in {} seconds.",
-							backoff
-						);
-						tokio::select! {
-							biased;
-							_ = stop_sync_receiver.changed() => {
-								log_trace!(self.logger, "Stopping initial chain sync.");
-								return;
-							}
-							_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
-						}
-						backoff = std::cmp::min(backoff * 2, MAX_BACKOFF_SECS);
-					} else {
 						log_info!(
 							self.logger,
-							"Finished synchronizing listeners in {}ms",
-							now.elapsed().unwrap().as_millis()
+							"On-chain account set changed during initial sync; retrying."
 						);
-						let unix_time_secs_opt =
-							SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
-						let mut locked_node_metrics = self.node_metrics.write().unwrap();
-						locked_node_metrics.latest_lightning_wallet_sync_timestamp =
-							unix_time_secs_opt;
-						locked_node_metrics.latest_onchain_wallet_sync_timestamp =
-							unix_time_secs_opt;
-						write_node_metrics(
-							&*locked_node_metrics,
-							Arc::clone(&self.kv_store),
-							Arc::clone(&self.logger),
-						)
-						.unwrap_or_else(|e| {
-							log_error!(self.logger, "Failed to persist node metrics: {}", e);
-						});
-						self.wallet_polling_status
-							.lock()
-							.unwrap()
-							.propagate_result_to_subscribers(Ok(()));
 						drop(account_operation);
-						break;
+						continue;
 					}
+					self.wallet_polling_status
+						.lock()
+						.unwrap()
+						.propagate_result_to_subscribers(Ok(()));
+					drop(account_operation);
+					break;
 				},
-
 				Err(e) => {
-					log_error!(self.logger, "Failed to synchronize chain listeners: {:?}", e);
-					if e.kind() == BlockSourceErrorKind::Transient {
-						log_info!(
-									self.logger,
-									"Transient error syncing chain listeners: {:?}. Retrying in {} seconds.",
-									e,
-									backoff
-								);
-						// Sleep with stop signal check to allow immediate shutdown
-						tokio::select! {
-							biased;
-							_ = stop_sync_receiver.changed() => {
-								log_trace!(
-									self.logger,
-									"Stopping initial chain sync.",
-								);
-								return;
-							}
-							_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+					log_error!(
+						self.logger,
+						"Failed initial chain/mempool sync: {:?}. Retrying in {} seconds.",
+						e,
+						backoff
+					);
+					tokio::select! {
+						biased;
+						_ = stop_sync_receiver.changed() => {
+							log_trace!(self.logger, "Stopping initial chain sync.");
+							return;
 						}
-						backoff = std::cmp::min(backoff * 2, MAX_BACKOFF_SECS);
-					} else {
-						log_error!(
-									self.logger,
-									"Persistent error syncing chain listeners: {:?}. Retrying in {} seconds.",
-									e,
-									MAX_BACKOFF_SECS
-								);
-						// Sleep with stop signal check to allow immediate shutdown
-						tokio::select! {
-							biased;
-							_ = stop_sync_receiver.changed() => {
-								log_trace!(
-									self.logger,
-									"Stopping initial chain sync during backoff.",
-								);
-								return;
-							}
-							_ = tokio::time::sleep(Duration::from_secs(MAX_BACKOFF_SECS)) => {}
-						}
+						_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
 					}
+					backoff = (backoff * 2).min(MAX_BACKOFF_SECS);
 				},
 			}
 		}
