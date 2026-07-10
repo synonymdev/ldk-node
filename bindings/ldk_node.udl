@@ -95,6 +95,11 @@ enum AddressType {
 	"Taproot",
 };
 
+dictionary OnchainWalletAccount {
+	AddressType address_type;
+	u32 account_index;
+};
+
 enum KeychainKind {
 	"External",
 	"Internal",
@@ -243,6 +248,13 @@ interface Node {
 	void set_primary_address_type(AddressType address_type, sequence<u8> seed_bytes);
 	[Throws=NodeError]
 	void set_primary_address_type_with_mnemonic(AddressType address_type, Mnemonic mnemonic, string? passphrase);
+	[Throws=NodeError]
+	string export_onchain_wallet_account_xpub(AddressType address_type, u32 account_index);
+	[Throws=NodeError]
+	void add_onchain_wallet_account(AddressType address_type, u32 account_index, string xpub);
+	[Throws=NodeError]
+	AddressTypeBalance get_balance_for_onchain_wallet_account(AddressType address_type, u32 account_index);
+	sequence<OnchainWalletAccount> list_onchain_wallet_accounts();
 	sequence<PaymentDetails> list_payments();
 	sequence<PeerDetails> list_peers();
 	sequence<ChannelDetails> list_channels();
@@ -340,6 +352,10 @@ interface OnchainPayment {
     Address new_address_for_type(AddressType address_type);
     [Throws=NodeError]
     AddressInfo new_address_info_for_type(AddressType address_type);
+    [Throws=NodeError]
+    Address new_address_for_account(AddressType address_type, u32 account_index);
+    [Throws=NodeError]
+    AddressInfo new_address_info_for_account(AddressType address_type, u32 account_index);
     [Throws=NodeError]
     AddressInfo address_info_for_type_at_index(AddressType address_type, KeychainKind keychain, u32 index);
     [Throws=NodeError]

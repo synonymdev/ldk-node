@@ -26,9 +26,9 @@ use crate::chain::bitcoind::BitcoindChainSource;
 use crate::chain::electrum::ElectrumChainSource;
 use crate::chain::esplora::EsploraChainSource;
 use crate::config::{
-	AddressType, AddressTypeRuntimeConfig, BackgroundSyncConfig, BitcoindRestClientConfig, Config,
-	ElectrumSyncConfig, EsploraSyncConfig, RESOLVED_CHANNEL_MONITOR_ARCHIVAL_INTERVAL,
-	WALLET_SYNC_INTERVAL_MINIMUM_SECS,
+	AddressTypeRuntimeConfig, BackgroundSyncConfig, BitcoindRestClientConfig, Config,
+	ElectrumSyncConfig, EsploraSyncConfig, OnchainWalletAccount,
+	RESOLVED_CHANNEL_MONITOR_ARCHIVAL_INTERVAL, WALLET_SYNC_INTERVAL_MINIMUM_SECS,
 };
 use crate::event::{Event, EventQueue, SyncType, TransactionDetails};
 use crate::fee_estimator::OnchainFeeEstimator;
@@ -172,28 +172,28 @@ fn get_transaction_details(
 }
 
 pub(super) fn collect_additional_sync_requests(
-	additional_types: &[AddressType], onchain_wallet: &Wallet,
+	additional_accounts: &[OnchainWalletAccount], onchain_wallet: &Wallet,
 	node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
-) -> Vec<(AddressType, WalletSyncRequest)> {
-	additional_types
+) -> Vec<(OnchainWalletAccount, WalletSyncRequest)> {
+	additional_accounts
 		.iter()
 		.copied()
-		.filter_map(|address_type| {
+		.filter_map(|wallet_account| {
 			let do_incremental =
-				node_metrics.read().unwrap().get_wallet_sync_timestamp(address_type).is_some();
+				node_metrics.read().unwrap().get_wallet_sync_timestamp(wallet_account).is_some();
 			let request = if do_incremental {
 				onchain_wallet
-					.get_wallet_incremental_sync_request(address_type)
+					.get_wallet_incremental_sync_request(wallet_account)
 					.map(WalletSyncRequest::Incremental)
 			} else {
 				onchain_wallet
-					.get_wallet_full_scan_request(address_type)
+					.get_wallet_full_scan_request(wallet_account)
 					.map(WalletSyncRequest::FullScan)
 			};
 			match request {
-				Ok(req) => Some((address_type, req)),
+				Ok(req) => Some((wallet_account, req)),
 				Err(e) => {
-					log_info!(logger, "Skipping sync for wallet {:?}: {}", address_type, e);
+					log_info!(logger, "Skipping sync for wallet {:?}: {}", wallet_account, e);
 					None
 				},
 			}
@@ -204,25 +204,30 @@ pub(super) fn collect_additional_sync_requests(
 /// Returns `(events, any_applied)` where `any_applied` is true if at least one
 /// additional wallet update was successfully applied.
 pub(super) fn apply_additional_sync_results(
-	results: Vec<(AddressType, Option<BdkUpdate>)>, onchain_wallet: &Wallet,
+	results: Vec<(OnchainWalletAccount, Option<BdkUpdate>)>, onchain_wallet: &Wallet,
 	node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
 ) -> (Vec<BdkWalletEvent>, bool) {
 	let mut events = Vec::new();
 	let mut any_applied = false;
-	for (address_type, update_opt) in results {
+	for (wallet_account, update_opt) in results {
 		if let Some(update) = update_opt {
-			match onchain_wallet.apply_update_for_address_type(address_type, update) {
+			match onchain_wallet.apply_update_for_wallet_account(wallet_account, update) {
 				Ok(wallet_events) => {
 					any_applied = true;
 					if let Some(ts) =
 						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 					{
-						node_metrics.write().unwrap().set_wallet_sync_timestamp(address_type, ts);
+						node_metrics.write().unwrap().set_wallet_sync_timestamp(wallet_account, ts);
 					}
 					events.extend(wallet_events);
 				},
 				Err(e) => {
-					log_warn!(logger, "Failed to apply update to wallet {:?}: {}", address_type, e);
+					log_warn!(
+						logger,
+						"Failed to apply update to wallet {:?}: {}",
+						wallet_account,
+						e
+					);
 				},
 			}
 		}

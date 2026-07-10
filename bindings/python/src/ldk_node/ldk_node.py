@@ -679,6 +679,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_add_address_type_to_monitor_with_mnemonic() != 4517:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_node_add_onchain_wallet_account() != 37245:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_announcement_addresses() != 61426:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_bolt11_payment() != 41402:
@@ -697,6 +699,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_event_handled() != 38712:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_node_export_onchain_wallet_account_xpub() != 5977:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_export_pathfinding_scores() != 62331:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_force_close_channel() != 48831:
@@ -705,6 +709,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_get_balance_for_address_type() != 34906:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_node_get_balance_for_onchain_wallet_account() != 18159:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_get_transaction_details() != 65000:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_list_balances() != 57528:
@@ -712,6 +718,8 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_ldk_node_checksum_method_node_list_channels() != 7954:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_list_monitored_address_types() != 25084:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_node_list_onchain_wallet_accounts() != 4403:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_list_payments() != 35002:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -815,9 +823,13 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address() != 37251:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_account() != 9932:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_type() != 9083:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info() != 9889:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_account() != 30767:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -1815,6 +1827,14 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_add_address_type_to_monitor_with_mnemo
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_add_address_type_to_monitor_with_mnemonic.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_node_add_onchain_wallet_account.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_uint32,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_node_add_onchain_wallet_account.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_node_announcement_addresses.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -1866,6 +1886,13 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_event_handled.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_event_handled.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_node_export_onchain_wallet_account_xpub.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_uint32,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_node_export_onchain_wallet_account_xpub.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_node_export_pathfinding_scores.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -1891,6 +1918,13 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_get_balance_for_address_type.argtypes 
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_get_balance_for_address_type.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_node_get_balance_for_onchain_wallet_account.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_uint32,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_node_get_balance_for_onchain_wallet_account.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_node_get_transaction_details.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -1912,6 +1946,11 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_list_monitored_address_types.argtypes 
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_list_monitored_address_types.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_node_list_onchain_wallet_accounts.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_node_list_onchain_wallet_accounts.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_node_list_payments.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -2269,6 +2308,13 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_for_account.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_uint32,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_for_account.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_for_type.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2280,6 +2326,13 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info.argtypes = 
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_account.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_uint32,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_account.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -3113,6 +3166,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_add_address_type_to_monitor.rest
 _UniffiLib.uniffi_ldk_node_checksum_method_node_add_address_type_to_monitor_with_mnemonic.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_add_address_type_to_monitor_with_mnemonic.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_node_add_onchain_wallet_account.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_node_add_onchain_wallet_account.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_announcement_addresses.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_announcement_addresses.restype = ctypes.c_uint16
@@ -3140,6 +3196,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_disconnect.restype = ctypes.c_ui
 _UniffiLib.uniffi_ldk_node_checksum_method_node_event_handled.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_event_handled.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_node_export_onchain_wallet_account_xpub.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_node_export_onchain_wallet_account_xpub.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_export_pathfinding_scores.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_export_pathfinding_scores.restype = ctypes.c_uint16
@@ -3152,6 +3211,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_get_address_balance.restype = ct
 _UniffiLib.uniffi_ldk_node_checksum_method_node_get_balance_for_address_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_get_balance_for_address_type.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_node_get_balance_for_onchain_wallet_account.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_node_get_balance_for_onchain_wallet_account.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_get_transaction_details.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_get_transaction_details.restype = ctypes.c_uint16
@@ -3164,6 +3226,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_list_channels.restype = ctypes.c
 _UniffiLib.uniffi_ldk_node_checksum_method_node_list_monitored_address_types.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_list_monitored_address_types.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_node_list_onchain_wallet_accounts.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_node_list_onchain_wallet_accounts.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_list_payments.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_list_payments.restype = ctypes.c_uint16
@@ -3317,12 +3382,18 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_account.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_account.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_for_type.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_account.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_account.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type.restype = ctypes.c_uint16
@@ -5731,6 +5802,8 @@ class NodeProtocol(typing.Protocol):
         raise NotImplementedError
     def add_address_type_to_monitor_with_mnemonic(self, address_type: "AddressType",mnemonic: "Mnemonic",passphrase: "typing.Optional[str]"):
         raise NotImplementedError
+    def add_onchain_wallet_account(self, address_type: "AddressType",account_index: "int",xpub: "str"):
+        raise NotImplementedError
     def announcement_addresses(self, ):
         raise NotImplementedError
     def bolt11_payment(self, ):
@@ -5749,6 +5822,8 @@ class NodeProtocol(typing.Protocol):
         raise NotImplementedError
     def event_handled(self, ):
         raise NotImplementedError
+    def export_onchain_wallet_account_xpub(self, address_type: "AddressType",account_index: "int"):
+        raise NotImplementedError
     def export_pathfinding_scores(self, ):
         raise NotImplementedError
     def force_close_channel(self, user_channel_id: "UserChannelId",counterparty_node_id: "PublicKey",reason: "typing.Optional[str]"):
@@ -5757,6 +5832,8 @@ class NodeProtocol(typing.Protocol):
         raise NotImplementedError
     def get_balance_for_address_type(self, address_type: "AddressType"):
         raise NotImplementedError
+    def get_balance_for_onchain_wallet_account(self, address_type: "AddressType",account_index: "int"):
+        raise NotImplementedError
     def get_transaction_details(self, txid: "Txid"):
         raise NotImplementedError
     def list_balances(self, ):
@@ -5764,6 +5841,8 @@ class NodeProtocol(typing.Protocol):
     def list_channels(self, ):
         raise NotImplementedError
     def list_monitored_address_types(self, ):
+        raise NotImplementedError
+    def list_onchain_wallet_accounts(self, ):
         raise NotImplementedError
     def list_payments(self, ):
         raise NotImplementedError
@@ -5883,6 +5962,23 @@ class Node:
 
 
 
+    def add_onchain_wallet_account(self, address_type: "AddressType",account_index: "int",xpub: "str") -> None:
+        _UniffiConverterTypeAddressType.check_lower(address_type)
+        
+        _UniffiConverterUInt32.check_lower(account_index)
+        
+        _UniffiConverterString.check_lower(xpub)
+        
+        _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_add_onchain_wallet_account,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddressType.lower(address_type),
+        _UniffiConverterUInt32.lower(account_index),
+        _UniffiConverterString.lower(xpub))
+
+
+
+
+
+
     def announcement_addresses(self, ) -> "typing.Optional[typing.List[SocketAddress]]":
         return _UniffiConverterOptionalSequenceTypeSocketAddress.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_announcement_addresses,self._uniffi_clone_pointer(),)
@@ -5978,6 +6074,21 @@ class Node:
 
 
 
+    def export_onchain_wallet_account_xpub(self, address_type: "AddressType",account_index: "int") -> "str":
+        _UniffiConverterTypeAddressType.check_lower(address_type)
+        
+        _UniffiConverterUInt32.check_lower(account_index)
+        
+        return _UniffiConverterString.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_export_onchain_wallet_account_xpub,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddressType.lower(address_type),
+        _UniffiConverterUInt32.lower(account_index))
+        )
+
+
+
+
+
     def export_pathfinding_scores(self, ) -> "bytes":
         return _UniffiConverterBytes.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_export_pathfinding_scores,self._uniffi_clone_pointer(),)
@@ -6028,6 +6139,21 @@ class Node:
 
 
 
+    def get_balance_for_onchain_wallet_account(self, address_type: "AddressType",account_index: "int") -> "AddressTypeBalance":
+        _UniffiConverterTypeAddressType.check_lower(address_type)
+        
+        _UniffiConverterUInt32.check_lower(account_index)
+        
+        return _UniffiConverterTypeAddressTypeBalance.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_get_balance_for_onchain_wallet_account,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddressType.lower(address_type),
+        _UniffiConverterUInt32.lower(account_index))
+        )
+
+
+
+
+
     def get_transaction_details(self, txid: "Txid") -> "typing.Optional[TransactionDetails]":
         _UniffiConverterTypeTxid.check_lower(txid)
         
@@ -6061,6 +6187,15 @@ class Node:
     def list_monitored_address_types(self, ) -> "typing.List[AddressType]":
         return _UniffiConverterSequenceTypeAddressType.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_list_monitored_address_types,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
+    def list_onchain_wallet_accounts(self, ) -> "typing.List[OnchainWalletAccount]":
+        return _UniffiConverterSequenceTypeOnchainWalletAccount.lift(
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_list_onchain_wallet_accounts,self._uniffi_clone_pointer(),)
         )
 
 
@@ -6722,9 +6857,13 @@ class OnchainPaymentProtocol(typing.Protocol):
         raise NotImplementedError
     def new_address(self, ):
         raise NotImplementedError
+    def new_address_for_account(self, address_type: "AddressType",account_index: "int"):
+        raise NotImplementedError
     def new_address_for_type(self, address_type: "AddressType"):
         raise NotImplementedError
     def new_address_info(self, ):
+        raise NotImplementedError
+    def new_address_info_for_account(self, address_type: "AddressType",account_index: "int"):
         raise NotImplementedError
     def new_address_info_for_type(self, address_type: "AddressType"):
         raise NotImplementedError
@@ -6907,6 +7046,21 @@ class OnchainPayment:
 
 
 
+    def new_address_for_account(self, address_type: "AddressType",account_index: "int") -> "Address":
+        _UniffiConverterTypeAddressType.check_lower(address_type)
+        
+        _UniffiConverterUInt32.check_lower(account_index)
+        
+        return _UniffiConverterTypeAddress.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_for_account,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddressType.lower(address_type),
+        _UniffiConverterUInt32.lower(account_index))
+        )
+
+
+
+
+
     def new_address_for_type(self, address_type: "AddressType") -> "Address":
         _UniffiConverterTypeAddressType.check_lower(address_type)
         
@@ -6922,6 +7076,21 @@ class OnchainPayment:
     def new_address_info(self, ) -> "AddressInfo":
         return _UniffiConverterTypeAddressInfo.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
+    def new_address_info_for_account(self, address_type: "AddressType",account_index: "int") -> "AddressInfo":
+        _UniffiConverterTypeAddressType.check_lower(address_type)
+        
+        _UniffiConverterUInt32.check_lower(account_index)
+        
+        return _UniffiConverterTypeAddressInfo.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_account,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddressType.lower(address_type),
+        _UniffiConverterUInt32.lower(account_index))
         )
 
 
@@ -9220,6 +9389,42 @@ class _UniffiConverterTypeNodeStatus(_UniffiConverterRustBuffer):
         _UniffiConverterOptionalUInt64.write(value.latest_pathfinding_scores_sync_timestamp, buf)
         _UniffiConverterOptionalUInt64.write(value.latest_node_announcement_broadcast_timestamp, buf)
         _UniffiConverterOptionalUInt32.write(value.latest_channel_monitor_archival_height, buf)
+
+
+class OnchainWalletAccount:
+    address_type: "AddressType"
+    account_index: "int"
+    def __init__(self, *, address_type: "AddressType", account_index: "int"):
+        self.address_type = address_type
+        self.account_index = account_index
+
+    def __str__(self):
+        return "OnchainWalletAccount(address_type={}, account_index={})".format(self.address_type, self.account_index)
+
+    def __eq__(self, other):
+        if self.address_type != other.address_type:
+            return False
+        if self.account_index != other.account_index:
+            return False
+        return True
+
+class _UniffiConverterTypeOnchainWalletAccount(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return OnchainWalletAccount(
+            address_type=_UniffiConverterTypeAddressType.read(buf),
+            account_index=_UniffiConverterUInt32.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterTypeAddressType.check_lower(value.address_type)
+        _UniffiConverterUInt32.check_lower(value.account_index)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterTypeAddressType.write(value.address_type, buf)
+        _UniffiConverterUInt32.write(value.account_index, buf)
 
 
 class OutPoint:
@@ -16219,6 +16424,31 @@ class _UniffiConverterSequenceTypeCustomTlvRecord(_UniffiConverterRustBuffer):
 
 
 
+class _UniffiConverterSequenceTypeOnchainWalletAccount(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiConverterTypeOnchainWalletAccount.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiConverterTypeOnchainWalletAccount.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiConverterTypeOnchainWalletAccount.read(buf) for i in range(count)
+        ]
+
+
+
 class _UniffiConverterSequenceTypePaymentDetails(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -17259,6 +17489,7 @@ __all__ = [
     "NodeAnnouncementInfo",
     "NodeInfo",
     "NodeStatus",
+    "OnchainWalletAccount",
     "OutPoint",
     "PaymentDetails",
     "PeerDetails",

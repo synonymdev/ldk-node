@@ -65,6 +65,17 @@
 
 ## Synonym Fork Additions
 
+- Added derived on-chain wallet account support (`account_index >= 1`) from the node's master
+  seed:
+  - `export_onchain_wallet_account_xpub` / `add_onchain_wallet_account` (idempotent; validates
+    xpub; rejects account `0`); `get_balance_for_onchain_wallet_account` /
+    `list_onchain_wallet_accounts`; `OnchainPayment::new_address_for_account` /
+    `new_address_info_for_account`; `OnchainWalletAccount`
+  - Registration is not persisted and not auto-loaded; re-add after each build. BDK data
+    remains persisted per account
+  - Funds combine for balances, coin selection, and signing; primary receive/change stay on
+    account `0`; Legacy-primary funding builds/changes only on account-0 non-Legacy wallets
+    while derived UTXOs remain selectable as foreign inputs
 - Added configurable routing scorer parameters `scoring_fee_params` and `scoring_decay_params`
 - Added `AddressInfo` (`index`, `address`, `keychain`) and `KeychainKind`.
 - Added `OnchainPayment` methods `new_address_info`, `new_address_info_for_type`,
