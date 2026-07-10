@@ -132,8 +132,14 @@ fn payment_benchmark(c: &mut Criterion) {
 	let runtime =
 		tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
 
+	#[cfg(not(feature = "uniffi"))]
 	let node_a = Arc::new(node_a);
+	#[cfg(feature = "uniffi")]
+	let node_a = node_a;
+	#[cfg(not(feature = "uniffi"))]
 	let node_b = Arc::new(node_b);
+	#[cfg(feature = "uniffi")]
+	let node_b = node_b;
 
 	// Fund the nodes and setup a channel between them. The criterion function cannot be async, so we need to execute
 	// the setup using a runtime.
