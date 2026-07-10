@@ -417,12 +417,13 @@ impl BitcoindChainSource {
 		// Bitcoind advanced past `shared_chain_tip`, publishing that newer tip would make the
 		// combined poll below start too far ahead and Lightning listeners would miss blocks.
 		let wallet_tips = onchain_wallet.chain_tips();
+		let shared_tip_block = shared_chain_tip.to_best_block();
 		let catch_up_starts: Vec<_> = wallet_tips
 			.iter()
 			.filter(|tip| {
-				tip.height < shared_chain_tip.height
-					|| (tip.height == shared_chain_tip.height
-						&& tip.block_hash != shared_chain_tip.block_hash)
+				tip.height < shared_tip_block.height
+					|| (tip.height == shared_tip_block.height
+						&& tip.block_hash != shared_tip_block.block_hash)
 			})
 			.collect();
 		if let Some(start_tip) =
@@ -433,8 +434,8 @@ impl BitcoindChainSource {
 				"On-chain wallet tip {} ({}) diverges from shared chain tip {} ({}); synchronizing from the wallet checkpoint",
 				start_tip.height,
 				start_tip.block_hash,
-				shared_chain_tip.height,
-				shared_chain_tip.block_hash
+				shared_tip_block.height,
+				shared_tip_block.block_hash
 			);
 			let mut locked_header_cache = self.header_cache.lock().await;
 			let chain_listeners =
