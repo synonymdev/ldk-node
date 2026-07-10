@@ -224,7 +224,7 @@ impl_writeable_tlv_based_enum!(SyncType,
 /// // Build and start the node with background sync enabled (default)
 /// let mut builder = Builder::new();
 /// builder.set_network(Network::Testnet);
-/// builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+/// builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 /// let node = builder.build()?;
 /// node.start()?; // Background sync starts automatically!
 ///
@@ -526,7 +526,7 @@ pub enum Event {
 	/// # use ldk_node::bitcoin::Network;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// // Sync the wallet
@@ -553,7 +553,7 @@ pub enum Event {
 	/// # use std::collections::HashMap;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// // Track channel funding transactions
@@ -609,7 +609,7 @@ pub enum Event {
 	/// # use ldk_node::bitcoin::Network;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// // When someone sends sats to your wallet...
@@ -645,7 +645,7 @@ pub enum Event {
 	/// # use ldk_node::bitcoin::Network;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// match node.wait_next_event() {
@@ -689,7 +689,7 @@ pub enum Event {
 	/// # use ldk_node::bitcoin::Network;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// // After a chain reorg...
@@ -725,7 +725,7 @@ pub enum Event {
 	/// # use ldk_node::bitcoin::Network;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// match node.wait_next_event() {
@@ -753,7 +753,7 @@ pub enum Event {
 	/// # use ldk_node::bitcoin::Network;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// match node.wait_next_event() {
@@ -796,7 +796,7 @@ pub enum Event {
 	/// # use ldk_node::bitcoin::Network;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// match node.wait_next_event() {
@@ -825,7 +825,7 @@ pub enum Event {
 	/// # use ldk_node::bitcoin::Network;
 	/// # let mut builder = Builder::new();
 	/// # builder.set_network(Network::Testnet);
-	/// # builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+	/// # builder.set_chain_source_esplora("https://blockstream.info/testnet/api".to_string(), None);
 	/// # let node = builder.build().unwrap();
 	/// # node.start().unwrap();
 	/// match node.wait_next_event() {
