@@ -9,6 +9,7 @@ use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
@@ -109,11 +110,13 @@ pub(crate) mod ser;
 
 pub(crate) struct Wallet {
 	inner: Mutex<AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>>,
-	// Serializes add/remove/set_primary to keep aggregate and runtime config in sync.
+	// Serializes account membership, primary selection, and account reloads.
 	operation_lock: Mutex<()>,
+	account_generation: AtomicU64,
 	broadcaster: Arc<Broadcaster>,
 	fee_estimator: Arc<OnchainFeeEstimator>,
 	payment_store: Arc<PaymentStore>,
+	payment_store_update_pending: AtomicBool,
 	config: Arc<Config>,
 	kv_store: Arc<DynStore>,
 	seed_bytes: [u8; WALLET_KEYS_SEED_LEN],
@@ -145,9 +148,11 @@ impl Wallet {
 		Self {
 			inner,
 			operation_lock,
+			account_generation: AtomicU64::new(0),
 			broadcaster,
 			fee_estimator,
 			payment_store,
+			payment_store_update_pending: AtomicBool::new(false),
 			config,
 			kv_store,
 			seed_bytes,
@@ -209,6 +214,10 @@ impl Wallet {
 		self.inner.lock().unwrap().unconfirmed_txids()
 	}
 
+	pub(crate) fn get_unconfirmed_txids_with_last_seen(&self) -> Vec<(Txid, u64)> {
+		self.inner.lock().unwrap().unconfirmed_txids_with_last_seen()
+	}
+
 	pub(crate) fn is_tx_confirmed(&self, txid: &Txid) -> bool {
 		self.inner.lock().unwrap().is_tx_confirmed(txid)
 	}
@@ -218,39 +227,112 @@ impl Wallet {
 		BestBlock { block_hash, height }
 	}
 
-	/// Per-account chain tips for Bitcoind per-wallet synchronization.
-	pub(crate) fn chain_tips_by_account(&self) -> Vec<(OnchainWalletAccount, BestBlock)> {
-		self.inner
+	/// Returns an account generation and matching chain-tip snapshot for Bitcoind sync.
+	pub(crate) fn account_sync_snapshot(&self) -> (u64, Vec<(OnchainWalletAccount, BestBlock)>) {
+		let _operation = self.operation_lock.lock().unwrap();
+		let generation = self.account_generation.load(Ordering::Acquire);
+		let tips = self
+			.inner
 			.lock()
 			.unwrap()
 			.chain_tips_by_key()
 			.into_iter()
 			.map(|(account, block_hash, height)| (account, BestBlock { block_hash, height }))
-			.collect()
+			.collect();
+		(generation, tips)
 	}
 
-	pub(crate) fn has_sparse_checkpoint_chain(&self, account: OnchainWalletAccount) -> bool {
-		self.inner.lock().unwrap().has_sparse_checkpoint_chain(&account)
+	pub(crate) fn lock_account_operations(&self) -> MutexGuard<'_, ()> {
+		self.operation_lock.lock().unwrap()
 	}
 
-	pub(crate) fn rebase_sparse_tip_to_block(
-		&self, account: OnchainWalletAccount, block: &bitcoin::Block, height: u32,
+	pub(crate) fn account_generation(&self) -> u64 {
+		self.account_generation.load(Ordering::Acquire)
+	}
+
+	pub(crate) fn apply_reorg_blocks_to_account(
+		&self, account: OnchainWalletAccount, fork_point: BestBlock,
+		blocks: &[(bitcoin::Block, u32)],
 	) -> Result<(), Error> {
+		let _operation = self.operation_lock.lock().unwrap();
+		let replacement_tip_height =
+			blocks.last().map(|(_, height)| *height).unwrap_or(fork_point.height);
+		let needs_rewind = {
+			let locked = self.inner.lock().unwrap();
+			let wallet = locked.wallet(&account).ok_or(Error::WalletOperationFailed)?;
+			wallet.latest_checkpoint().height() > replacement_tip_height
+		};
+		if needs_rewind {
+			self.rewind_wallet_account(account, fork_point)?;
+		}
+
 		let mut locked = self.inner.lock().unwrap();
-		locked.rebase_sparse_tip_to_block(&account, block, height).map_err(|e| {
-			log_error!(self.logger, "Failed to rebase sparse tip for {:?}: {}", account, e);
+		self.payment_store_update_pending.store(true, Ordering::Release);
+		let fork_point =
+			bdk_chain::BlockId { height: fork_point.height, hash: fork_point.block_hash };
+		locked.apply_reorg_blocks_to(&account, fork_point, blocks).map_err(|e| {
+			log_error!(self.logger, "Failed to apply reorg blocks to {:?}: {}", account, e);
+			match e {
+				bdk_wallet_aggregate::Error::PersistenceFailed => Error::PersistenceFailed,
+				_ => Error::WalletOperationFailed,
+			}
+		})?;
+		Ok(())
+	}
+
+	fn rewind_wallet_account(
+		&self, account: OnchainWalletAccount, checkpoint: BestBlock,
+	) -> Result<(), Error> {
+		let xprv = Xpriv::new_master(self.config.network, &self.seed_bytes).map_err(|e| {
+			log_error!(self.logger, "Failed to derive master secret while rewinding wallet: {}", e);
 			Error::WalletOperationFailed
 		})?;
-		self.update_payment_store(&*locked).map_err(|e| {
-			log_error!(self.logger, "Failed to update payment store after sparse rebase: {}", e);
-			e
-		})
+		let mut aggregate = self.inner.lock().unwrap();
+		aggregate.persist_all().map_err(|e| {
+			log_error!(self.logger, "Failed to persist {:?} before wallet rewind: {}", account, e);
+			Error::PersistenceFailed
+		})?;
+		let mut persister = KVStoreWalletPersister::new(
+			Arc::clone(&self.kv_store),
+			Arc::clone(&self.logger),
+			account,
+		);
+		let checkpoint_id =
+			bdk_chain::BlockId { height: checkpoint.height, hash: checkpoint.block_hash };
+		persister.rewind_to_checkpoint(checkpoint_id).map_err(|e| {
+			log_error!(self.logger, "Failed to persist wallet rewind for {:?}: {}", account, e);
+			Error::PersistenceFailed
+		})?;
+
+		let (wallet, loaded_from_store) = crate::builder::get_or_create_wallet_for_account(
+			account,
+			xprv,
+			self.config.network,
+			&mut persister,
+		)
+		.map_err(|e| {
+			log_error!(self.logger, "Failed to reload wallet {:?} after rewind: {}", account, e);
+			Error::WalletOperationFailed
+		})?;
+		if !loaded_from_store || wallet.latest_checkpoint().block_id() != checkpoint_id {
+			log_error!(
+				self.logger,
+				"Wallet {:?} did not reload at the requested checkpoint",
+				account
+			);
+			return Err(Error::WalletOperationFailed);
+		}
+
+		aggregate.wallets_mut().insert(account, wallet);
+		aggregate.persisters_mut().insert(account, persister);
+		Ok(())
 	}
 
 	pub(crate) fn apply_block_to_account(
 		&self, account: OnchainWalletAccount, block: &bitcoin::Block, height: u32,
 	) -> Result<(), Error> {
 		let mut locked = self.inner.lock().unwrap();
+		self.payment_store_update_pending.store(true, Ordering::Release);
 		locked.apply_block_to(&account, block, height).map_err(|e| {
 			log_error!(
 				self.logger,
@@ -260,12 +342,31 @@ impl Wallet {
 				account,
 				e
 			);
-			Error::WalletOperationFailed
+			match e {
+				bdk_wallet_aggregate::Error::PersistenceFailed => Error::PersistenceFailed,
+				_ => Error::WalletOperationFailed,
+			}
 		})?;
-		self.update_payment_store(&*locked).map_err(|e| {
-			log_error!(self.logger, "Failed to update payment store after account apply: {}", e);
-			e
-		})
+		Ok(())
+	}
+
+	pub(crate) fn finish_pending_sync(&self, refresh_payment_store: bool) -> Result<(), Error> {
+		let mut locked = self.inner.lock().unwrap();
+		locked.persist_all().map_err(|e| {
+			log_error!(self.logger, "Failed to persist pending wallet changes: {}", e);
+			Error::PersistenceFailed
+		})?;
+		if refresh_payment_store || self.payment_store_update_pending.load(Ordering::Acquire) {
+			self.update_payment_store(&locked).map_err(|e| {
+				log_error!(
+					self.logger,
+					"Failed to update payment store after wallet persistence: {}",
+					e
+				);
+				e
+			})?;
+		}
+		Ok(())
 	}
 
 	// Get a drain script for change outputs.
@@ -327,6 +428,7 @@ impl Wallet {
 				log_error!(self.logger, "Failed to add wallet for {:?}: {}", wallet_account, e);
 				Error::WalletOperationFailed
 			})?;
+			self.account_generation.fetch_add(1, Ordering::AcqRel);
 			self.address_type_runtime_config.write().unwrap().monitored.push(address_type);
 		}
 
@@ -352,10 +454,11 @@ impl Wallet {
 			}
 		}
 
+		let mut removed = false;
 		{
 			let mut aggregate = self.inner.lock().unwrap();
 			match aggregate.remove_wallet(wallet_account) {
-				Ok(()) => {},
+				Ok(()) => removed = true,
 				Err(bdk_wallet_aggregate::Error::CannotRemovePrimary) => {
 					return Err(Error::AddressTypeIsPrimary);
 				},
@@ -376,6 +479,9 @@ impl Wallet {
 				.unwrap()
 				.monitored
 				.retain(|&at| at != address_type);
+			if removed {
+				self.account_generation.fetch_add(1, Ordering::AcqRel);
+			}
 		}
 
 		log_info!(self.logger, "Removed address type {:?} from monitor", address_type);
@@ -417,6 +523,7 @@ impl Wallet {
 					log_error!(self.logger, "Failed to add wallet for {:?}: {}", wallet_account, e);
 					Error::WalletOperationFailed
 				})?;
+				self.account_generation.fetch_add(1, Ordering::AcqRel);
 			}
 
 			aggregate.set_primary(wallet_account).map_err(|e| {
@@ -516,8 +623,17 @@ impl Wallet {
 		let _op = self.operation_lock.lock().unwrap();
 
 		{
-			let aggregate = self.inner.lock().unwrap();
+			let mut aggregate = self.inner.lock().unwrap();
 			if aggregate.loaded_keys().contains(&wallet_account) {
+				aggregate.persist_all().map_err(|e| {
+					log_error!(
+						self.logger,
+						"Failed to persist derived account {:?}: {}",
+						wallet_account,
+						e
+					);
+					Error::PersistenceFailed
+				})?;
 				drop(aggregate);
 				let mut runtime_config = self.address_type_runtime_config.write().unwrap();
 				if !runtime_config.derived_accounts.contains(&wallet_account) {
@@ -547,6 +663,16 @@ impl Wallet {
 					e
 				);
 				Error::WalletOperationFailed
+			})?;
+			self.account_generation.fetch_add(1, Ordering::AcqRel);
+			aggregate.persist_all().map_err(|e| {
+				log_error!(
+					self.logger,
+					"Failed to persist derived account {:?}: {}",
+					wallet_account,
+					e
+				);
+				Error::PersistenceFailed
 			})?;
 			let mut runtime_config = self.address_type_runtime_config.write().unwrap();
 			if !runtime_config.derived_accounts.contains(&wallet_account) {
@@ -597,10 +723,12 @@ impl Wallet {
 		&self, unconfirmed_txs: Vec<(Transaction, u64)>, evicted_txids: Vec<(Txid, u64)>,
 	) -> Result<(), Error> {
 		let mut locked_wallet = self.inner.lock().unwrap();
+		self.payment_store_update_pending.store(true, Ordering::Release);
 		locked_wallet.apply_mempool_txs(unconfirmed_txs, evicted_txids).map_err(|e| {
 			log_error!(self.logger, "Failed to apply mempool txs: {}", e);
 			Error::PersistenceFailed
-		})
+		})?;
+		self.update_payment_store(&locked_wallet)
 	}
 
 	// Bumps the fee of an existing transaction using Replace-By-Fee (RBF).
@@ -780,6 +908,17 @@ impl Wallet {
 	}
 
 	fn update_payment_store(
+		&self, locked_wallet: &AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>,
+	) -> Result<(), Error> {
+		self.payment_store_update_pending.store(true, Ordering::Release);
+		let result = self.update_payment_store_inner(locked_wallet);
+		if result.is_ok() {
+			self.payment_store_update_pending.store(false, Ordering::Release);
+		}
+		result
+	}
+
+	fn update_payment_store_inner(
 		&self, locked_wallet: &AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>,
 	) -> Result<(), Error> {
 		let mut seen_txids = std::collections::HashSet::new();
@@ -1948,12 +2087,11 @@ fn create_wallet_for_account(
 	})?;
 
 	// Only advance brand-new wallets to the current tip. Re-loaded wallets keep their persisted
-	// checkpoint so Bitcoind Listen can catch up from the older tip (via the aggregate minimum)
-	// instead of skipping blocks between the persisted height and the primary tip.
+	// checkpoint so per-account Bitcoind sync can replay every block after the older tip.
 	//
 	// New derived wallets still start at the current tip: Bitcoind has no account full-scan, so
-	// pre-registration history on that backend remains undiscoverable; Esplora/Electrum full-scan
-	// recovers it regardless of the local checkpoint.
+	// confirmed pre-registration history remains undiscoverable there. Esplora and Electrum recover
+	// it with a full scan regardless of the local checkpoint.
 	if !loaded_from_store {
 		let block_id = bdk_chain::BlockId { height: chain_tip.height, hash: chain_tip.block_hash };
 		let mut cp = wallet.latest_checkpoint();

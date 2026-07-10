@@ -2234,9 +2234,9 @@ impl Node {
 	///
 	/// Not persisted across restarts; re-add after each build. BDK data remains persisted.
 	///
-	/// Derived accounts are always full-scanned (BDK stop gap) so addresses issued from the exported
-	/// xpub outside the node remain discoverable on Esplora/Electrum. Bitcoind Listen does not
-	/// historically scan for funds received before first registration of a brand-new account.
+	/// Derived accounts use full scans so addresses issued from the exported xpub remain discoverable
+	/// on Esplora/Electrum. Bitcoind replays the current mempool but cannot scan confirmed history
+	/// from before a brand-new account's first registration.
 	pub fn add_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32, xpub: String,
 	) -> Result<(), Error> {

@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use bdk_chain::BlockId;
 use bdk_chain::Merge;
 use bdk_wallet::{ChangeSet, WalletPersister};
 
@@ -30,6 +31,34 @@ impl KVStoreWalletPersister {
 		kv_store: Arc<DynStore>, logger: Arc<Logger>, wallet_account: OnchainWalletAccount,
 	) -> Self {
 		Self { latest_change_set: None, kv_store, logger, wallet_account }
+	}
+
+	/// Replaces the stored local-chain tip while retaining descriptors, transactions, and indexes.
+	pub(crate) fn rewind_to_checkpoint(
+		&mut self, checkpoint: BlockId,
+	) -> Result<(), std::io::Error> {
+		let persisted = <Self as WalletPersister>::initialize(self)?;
+		if checkpoint.height == 0
+			&& persisted.local_chain.blocks.get(&0).copied().flatten() != Some(checkpoint.hash)
+		{
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				"Wallet genesis does not match the requested checkpoint",
+			));
+		}
+
+		let mut rewind = ChangeSet::default();
+		for height in persisted
+			.local_chain
+			.blocks
+			.keys()
+			.copied()
+			.filter(|height| *height > checkpoint.height)
+		{
+			rewind.local_chain.blocks.insert(height, None);
+		}
+		rewind.local_chain.blocks.insert(checkpoint.height, Some(checkpoint.hash));
+		<Self as WalletPersister>::persist(self, &rewind)
 	}
 }
 
