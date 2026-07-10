@@ -4046,9 +4046,7 @@ mod derived_accounts {
 	async fn test_bitcoind_readd_after_equal_height_reorg_recovers_replacement_funds() {
 		use bitcoin::Amount;
 
-		use crate::common::{
-			distribute_funds_unconfirmed, generate_blocks_and_wait, invalidate_blocks,
-		};
+		use crate::common::{generate_blocks_and_wait, invalidate_blocks};
 
 		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 		let chain_source = TestChainSource::BitcoindRpcSync(&bitcoind);
@@ -4093,13 +4091,20 @@ mod derived_accounts {
 		node2.sync_wallets().unwrap();
 
 		invalidate_blocks(&bitcoind.client, 2);
-		distribute_funds_unconfirmed(
-			&bitcoind.client,
-			&electrsd.client,
-			vec![second_addr],
-			Amount::from_sat(70_000),
-		)
-		.await;
+		// Avoid electrs mempool polling immediately after invalidate (connection can drop during
+		// reorg). Submit via bitcoind, then mine the replacement tip and wait on block height.
+		let mut amounts = std::collections::HashMap::<String, f64>::new();
+		amounts.insert(second_addr.to_string(), Amount::from_sat(70_000).to_btc());
+		let _txid = bitcoind
+			.client
+			.call::<serde_json::Value>(
+				"sendmany",
+				&[serde_json::json!(""), serde_json::json!(amounts)],
+			)
+			.expect("send replacement payment")
+			.as_str()
+			.expect("txid string")
+			.to_string();
 		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 2).await;
 		let height_after =
 			bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u32;
