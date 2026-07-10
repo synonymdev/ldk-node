@@ -4067,6 +4067,27 @@ mod derived_accounts {
 		// Two-block fork: invalidate and replace so same heights get new hashes.
 		invalidate_blocks(&bitcoind.client, 2);
 		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 2).await;
+		let reorg_tip = bitcoind
+			.client
+			.get_block_hash(
+				bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u64,
+			)
+			.expect("tip hash")
+			.block_hash()
+			.expect("tip hash present");
+		assert_ne!(tip_before, reorg_tip, "bitcoind must be on a replacement tip");
+		assert_eq!(
+			bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u32,
+			height_before,
+			"reorg should preserve tip height"
+		);
+
+		node.sync_wallets().expect("bitcoind reorg sync must apply replacement blocks");
+		// Advance one more block so SpvClient publishes a strictly better tip (same pattern as
+		// tests/reorg_test.rs) and both wallets plus Lightning must follow the new chain.
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
+		node.sync_wallets().unwrap();
+
 		let height_after =
 			bitcoind.client.get_blockchain_info().expect("bitcoind info").blocks as u32;
 		let tip_after = bitcoind
@@ -4075,11 +4096,13 @@ mod derived_accounts {
 			.expect("tip hash")
 			.block_hash()
 			.expect("tip hash present");
-		assert_ne!(tip_before, tip_after, "bitcoind must be on a replacement tip");
-		assert_eq!(height_after, height_before, "reorg should preserve tip height");
-
-		node.sync_wallets().expect("bitcoind reorg sync must apply replacement blocks");
+		assert_eq!(height_after, height_before + 1);
 		assert_eq!(node.status().current_best_block.height, height_after);
+		assert_ne!(
+			node.status().current_best_block.block_hash,
+			tip_before,
+			"node must leave the invalidated tip"
+		);
 		assert_eq!(
 			node.status().current_best_block.block_hash,
 			tip_after,
