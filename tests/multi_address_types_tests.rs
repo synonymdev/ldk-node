@@ -3449,6 +3449,7 @@ mod events {
 // Derived on-chain wallet accounts
 // ---------------------------------------------------------------------------
 mod derived_accounts {
+	use std::time::{Duration, SystemTime, UNIX_EPOCH};
 	use std::{env, str::FromStr};
 
 	use bitcoin::bip32::{ChildNumber, Xpub};
@@ -3461,9 +3462,9 @@ mod derived_accounts {
 	use ldk_node::NodeError;
 
 	use crate::common::{
-		build_node, distribute_funds_unconfirmed, generate_blocks_and_wait, invalidate_blocks,
-		open_channel, premine_and_distribute_funds, premine_blocks, setup_bitcoind_and_electrsd,
-		setup_node, wait_for_tx, TestChainSource,
+		distribute_funds_unconfirmed, generate_blocks_and_wait, invalidate_blocks, open_channel,
+		premine_and_distribute_funds, premine_blocks, setup_bitcoind_and_electrsd, setup_node,
+		wait_for_tx, TestChainSource,
 	};
 	use crate::helpers::{
 		confirm_and_sync, fund_and_sync, fund_multiple_and_sync, fund_peer_node_and_sync,
@@ -4036,9 +4037,10 @@ mod derived_accounts {
 		let mut config = node_config(AddressType::NativeSegwit, vec![]);
 		config.store_type = crate::common::TestStoreType::Sqlite;
 		config.node_config.storage_dir_path = storage_path;
-		// Register before start so background initial sync (not a later sync_wallets poll)
-		// must observe the persisted unconfirmed tx against the empty mempool.
-		let node = build_node(&chain_source, config, Some(seed.to_vec()));
+		let node = setup_node(&chain_source, config, Some(seed.to_vec()));
+		node.sync_wallets().unwrap();
+		node.stop().unwrap();
+		// Load account 1 while stopped so the next initial sync owns the eviction.
 		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
 		assert_eq!(
 			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
@@ -4047,19 +4049,33 @@ mod derived_accounts {
 			70_000,
 			"persisted unconfirmed funds must still be present before initial sync"
 		);
+
+		let sync_timestamp_before = node
+			.status()
+			.latest_onchain_wallet_sync_timestamp
+			.expect("first lifecycle must publish an on-chain sync timestamp");
+		// Sync timestamps use seconds, so start the next lifecycle in a later second.
+		while SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.expect("system time after Unix epoch")
+			.as_secs()
+			<= sync_timestamp_before
+		{
+			tokio::time::sleep(Duration::from_millis(10)).await;
+		}
+
 		node.start().unwrap();
 		assert!(node.status().is_running);
 
-		// Ignore any timestamp restored from the previous node's persisted metrics.
-		let sync_timestamp_before = node.status().latest_onchain_wallet_sync_timestamp;
 		let mut saw_initial_sync = false;
 		for _ in 0..200 {
 			let sync_timestamp_after = node.status().latest_onchain_wallet_sync_timestamp;
-			if sync_timestamp_after.is_some() && sync_timestamp_after != sync_timestamp_before {
+			if matches!(sync_timestamp_after, Some(timestamp) if timestamp > sync_timestamp_before)
+			{
 				saw_initial_sync = true;
 				break;
 			}
-			tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+			tokio::time::sleep(Duration::from_millis(50)).await;
 		}
 		assert!(
 			saw_initial_sync,
