@@ -1670,10 +1670,7 @@ mod tests {
 		fn persist(persister: &mut Self, change_set: &ChangeSet) -> Result<(), Self::Error> {
 			if persister.failures.load(Ordering::SeqCst) > 0 {
 				persister.failures.fetch_sub(1, Ordering::SeqCst);
-				return Err(std::io::Error::new(
-					std::io::ErrorKind::Other,
-					"injected persist failure",
-				));
+				return Err(std::io::Error::other("injected persist failure"));
 			}
 			persister.inner.change_set.lock().unwrap().merge(change_set.clone());
 			Ok(())
