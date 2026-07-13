@@ -28,7 +28,8 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
-use bdk_chain::ChainPosition;
+use bdk_chain::{ChainPosition, ConfirmationBlockTime};
+use bdk_wallet::error::CreateTxError;
 use bdk_wallet::event::WalletEvent;
 use bdk_wallet::{
 	AddressInfo, Balance, KeychainKind, LocalOutput, PersistedWallet, Update, WalletPersister,
@@ -46,6 +47,12 @@ const BIP32_MAX_NORMAL_INDEX: u32 = (1 << 31) - 1;
 
 /// Maximum number of address metadata entries returned by a single batch derivation call.
 pub const MAX_ADDRESS_INFO_BATCH_COUNT: u32 = 10_000;
+
+#[derive(Clone, Copy)]
+struct CanonicalTransactionState {
+	confirmation: Option<ConfirmationBlockTime>,
+	last_seen: u64,
+}
 
 fn validate_derivation_index(index: u32) -> Result<(), Error> {
 	if index > BIP32_MAX_NORMAL_INDEX {
@@ -65,6 +72,13 @@ fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> 
 
 	let last_index = start_index.checked_add(count - 1).ok_or(Error::InvalidQuantity)?;
 	validate_derivation_index(last_index)
+}
+
+fn map_tx_builder_error(error: CreateTxError) -> Error {
+	match error {
+		CreateTxError::CoinSelection(_) => Error::InsufficientFunds,
+		_ => Error::OnchainTxCreationFailed,
+	}
 }
 
 /// A wallet aggregator that presents multiple BDK wallets as a single logical
@@ -237,10 +251,14 @@ where
 		if key == self.primary {
 			return Err(Error::CannotRemovePrimary);
 		}
-		if self.wallets.remove(&key).is_none() {
+		if !self.wallets.contains_key(&key) {
 			return Err(Error::WalletNotFound);
 		}
-		self.persisters.remove(&key).expect("persister must exist if wallet existed");
+		if !self.persisters.contains_key(&key) {
+			return Err(Error::PersisterNotFound);
+		}
+		self.wallets.remove(&key);
+		self.persisters.remove(&key);
 		Ok(())
 	}
 
@@ -272,21 +290,19 @@ where
 	}
 
 	/// List confirmed unspent outputs across all wallets.
-	///
-	/// Only returns UTXOs whose creating transaction is confirmed in at
-	/// least one wallet.
 	pub fn list_confirmed_unspent(&self) -> Vec<LocalOutput> {
-		let mut confirmed_txids = HashSet::new();
+		let mut confirmed_outputs = Vec::new();
 		for wallet in self.wallets.values() {
-			for t in wallet.transactions().filter(|t| t.chain_position.is_confirmed()) {
-				confirmed_txids.insert(t.tx_node.txid);
-			}
+			let confirmed_txids: HashSet<Txid> = wallet
+				.transactions()
+				.filter(|wallet_tx| wallet_tx.chain_position.is_confirmed())
+				.map(|wallet_tx| wallet_tx.tx_node.txid)
+				.collect();
+			confirmed_outputs.extend(
+				wallet.list_unspent().filter(|utxo| confirmed_txids.contains(&utxo.outpoint.txid)),
+			);
 		}
-
-		self.list_unspent()
-			.into_iter()
-			.filter(|u| confirmed_txids.contains(&u.outpoint.txid))
-			.collect()
+		confirmed_outputs
 	}
 
 	/// Derive the inner `WPubkeyHash` for a P2SH-wrapped P2WPKH UTXO.
@@ -337,16 +353,32 @@ where
 		None
 	}
 
-	/// Check whether a transaction is confirmed in any wallet.
+	/// Return the confirmation shared by every wallet tracking a transaction.
+	pub fn transaction_confirmation(&self, txid: &Txid) -> Option<ConfirmationBlockTime> {
+		self.canonical_transaction_states().get(txid).and_then(|state| state.confirmation)
+	}
+
+	/// Return confirmations agreed on by every wallet tracking each transaction.
+	pub fn transaction_confirmations(&self) -> HashMap<Txid, ConfirmationBlockTime> {
+		self.canonical_transaction_states()
+			.into_iter()
+			.filter_map(|(txid, state)| state.confirmation.map(|confirmation| (txid, confirmation)))
+			.collect()
+	}
+
+	/// Check whether every wallet tracking a transaction agrees it is confirmed.
 	pub fn is_tx_confirmed(&self, txid: &Txid) -> bool {
-		for wallet in self.wallets.values() {
-			if let Some(tx_node) = wallet.get_tx(*txid) {
-				if tx_node.chain_position.is_confirmed() {
-					return true;
-				}
-			}
-		}
-		false
+		self.transaction_confirmation(txid).is_some()
+	}
+
+	/// Check whether any wallet tracking a transaction sees it as confirmed.
+	pub fn is_tx_confirmed_in_any_wallet(&self, txid: &Txid) -> bool {
+		self.wallets.values().any(|wallet| {
+			wallet
+				.transactions()
+				.find(|tx| tx.tx_node.txid == *txid)
+				.is_some_and(|tx| tx.chain_position.is_confirmed())
+		})
 	}
 
 	/// Aggregated sent and received amounts for a transaction across all wallets.
@@ -377,38 +409,47 @@ where
 
 	/// Collect all unconfirmed transaction IDs across wallets (deduplicated).
 	pub fn unconfirmed_txids(&self) -> Vec<Txid> {
-		let mut seen = HashSet::new();
-		self.wallets
-			.values()
-			.flat_map(|w| {
-				w.transactions()
-					.filter(|t| t.chain_position.is_unconfirmed())
-					.map(|t| t.tx_node.txid)
-			})
-			.filter(|txid| seen.insert(*txid))
+		self.canonical_transaction_states()
+			.into_iter()
+			.filter_map(|(txid, state)| state.confirmation.is_none().then_some(txid))
 			.collect()
 	}
 
 	/// Collect unconfirmed transaction IDs and their latest observed timestamps.
 	pub fn unconfirmed_txids_with_last_seen(&self) -> Vec<(Txid, u64)> {
-		let mut last_seen_by_txid = HashMap::new();
-		for wallet in self.wallets.values() {
-			for wallet_tx in wallet.transactions() {
-				if let ChainPosition::Unconfirmed { last_seen, .. } = wallet_tx.chain_position {
-					let last_seen = last_seen.unwrap_or(0);
-					last_seen_by_txid
-						.entry(wallet_tx.tx_node.txid)
-						.and_modify(|seen: &mut u64| *seen = (*seen).max(last_seen))
-						.or_insert(last_seen);
-				}
-			}
-		}
-		last_seen_by_txid.into_iter().collect()
+		self.canonical_transaction_states()
+			.into_iter()
+			.filter_map(|(txid, state)| {
+				state.confirmation.is_none().then_some((txid, state.last_seen))
+			})
+			.collect()
 	}
 
-	/// All transaction IDs across all wallets.
+	/// All canonical transaction IDs across all wallets, deduplicated.
 	pub fn all_txids(&self) -> Vec<Txid> {
-		self.wallets.values().flat_map(|w| w.transactions().map(|wtx| wtx.tx_node.txid)).collect()
+		self.canonical_transaction_states().into_keys().collect()
+	}
+
+	fn canonical_transaction_states(&self) -> HashMap<Txid, CanonicalTransactionState> {
+		let mut states = HashMap::new();
+		for wallet in self.wallets.values() {
+			for wallet_tx in wallet.transactions() {
+				let (confirmation, last_seen) = match wallet_tx.chain_position {
+					ChainPosition::Confirmed { anchor, .. } => (Some(anchor), 0),
+					ChainPosition::Unconfirmed { last_seen, .. } => (None, last_seen.unwrap_or(0)),
+				};
+				states
+					.entry(wallet_tx.tx_node.txid)
+					.and_modify(|state: &mut CanonicalTransactionState| {
+						if state.confirmation != confirmation {
+							state.confirmation = None;
+						}
+						state.last_seen = state.last_seen.max(last_seen);
+					})
+					.or_insert(CanonicalTransactionState { confirmation, last_seen });
+			}
+		}
+		states
 	}
 
 	// ─── Chain Tip ──────────────────────────────────────────────────────
@@ -431,7 +472,6 @@ where
 			})
 			.collect()
 	}
-
 	/// Apply a connected block to a single wallet, then persist.
 	///
 	/// Same skip rules as [`Self::apply_block`], scoped to `key`.
@@ -455,12 +495,11 @@ where
 				);
 				Error::WalletOperationFailed
 			})?;
-			if let Some(persister) = self.persisters.get_mut(key) {
-				wallet.persist(persister).map_err(|e| {
-					log::error!("Failed to persist wallet {:?}: {}", key, e);
-					Error::PersistenceFailed
-				})?;
-			}
+			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
+			wallet.persist(persister).map_err(|e| {
+				log::error!("Failed to persist wallet {:?}: {}", key, e);
+				Error::PersistenceFailed
+			})?;
 		}
 
 		Ok(wallet.transactions().map(|wtx| wtx.tx_node.txid).collect())
@@ -577,12 +616,11 @@ where
 	pub fn cancel_tx(&mut self, tx: &Transaction) -> Result<(), Error> {
 		for (key, wallet) in self.wallets.iter_mut() {
 			wallet.cancel_tx(tx);
-			if let Some(persister) = self.persisters.get_mut(key) {
-				wallet.persist(persister).map_err(|e| {
-					log::error!("Failed to persist wallet {:?}: {}", key, e);
-					Error::PersistenceFailed
-				})?;
-			}
+			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
+			wallet.persist(persister).map_err(|e| {
+				log::error!("Failed to persist wallet {:?}: {}", key, e);
+				Error::PersistenceFailed
+			})?;
 		}
 		Ok(())
 	}
@@ -610,12 +648,16 @@ where
 		for (i, txin) in psbt.unsigned_tx.input.iter().enumerate() {
 			if let Some(psbt_input) = psbt.inputs.get(i) {
 				if let Some(witness_utxo) = &psbt_input.witness_utxo {
-					total_input_value += witness_utxo.value.to_sat();
+					total_input_value = total_input_value
+						.checked_add(witness_utxo.value.to_sat())
+						.ok_or(Error::OnchainTxCreationFailed)?;
 				} else if let Some(non_witness_tx) = &psbt_input.non_witness_utxo {
 					if let Some(txout) =
 						non_witness_tx.output.get(txin.previous_output.vout as usize)
 					{
-						total_input_value += txout.value.to_sat();
+						total_input_value = total_input_value
+							.checked_add(txout.value.to_sat())
+							.ok_or(Error::OnchainTxCreationFailed)?;
 					} else {
 						return Err(Error::OnchainTxCreationFailed);
 					}
@@ -623,7 +665,9 @@ where
 					let mut found = false;
 					for wallet in self.wallets.values() {
 						if let Some(local_utxo) = wallet.get_utxo(txin.previous_output) {
-							total_input_value += local_utxo.txout.value.to_sat();
+							total_input_value = total_input_value
+								.checked_add(local_utxo.txout.value.to_sat())
+								.ok_or(Error::OnchainTxCreationFailed)?;
 							found = true;
 							break;
 						}
@@ -636,7 +680,9 @@ where
 				let mut found = false;
 				for wallet in self.wallets.values() {
 					if let Some(local_utxo) = wallet.get_utxo(txin.previous_output) {
-						total_input_value += local_utxo.txout.value.to_sat();
+						total_input_value = total_input_value
+							.checked_add(local_utxo.txout.value.to_sat())
+							.ok_or(Error::OnchainTxCreationFailed)?;
 						found = true;
 						break;
 					}
@@ -647,10 +693,12 @@ where
 			}
 		}
 
-		let total_output_value: u64 =
-			psbt.unsigned_tx.output.iter().map(|txout| txout.value.to_sat()).sum();
+		let total_output_value =
+			psbt.unsigned_tx.output.iter().try_fold(0u64, |total, txout| {
+				total.checked_add(txout.value.to_sat()).ok_or(Error::OnchainTxCreationFailed)
+			})?;
 
-		Ok(total_input_value.saturating_sub(total_output_value))
+		total_input_value.checked_sub(total_output_value).ok_or(Error::OnchainTxCreationFailed)
 	}
 
 	/// Calculate fee from PSBT with fallback to primary wallet calculation.
@@ -759,12 +807,11 @@ where
 			wallet.apply_unconfirmed_txs(unconfirmed_txs.clone());
 			wallet.apply_evicted_txs(evicted_txids.clone());
 
-			if let Some(persister) = self.persisters.get_mut(key) {
-				wallet.persist(persister).map_err(|e| {
-					log::error!("Failed to persist wallet {:?}: {}", key, e);
-					Error::PersistenceFailed
-				})?;
-			}
+			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
+			wallet.persist(persister).map_err(|e| {
+				log::error!("Failed to persist wallet {:?}: {}", key, e);
+				Error::PersistenceFailed
+			})?;
 		}
 		Ok(())
 	}
@@ -813,12 +860,11 @@ where
 				Error::WalletOperationFailed
 			})?;
 
-			if let Some(persister) = self.persisters.get_mut(key) {
-				wallet.persist(persister).map_err(|e| {
-					log::error!("Failed to persist wallet {:?}: {}", key, e);
-					Error::PersistenceFailed
-				})?;
-			}
+			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
+			wallet.persist(persister).map_err(|e| {
+				log::error!("Failed to persist wallet {:?}: {}", key, e);
+				Error::PersistenceFailed
+			})?;
 		}
 
 		let mut all_txids = HashSet::new();
@@ -870,33 +916,25 @@ where
 		&mut self, original_tx: &Transaction, new_fee_rate: FeeRate,
 	) -> Result<Transaction, Error> {
 		// Attempt 1: change-only bump.
-		match rbf::build_cross_wallet_rbf(&mut self.wallets, original_tx, new_fee_rate, &[]) {
+		match rbf::build_cross_wallet_rbf(
+			&mut self.wallets,
+			&self.primary,
+			original_tx,
+			new_fee_rate,
+			&[],
+		) {
 			Ok(tx) => return Ok(tx),
 			Err(Error::InsufficientFunds) => {},
 			Err(e) => return Err(e),
 		}
 
-		// Attempt 2: select minimum additional UTXOs.
-		let original_fee = self.calculate_tx_fee(original_tx)?;
-		let new_fee = new_fee_rate.fee_wu(original_tx.weight()).unwrap_or(Amount::ZERO);
-		let fee_increase = new_fee.checked_sub(original_fee).unwrap_or(Amount::ZERO);
-
-		// Change value absorbable from the original tx.
-		let change_value: Amount = original_tx
-			.output
-			.iter()
-			.filter(|out| {
-				self.wallets.values().any(|w| {
-					w.list_unspent().any(|u| {
-						u.keychain == KeychainKind::Internal
-							&& u.txout.script_pubkey == out.script_pubkey
-					})
-				})
-			})
-			.map(|out| out.value)
-			.sum();
-
-		let deficit = fee_increase.checked_sub(change_value).unwrap_or(Amount::ZERO);
+		// Attempt 2: select enough effective value to pay the fee and retain change.
+		let deficit = rbf::additional_input_value_needed(
+			&self.wallets,
+			&self.primary,
+			original_tx,
+			new_fee_rate,
+		)?;
 
 		// Collect UTXOs from all wallets, excluding those already in the
 		// original tx and outputs created by the original tx.
@@ -905,7 +943,7 @@ where
 		let original_txid = original_tx.compute_txid();
 
 		let available: Vec<LocalOutput> = self
-			.list_unspent()
+			.list_confirmed_unspent()
 			.into_iter()
 			.filter(|u| !original_outpoints.contains(&u.outpoint))
 			.filter(|u| u.outpoint.txid != original_txid)
@@ -933,7 +971,13 @@ where
 			return Err(Error::InsufficientFunds);
 		}
 
-		rbf::build_cross_wallet_rbf(&mut self.wallets, original_tx, new_fee_rate, &extra_infos)
+		rbf::build_cross_wallet_rbf(
+			&mut self.wallets,
+			&self.primary,
+			original_tx,
+			new_fee_rate,
+			&extra_infos,
+		)
 	}
 
 	/// Look up an input value across local wallets.
@@ -978,10 +1022,15 @@ where
 		// Slow path: manually look up each input value.
 		let mut total_input = 0u64;
 		for txin in &tx.input {
-			total_input += self.get_input_value(&txin.previous_output)?;
+			total_input = total_input
+				.checked_add(self.get_input_value(&txin.previous_output)?)
+				.ok_or(Error::WalletOperationFailed)?;
 		}
-		let total_output: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
-		Ok(Amount::from_sat(total_input.saturating_sub(total_output)))
+		let total_output = tx.output.iter().try_fold(0u64, |total, output| {
+			total.checked_add(output.value.to_sat()).ok_or(Error::WalletOperationFailed)
+		})?;
+		let fee = total_input.checked_sub(total_output).ok_or(Error::WalletOperationFailed)?;
+		Ok(Amount::from_sat(fee))
 	}
 
 	// ─── High-Level Helpers ─────────────────────────────────────────────
@@ -1011,7 +1060,7 @@ where
 		self.prepare_utxos_for_psbt(&non_primary)
 	}
 
-	/// Select the minimum set of non-primary foreign UTXOs needed to cover
+	/// Select the minimum set of confirmed non-primary UTXOs needed to cover
 	/// `deficit`, using the given coin selection algorithm.
 	///
 	/// * `segwit_only` – if `true`, excludes bare P2PKH UTXOs (includes
@@ -1028,7 +1077,7 @@ where
 			self.primary_wallet().list_unspent().map(|u| u.outpoint).collect();
 
 		let non_primary: Vec<LocalOutput> = self
-			.list_unspent()
+			.list_confirmed_unspent()
 			.into_iter()
 			.filter(|u| !primary_outpoints.contains(&u.outpoint))
 			.filter(|u| !excluded_txids.contains(&u.outpoint.txid))
@@ -1293,7 +1342,7 @@ where
 	) -> Result<(Transaction, Amount, FeeRate), Error> {
 		// Find and validate the parent transaction.
 		let parent_tx = self.find_tx(parent_txid).ok_or(Error::TransactionNotFound)?;
-		if self.is_tx_confirmed(&parent_txid) {
+		if self.is_tx_confirmed_in_any_wallet(&parent_txid) {
 			return Err(Error::TransactionAlreadyConfirmed);
 		}
 
@@ -1349,7 +1398,7 @@ where
 		&self, parent_txid: Txid, target_fee_rate: FeeRate,
 	) -> Result<FeeRate, Error> {
 		let parent_tx = self.find_tx(parent_txid).ok_or(Error::TransactionNotFound)?;
-		if self.is_tx_confirmed(&parent_txid) {
+		if self.is_tx_confirmed_in_any_wallet(&parent_txid) {
 			return Err(Error::TransactionAlreadyConfirmed);
 		}
 
@@ -1410,7 +1459,7 @@ where
 	///
 	/// This is a high-level method that:
 	/// 1. Finds the original transaction across all wallets.
-	/// 2. Validates that it is unconfirmed and the new fee rate is higher.
+	/// 2. Validates that it is unconfirmed and the new fee rate meets replacement policy.
 	/// 3. If the original tx was primary-only, tries BDK's built-in fee
 	///    bump and falls back to adding foreign inputs if the primary wallet
 	///    has insufficient funds.
@@ -1426,16 +1475,16 @@ where
 		let original_tx = self.find_tx(txid).ok_or(Error::TransactionNotFound)?;
 
 		// Must not be confirmed.
-		if self.is_tx_confirmed(&txid) {
+		if self.is_tx_confirmed_in_any_wallet(&txid) {
 			return Err(Error::TransactionAlreadyConfirmed);
 		}
 
 		// Calculate original fee.
 		let original_fee = self.calculate_tx_fee(&original_tx)?;
-		let original_fee_rate = original_fee / original_tx.weight();
+		let minimum_fee_rate =
+			rbf::minimum_replacement_fee_rate(original_fee, original_tx.weight())?;
 
-		// New fee rate must be higher.
-		if new_fee_rate <= original_fee_rate {
+		if new_fee_rate < minimum_fee_rate {
 			return Err(Error::InvalidFeeRate);
 		}
 
@@ -1465,7 +1514,7 @@ where
 					builder.fee_rate(fee_rate);
 					builder.finish().map_err(|e| {
 						log::debug!("Primary-only RBF failed: {}", e);
-						Error::InsufficientFunds
+						map_tx_builder_error(e)
 					})
 				},
 				Err(e) => {
@@ -1477,29 +1526,27 @@ where
 
 		match primary_result {
 			Ok(psbt) => self.sign_psbt_all(psbt),
-			Err(_) => {
+			Err(Error::InsufficientFunds) => {
 				// Attempt 2: select minimum non-primary UTXOs for the fee deficit.
 				let original_tx = self.find_tx(txid).ok_or(Error::TransactionNotFound)?;
 				let original_fee = self.calculate_tx_fee(&original_tx)?;
-				let new_fee = fee_rate.fee_wu(original_tx.weight()).unwrap_or(Amount::ZERO);
+				let new_fee = fee_rate.fee_wu(original_tx.weight()).ok_or(Error::InvalidFeeRate)?;
 				let fee_increase = new_fee.checked_sub(original_fee).unwrap_or(Amount::ZERO);
 
-				// Wallet-owned outputs (change) in the original tx can absorb
-				// part of the fee increase, reducing what foreign UTXOs must cover.
-				let absorbable: Amount = original_tx
-					.output
-					.iter()
-					.filter(|out| self.is_mine(out.script_pubkey.clone()))
-					.map(|out| out.value)
-					.sum();
-				// No explicit buffer needed: BDK's coin selection already
-				// accounts for each candidate's input weight cost.
-				let deficit = fee_increase.checked_sub(absorbable).unwrap_or(Amount::ZERO);
+				let absorbable =
+					rbf::find_internal_change_output(&self.wallets, &self.primary, &original_tx)
+						.map(|(_, output)| output.value)
+						.unwrap_or(Amount::ZERO);
+				let required_value = fee_increase
+					.checked_add(Amount::from_sat(utxo::DUST_LIMIT_SATS))
+					.ok_or(Error::OnchainTxCreationFailed)?;
+				let deficit = required_value.checked_sub(absorbable).unwrap_or(Amount::ZERO);
 
+				let excluded_txids = HashSet::from([txid]);
 				let non_primary_infos = self.select_non_primary_foreign_utxos(
 					deficit,
 					fee_rate,
-					&HashSet::new(),
+					&excluded_txids,
 					false,
 					CoinSelectionAlgorithm::BranchAndBound,
 				)?;
@@ -1535,6 +1582,7 @@ where
 
 				self.sign_psbt_all(psbt)
 			},
+			Err(e) => Err(e),
 		}
 	}
 
@@ -1543,12 +1591,11 @@ where
 	/// Persist all wallets.
 	pub fn persist_all(&mut self) -> Result<(), Error> {
 		for (key, wallet) in self.wallets.iter_mut() {
-			if let Some(persister) = self.persisters.get_mut(key) {
-				wallet.persist(persister).map_err(|e| {
-					log::error!("Failed to persist wallet {:?}: {}", key, e);
-					Error::PersistenceFailed
-				})?;
-			}
+			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
+			wallet.persist(persister).map_err(|e| {
+				log::error!("Failed to persist wallet {:?}: {}", key, e);
+				Error::PersistenceFailed
+			})?;
 		}
 		Ok(())
 	}
@@ -1566,7 +1613,9 @@ mod tests {
 
 	use bdk_chain::Merge;
 	use bdk_wallet::template::Bip84;
-	use bdk_wallet::{ChangeSet, KeychainKind, PersistedWallet, Wallet, WalletPersister};
+	use bdk_wallet::{
+		ChangeSet, KeychainKind, PersistedWallet, SignOptions, Wallet, WalletPersister,
+	};
 	use bitcoin::bip32::Xpriv;
 	use bitcoin::{
 		Amount, Block, FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid,
@@ -1632,7 +1681,11 @@ mod tests {
 	}
 
 	fn test_xprv() -> Xpriv {
-		Xpriv::new_master(Network::Regtest, &[0x42; 32]).unwrap()
+		test_xprv_from_byte(0x42)
+	}
+
+	fn test_xprv_from_byte(byte: u8) -> Xpriv {
+		Xpriv::new_master(Network::Regtest, &[byte; 32]).unwrap()
 	}
 
 	fn create_empty_wallet<P>(persister: &mut P) -> PersistedWallet<P>
@@ -1640,7 +1693,14 @@ mod tests {
 		P: WalletPersister,
 		P::Error: std::fmt::Debug,
 	{
-		let xprv = test_xprv();
+		create_empty_wallet_from_xprv(persister, test_xprv())
+	}
+
+	fn create_empty_wallet_from_xprv<P>(persister: &mut P, xprv: Xpriv) -> PersistedWallet<P>
+	where
+		P: WalletPersister,
+		P::Error: std::fmt::Debug,
+	{
 		PersistedWallet::create(
 			persister,
 			Wallet::create(
@@ -1702,23 +1762,493 @@ mod tests {
 		persister: &mut NoopPersister, amount: Amount,
 	) -> PersistedWallet<NoopPersister> {
 		let mut wallet = create_empty_wallet(persister);
+		fund_wallet(&mut wallet, amount, 0x01);
+		wallet
+	}
 
+	fn fund_wallet<P>(wallet: &mut PersistedWallet<P>, amount: Amount, distinct: u8) -> Transaction
+	where
+		P: WalletPersister,
+	{
 		let addr = wallet.reveal_next_address(KeychainKind::External);
 		let funding_tx = Transaction {
 			version: bitcoin::transaction::Version::TWO,
 			lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
 			input: vec![TxIn {
-				previous_output: OutPoint { txid: Txid::from_byte_array([0x01; 32]), vout: 0 },
+				previous_output: OutPoint { txid: Txid::from_byte_array([distinct; 32]), vout: 0 },
 				..Default::default()
 			}],
 			output: vec![TxOut { value: amount, script_pubkey: addr.address.script_pubkey() }],
 		};
-		wallet.apply_unconfirmed_txs([(funding_tx, 0)]);
-		wallet
+		wallet.apply_unconfirmed_txs([(funding_tx.clone(), 0)]);
+		funding_tx
 	}
 
 	fn recipient_script() -> ScriptBuf {
 		ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_byte_array([0xab; 20]))
+	}
+
+	#[test]
+	fn persistence_fails_when_a_wallet_has_no_persister() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		aggregate.persisters_mut().remove(&0);
+
+		assert_eq!(aggregate.persist_all().unwrap_err(), Error::PersisterNotFound);
+	}
+
+	#[test]
+	fn removing_an_unknown_wallet_reports_wallet_not_found() {
+		let mut persister = NoopPersister;
+		let wallet = create_empty_wallet(&mut persister);
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		assert_eq!(aggregate.remove_wallet(1), Err(Error::WalletNotFound));
+	}
+
+	#[test]
+	fn removal_preserves_a_wallet_when_its_persister_is_missing() {
+		let mut primary_persister = NoopPersister;
+		let primary = create_empty_wallet(&mut primary_persister);
+		let mut secondary_persister = NoopPersister;
+		let secondary = create_empty_wallet(&mut secondary_persister);
+		let mut aggregate = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		aggregate.persisters_mut().remove(&1);
+
+		assert_eq!(aggregate.remove_wallet(1), Err(Error::PersisterNotFound));
+		assert!(aggregate.loaded_keys().contains(&1));
+	}
+
+	#[test]
+	fn fee_calculation_rejects_outputs_exceeding_inputs() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		let funding_tx = fund_wallet(&mut wallet, Amount::from_sat(100_000), 0x14);
+		let unsigned_tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![TxIn {
+				previous_output: OutPoint { txid: funding_tx.compute_txid(), vout: 0 },
+				..Default::default()
+			}],
+			output: vec![TxOut {
+				value: Amount::from_sat(110_000),
+				script_pubkey: recipient_script(),
+			}],
+		};
+		let psbt = bitcoin::psbt::Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+		let aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		assert_eq!(
+			aggregate.calculate_fee_from_psbt(&psbt).unwrap_err(),
+			Error::OnchainTxCreationFailed
+		);
+	}
+
+	#[test]
+	fn fee_calculation_supports_foreign_wallet_inputs() {
+		let mut primary_persister = NoopPersister;
+		let primary =
+			create_empty_wallet_from_xprv(&mut primary_persister, test_xprv_from_byte(0x15));
+		let mut secondary_persister = NoopPersister;
+		let mut secondary =
+			create_empty_wallet_from_xprv(&mut secondary_persister, test_xprv_from_byte(0x16));
+		let funding_tx = fund_wallet(&mut secondary, Amount::from_sat(100_000), 0x17);
+		let funding_outpoint = OutPoint { txid: funding_tx.compute_txid(), vout: 0 };
+		let mut aggregate = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		let infos = aggregate.prepare_outpoints_for_psbt(&[funding_outpoint]).unwrap();
+		let expected_weight = aggregate
+			.wallet(&1)
+			.unwrap()
+			.public_descriptor(KeychainKind::External)
+			.max_weight_to_satisfy()
+			.unwrap();
+		assert_eq!(infos[0].weight, expected_weight);
+		let psbt = {
+			let mut builder = aggregate.primary_wallet_mut().build_tx();
+			builder
+				.add_recipient(recipient_script(), Amount::from_sat(90_000))
+				.fee_rate(FeeRate::from_sat_per_kwu(250));
+			utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
+			builder.manually_selected_only();
+			builder.finish().unwrap()
+		};
+
+		assert!(aggregate.calculate_fee_from_psbt(&psbt).unwrap() > 0);
+	}
+
+	#[test]
+	fn only_coin_selection_errors_trigger_the_rbf_fallback() {
+		let insufficient = bdk_wallet::coin_selection::InsufficientFunds {
+			needed: Amount::from_sat(2),
+			available: Amount::from_sat(1),
+		};
+
+		assert_eq!(
+			map_tx_builder_error(CreateTxError::CoinSelection(insufficient)),
+			Error::InsufficientFunds
+		);
+		assert_eq!(
+			map_tx_builder_error(CreateTxError::NoRecipients),
+			Error::OnchainTxCreationFailed
+		);
+	}
+
+	#[test]
+	fn confirmed_utxos_use_the_owning_wallet_chain_state() {
+		use bitcoin::blockdata::constants::genesis_block;
+
+		let mut primary_persister = NoopPersister;
+		let mut primary =
+			create_empty_wallet_from_xprv(&mut primary_persister, test_xprv_from_byte(0x21));
+		let mut secondary_persister = NoopPersister;
+		let mut secondary =
+			create_empty_wallet_from_xprv(&mut secondary_persister, test_xprv_from_byte(0x22));
+		let primary_script =
+			primary.reveal_next_address(KeychainKind::External).address.script_pubkey();
+		let secondary_script =
+			secondary.reveal_next_address(KeychainKind::External).address.script_pubkey();
+		let shared_tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![TxIn {
+				previous_output: OutPoint { txid: Txid::from_byte_array([0x23; 32]), vout: 0 },
+				..Default::default()
+			}],
+			output: vec![
+				TxOut { value: Amount::from_sat(40_000), script_pubkey: primary_script.clone() },
+				TxOut { value: Amount::from_sat(50_000), script_pubkey: secondary_script.clone() },
+			],
+		};
+		primary.apply_unconfirmed_txs([(shared_tx.clone(), 1)]);
+		secondary.apply_unconfirmed_txs([(shared_tx.clone(), 1)]);
+
+		let genesis = genesis_block(Network::Regtest);
+		primary.apply_block(&genesis, 0).unwrap();
+		secondary.apply_block(&genesis, 0).unwrap();
+		let block = regtest_child_block_with_transaction(&genesis, 1, shared_tx.clone());
+		primary.apply_block(&block, 1).unwrap();
+
+		let txid = shared_tx.compute_txid();
+		let mut aggregate = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		let confirmed = aggregate.list_confirmed_unspent();
+		assert_eq!(confirmed.len(), 1);
+		assert_eq!(confirmed[0].txout.script_pubkey, primary_script);
+		assert!(aggregate.transaction_confirmation(&txid).is_none());
+		assert!(!aggregate.transaction_confirmations().contains_key(&txid));
+		assert!(aggregate.unconfirmed_txids().contains(&txid));
+		assert!(aggregate.unconfirmed_txids_with_last_seen().contains(&(txid, 1)));
+		assert!(aggregate.is_tx_confirmed_in_any_wallet(&txid));
+		assert_eq!(
+			aggregate.build_rbf(txid, FeeRate::from_sat_per_kwu(1_000)).unwrap_err(),
+			Error::TransactionAlreadyConfirmed
+		);
+		assert_eq!(
+			aggregate.calculate_cpfp_fee_rate(txid, FeeRate::from_sat_per_kwu(1_000)).unwrap_err(),
+			Error::TransactionAlreadyConfirmed
+		);
+		assert_eq!(
+			aggregate.build_cpfp(txid, FeeRate::from_sat_per_kwu(1_000), None).unwrap_err(),
+			Error::TransactionAlreadyConfirmed
+		);
+
+		aggregate.apply_block_to(&1, &block, 1).unwrap();
+		assert_eq!(aggregate.list_confirmed_unspent().len(), 2);
+		assert_eq!(
+			aggregate.transaction_confirmation(&txid).unwrap().block_id.hash,
+			block.block_hash()
+		);
+		assert_eq!(
+			aggregate.transaction_confirmations().get(&txid).unwrap().block_id.hash,
+			block.block_hash()
+		);
+		assert!(!aggregate.unconfirmed_txids().contains(&txid));
+		assert!(!aggregate.unconfirmed_txids_with_last_seen().iter().any(|(id, _)| id == &txid));
+	}
+
+	#[test]
+	fn primary_rbf_does_not_spend_or_reduce_secondary_recipient_outputs() {
+		let mut primary_persister = NoopPersister;
+		let mut primary =
+			create_empty_wallet_from_xprv(&mut primary_persister, test_xprv_from_byte(0x31));
+		let primary_funding = fund_wallet(&mut primary, Amount::from_sat(55_000), 0x32);
+		let primary_outpoint = OutPoint { txid: primary_funding.compute_txid(), vout: 0 };
+
+		let mut secondary_persister = NoopPersister;
+		let mut secondary =
+			create_empty_wallet_from_xprv(&mut secondary_persister, test_xprv_from_byte(0x33));
+		let secondary_funding = fund_wallet(&mut secondary, Amount::from_sat(60_000), 0x34);
+		let secondary_outpoint = OutPoint { txid: secondary_funding.compute_txid(), vout: 0 };
+		let secondary_recipient =
+			secondary.reveal_next_address(KeychainKind::External).address.script_pubkey();
+		confirm_transactions(
+			&mut [&mut primary, &mut secondary],
+			&[primary_funding.clone(), secondary_funding.clone()],
+		);
+
+		let mut original_psbt = {
+			let mut builder = primary.build_tx();
+			builder
+				.add_utxo(primary_outpoint)
+				.unwrap()
+				.add_recipient(secondary_recipient.clone(), Amount::from_sat(50_000))
+				.fee_rate(FeeRate::from_sat_per_kwu(250))
+				.manually_selected_only();
+			builder.finish().unwrap()
+		};
+		assert!(primary.sign(&mut original_psbt, SignOptions::default()).unwrap());
+		let original_tx = original_psbt.extract_tx().unwrap();
+		let original_txid = original_tx.compute_txid();
+		primary.apply_unconfirmed_txs([(original_tx.clone(), 2)]);
+		secondary.apply_unconfirmed_txs([(original_tx.clone(), 2)]);
+
+		let mut aggregate = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		let (replacement, _) =
+			aggregate.build_rbf(original_txid, FeeRate::from_sat_per_kwu(25_000)).unwrap();
+
+		assert!(replacement.input.iter().any(|input| input.previous_output == secondary_outpoint));
+		assert!(replacement.input.iter().all(|input| input.previous_output.txid != original_txid));
+		assert!(replacement.output.iter().any(|output| {
+			output.script_pubkey == secondary_recipient && output.value == Amount::from_sat(50_000)
+		}));
+	}
+
+	#[test]
+	fn cross_wallet_rbf_only_counts_the_selected_change_output() {
+		let mut primary_persister = NoopPersister;
+		let mut primary =
+			create_empty_wallet_from_xprv(&mut primary_persister, test_xprv_from_byte(0x41));
+		let primary_funding = fund_wallet(&mut primary, Amount::from_sat(70_000), 0x42);
+		let primary_change =
+			primary.reveal_next_address(KeychainKind::Internal).address.script_pubkey();
+
+		let mut secondary_persister = NoopPersister;
+		let mut secondary =
+			create_empty_wallet_from_xprv(&mut secondary_persister, test_xprv_from_byte(0x43));
+		let secondary_funding = fund_wallet(&mut secondary, Amount::from_sat(70_000), 0x44);
+		let spare_funding = fund_wallet(&mut secondary, Amount::from_sat(60_000), 0x45);
+		let secondary_change =
+			secondary.reveal_next_address(KeychainKind::Internal).address.script_pubkey();
+		confirm_transactions(
+			&mut [&mut primary, &mut secondary],
+			&[primary_funding.clone(), secondary_funding.clone(), spare_funding.clone()],
+		);
+
+		let original_tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![
+				TxIn {
+					previous_output: OutPoint { txid: primary_funding.compute_txid(), vout: 0 },
+					sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+					..Default::default()
+				},
+				TxIn {
+					previous_output: OutPoint { txid: secondary_funding.compute_txid(), vout: 0 },
+					sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+					..Default::default()
+				},
+			],
+			output: vec![
+				TxOut { value: Amount::from_sat(100_000), script_pubkey: recipient_script() },
+				TxOut { value: Amount::from_sat(5_000), script_pubkey: primary_change },
+				TxOut { value: Amount::from_sat(30_000), script_pubkey: secondary_change.clone() },
+			],
+		};
+		let mut aggregate = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		let original_tx = aggregate.sign_owned_inputs(original_tx).unwrap();
+		aggregate.apply_mempool_txs(vec![(original_tx.clone(), 3)], vec![]).unwrap();
+		let original_fee = aggregate.calculate_tx_fee(&original_tx).unwrap();
+		let minimum_fee_rate =
+			rbf::minimum_replacement_fee_rate(original_fee, original_tx.weight()).unwrap();
+		let too_low_fee_rate = FeeRate::from_sat_per_kwu(minimum_fee_rate.to_sat_per_kwu() - 1);
+		assert_eq!(
+			aggregate.build_rbf(original_tx.compute_txid(), too_low_fee_rate).unwrap_err(),
+			Error::InvalidFeeRate
+		);
+		let (replacement, _) = aggregate
+			.build_rbf(original_tx.compute_txid(), FeeRate::from_sat_per_kwu(12_500))
+			.unwrap();
+
+		let spare_outpoint = OutPoint { txid: spare_funding.compute_txid(), vout: 0 };
+		assert!(replacement.input.iter().any(|input| input.previous_output == spare_outpoint));
+		assert!(replacement.output.iter().any(|output| {
+			output.script_pubkey == secondary_change && output.value == Amount::from_sat(30_000)
+		}));
+		let replacement_fee = aggregate.calculate_tx_fee(&replacement).unwrap();
+		let minimum_fee_increase = FeeRate::BROADCAST_MIN.fee_wu(replacement.weight()).unwrap();
+		assert!(replacement_fee >= original_fee + minimum_fee_increase);
+	}
+
+	fn cross_wallet_dust_rbf_fixture(
+		confirm_spare: bool,
+	) -> (AggregateWallet<u8, NoopPersister>, Transaction, OutPoint, ScriptBuf) {
+		let mut primary_persister = NoopPersister;
+		let mut primary =
+			create_empty_wallet_from_xprv(&mut primary_persister, test_xprv_from_byte(0x51));
+		let primary_funding = fund_wallet(&mut primary, Amount::from_sat(50_000), 0x52);
+		let primary_change =
+			primary.reveal_next_address(KeychainKind::Internal).address.script_pubkey();
+
+		let mut secondary_persister = NoopPersister;
+		let mut secondary =
+			create_empty_wallet_from_xprv(&mut secondary_persister, test_xprv_from_byte(0x53));
+		let secondary_funding = fund_wallet(&mut secondary, Amount::from_sat(50_000), 0x54);
+		let spare_funding = fund_wallet(&mut secondary, Amount::from_sat(5_000), 0x55);
+		let spare_outpoint = OutPoint { txid: spare_funding.compute_txid(), vout: 0 };
+
+		let mut confirmed = vec![primary_funding.clone(), secondary_funding.clone()];
+		if confirm_spare {
+			confirmed.push(spare_funding);
+		}
+		confirm_transactions(&mut [&mut primary, &mut secondary], &confirmed);
+
+		let original_tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![
+				TxIn {
+					previous_output: OutPoint { txid: primary_funding.compute_txid(), vout: 0 },
+					sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+					..Default::default()
+				},
+				TxIn {
+					previous_output: OutPoint { txid: secondary_funding.compute_txid(), vout: 0 },
+					sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+					..Default::default()
+				},
+			],
+			output: vec![
+				TxOut { value: Amount::from_sat(98_500), script_pubkey: recipient_script() },
+				TxOut { value: Amount::from_sat(1_000), script_pubkey: primary_change.clone() },
+			],
+		};
+		let mut aggregate = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		let original_tx = aggregate.sign_owned_inputs(original_tx).unwrap();
+		aggregate.apply_mempool_txs(vec![(original_tx.clone(), 4)], vec![]).unwrap();
+
+		(aggregate, original_tx, spare_outpoint, primary_change)
+	}
+
+	#[test]
+	fn cross_wallet_rbf_selects_enough_for_non_dust_change() {
+		let (mut aggregate, original_tx, spare_outpoint, primary_change) =
+			cross_wallet_dust_rbf_fixture(true);
+		let original_fee = aggregate.calculate_tx_fee(&original_tx).unwrap();
+		let requested_fee_rate = FeeRate::from_sat_per_kwu(1_200);
+
+		let (replacement, _) =
+			aggregate.build_rbf(original_tx.compute_txid(), requested_fee_rate).unwrap();
+
+		assert!(replacement.input.iter().any(|input| input.previous_output == spare_outpoint));
+		let change = replacement
+			.output
+			.iter()
+			.find(|output| output.script_pubkey == primary_change)
+			.unwrap();
+		assert!(change.value.to_sat() >= utxo::DUST_LIMIT_SATS);
+
+		let replacement_fee = aggregate.calculate_tx_fee(&replacement).unwrap();
+		let target_fee = requested_fee_rate.fee_wu(replacement.weight()).unwrap();
+		let incremental_fee = FeeRate::BROADCAST_MIN.fee_wu(replacement.weight()).unwrap();
+		let required_fee = std::cmp::max(target_fee, original_fee + incremental_fee);
+		let excess_fee = replacement_fee.checked_sub(required_fee).unwrap();
+		assert!(excess_fee <= Amount::from_sat(5));
+	}
+
+	#[test]
+	fn cross_wallet_rbf_does_not_add_unconfirmed_inputs() {
+		let (mut aggregate, original_tx, _, _) = cross_wallet_dust_rbf_fixture(false);
+
+		assert_eq!(
+			aggregate
+				.build_rbf(original_tx.compute_txid(), FeeRate::from_sat_per_kwu(1_200))
+				.unwrap_err(),
+			Error::InsufficientFunds
+		);
+	}
+
+	#[test]
+	fn cross_wallet_rbf_without_change_reports_insufficient_funds() {
+		let mut primary_persister = NoopPersister;
+		let mut primary =
+			create_empty_wallet_from_xprv(&mut primary_persister, test_xprv_from_byte(0x61));
+		let primary_funding = fund_wallet(&mut primary, Amount::from_sat(50_000), 0x62);
+		let mut secondary_persister = NoopPersister;
+		let mut secondary =
+			create_empty_wallet_from_xprv(&mut secondary_persister, test_xprv_from_byte(0x63));
+		let secondary_funding = fund_wallet(&mut secondary, Amount::from_sat(50_000), 0x64);
+		confirm_transactions(
+			&mut [&mut primary, &mut secondary],
+			&[primary_funding.clone(), secondary_funding.clone()],
+		);
+
+		let original_tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![
+				TxIn {
+					previous_output: OutPoint { txid: primary_funding.compute_txid(), vout: 0 },
+					sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+					..Default::default()
+				},
+				TxIn {
+					previous_output: OutPoint { txid: secondary_funding.compute_txid(), vout: 0 },
+					sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+					..Default::default()
+				},
+			],
+			output: vec![TxOut {
+				value: Amount::from_sat(99_000),
+				script_pubkey: recipient_script(),
+			}],
+		};
+		let mut aggregate = AggregateWallet::new(
+			primary,
+			primary_persister,
+			0u8,
+			vec![(1u8, secondary, secondary_persister)],
+		);
+		let original_tx = aggregate.sign_owned_inputs(original_tx).unwrap();
+		aggregate.apply_mempool_txs(vec![(original_tx.clone(), 5)], vec![]).unwrap();
+
+		assert_eq!(
+			aggregate
+				.build_rbf(original_tx.compute_txid(), FeeRate::from_sat_per_kwu(2_000))
+				.unwrap_err(),
+			Error::InsufficientFunds
+		);
 	}
 
 	#[test]
@@ -2117,6 +2647,33 @@ mod tests {
 		}
 	}
 
+	fn regtest_child_block_with_transaction(
+		prev: &Block, distinct: u8, transaction: Transaction,
+	) -> Block {
+		let mut block = regtest_child_block(prev, distinct);
+		block.txdata.push(transaction);
+		block.header.merkle_root = block.compute_merkle_root().unwrap();
+		block
+	}
+
+	fn confirm_transactions(
+		wallets: &mut [&mut PersistedWallet<NoopPersister>], transactions: &[Transaction],
+	) {
+		use bitcoin::blockdata::constants::genesis_block;
+
+		let mut tip = genesis_block(Network::Regtest);
+		for wallet in wallets.iter_mut() {
+			wallet.apply_block(&tip, 0).unwrap();
+		}
+		for (index, transaction) in transactions.iter().enumerate() {
+			let block =
+				regtest_child_block_with_transaction(&tip, index as u8 + 1, transaction.clone());
+			for wallet in wallets.iter_mut() {
+				wallet.apply_block(&block, index as u32 + 1).unwrap();
+			}
+			tip = block;
+		}
+	}
 	#[test]
 	fn apply_block_skips_wallets_already_ahead_during_catch_up() {
 		use bitcoin::blockdata::constants::genesis_block;

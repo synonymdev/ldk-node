@@ -28,18 +28,44 @@ pub const DUST_LIMIT_SATS: u64 = 546;
 
 /// Calculate the satisfaction weight for a UTXO based on its script type.
 pub fn calculate_utxo_weight(script_pubkey: &ScriptBuf) -> Weight {
-	match script_pubkey.witness_version() {
-		Some(bitcoin::WitnessVersion::V0) => Weight::from_wu(272), // P2WPKH
-		Some(bitcoin::WitnessVersion::V1) => Weight::from_wu(230), // P2TR
-		None => {
-			if script_pubkey.is_p2sh() {
-				Weight::from_wu(360) // P2SH-wrapped P2WPKH
-			} else {
-				Weight::from_wu(588) // P2PKH (legacy)
-			}
-		},
-		_ => Weight::from_wu(272), // Fallback to P2WPKH weight
+	if script_pubkey.is_p2wpkh() {
+		Weight::from_wu(107)
+	} else if script_pubkey.is_p2tr() {
+		Weight::from_wu(65)
+	} else if script_pubkey.is_p2sh() {
+		Weight::from_wu(199)
+	} else {
+		Weight::from_wu(428)
 	}
+}
+
+/// Find the descriptor satisfaction weight for a wallet-owned outpoint.
+pub(crate) fn satisfaction_weight_for_outpoint<K, P>(
+	outpoint: OutPoint, wallets: &HashMap<K, PersistedWallet<P>>,
+) -> Option<Weight>
+where
+	K: Eq + Hash + Copy + Debug,
+	P: WalletPersister,
+{
+	for wallet in wallets.values() {
+		let keychain = if let Some(utxo) = wallet.get_utxo(outpoint) {
+			Some(utxo.keychain)
+		} else {
+			wallet
+				.get_tx(outpoint.txid)
+				.and_then(|tx| tx.tx_node.tx.output.get(outpoint.vout as usize).cloned())
+				.and_then(|txout| wallet.derivation_of_spk(txout.script_pubkey))
+				.map(|(keychain, _)| keychain)
+		};
+
+		if let Some(weight) = keychain
+			.and_then(|keychain| wallet.public_descriptor(keychain).max_weight_to_satisfy().ok())
+		{
+			return Some(weight);
+		}
+	}
+
+	None
 }
 
 /// Prepare UTXO information needed to add local outputs as foreign UTXOs in a
@@ -57,7 +83,8 @@ where
 		let is_primary =
 			wallets.get(primary_key).map(|w| w.get_utxo(utxo.outpoint).is_some()).unwrap_or(false);
 
-		let weight = calculate_utxo_weight(&utxo.txout.script_pubkey);
+		let weight = satisfaction_weight_for_outpoint(utxo.outpoint, wallets)
+			.unwrap_or_else(|| calculate_utxo_weight(&utxo.txout.script_pubkey));
 
 		let mut psbt_input =
 			psbt::Input { witness_utxo: Some(utxo.txout.clone()), ..Default::default() };
@@ -159,17 +186,9 @@ where
 		.iter()
 		.map(|utxo| {
 			// Find the wallet that actually owns this UTXO and use its
-			// descriptor for an accurate satisfaction weight.  Falls back to
+			// descriptor for an accurate satisfaction weight. Falls back to
 			// script-type heuristic if no wallet claims the output.
-			let satisfaction_weight = wallets
-				.values()
-				.find_map(|w| {
-					if w.get_utxo(utxo.outpoint).is_some() {
-						w.public_descriptor(utxo.keychain).max_weight_to_satisfy().ok()
-					} else {
-						None
-					}
-				})
+			let satisfaction_weight = satisfaction_weight_for_outpoint(utxo.outpoint, wallets)
 				.unwrap_or_else(|| calculate_utxo_weight(&utxo.txout.script_pubkey));
 
 			WeightedUtxo { satisfaction_weight, utxo: bdk_wallet::Utxo::Local(utxo.clone()) }

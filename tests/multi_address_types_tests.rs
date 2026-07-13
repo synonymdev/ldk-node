@@ -3162,7 +3162,10 @@ mod dynamic_address_type_changes {
 // Event deduplication and payment direction
 // ---------------------------------------------------------------------------
 mod events {
+	use std::time::Duration;
+
 	use bitcoin::Txid;
+	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
 	use ldk_node::payment::{PaymentDirection, PaymentKind};
 	use ldk_node::{Event, Node};
@@ -3201,12 +3204,33 @@ mod events {
 		)
 	}
 
-	/// Returns the count of `OnchainTransactionReorged` events matching `expected`.
-	fn count_reorged(node: &Node, expected: Txid) -> usize {
-		count_events(
-			node,
-			|e| matches!(e, Event::OnchainTransactionReorged { txid, .. } if *txid == expected),
-		)
+	fn count_reorg_and_confirmation_events(node: &Node, expected: Txid) -> (usize, usize) {
+		let mut reorged = 0;
+		let mut confirmed = 0;
+		while let Some(event) = node.next_event() {
+			match event {
+				Event::OnchainTransactionReorged { txid } if txid == expected => reorged += 1,
+				Event::OnchainTransactionConfirmed { txid, .. } if txid == expected => {
+					confirmed += 1
+				},
+				_ => {},
+			}
+			node.event_handled().unwrap();
+		}
+		(reorged, confirmed)
+	}
+
+	async fn wait_for_unconfirmed_transaction(electrs: &impl ElectrumApi, expected: Txid) {
+		let script = test_recipient().script_pubkey();
+		for _ in 0..300 {
+			if let Ok(history) = electrs.script_get_history(&script) {
+				if history.iter().any(|entry| entry.tx_hash == expected && entry.height <= 0) {
+					return;
+				}
+			}
+			tokio::time::sleep(Duration::from_millis(100)).await;
+		}
+		panic!("transaction {expected} did not become unconfirmed");
 	}
 
 	/// Cross-wallet send must emit exactly one `OnchainTransactionReceived`, not one per wallet.
@@ -3326,9 +3350,9 @@ mod events {
 		node.stop().unwrap();
 	}
 
-	/// After a reorg, neither reorg nor re-confirm events must be duplicated across wallets.
+	/// Re-confirmation after a reorg must not be duplicated across wallets.
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-	async fn test_cross_wallet_reorg_deduplicates_events() {
+	async fn test_cross_wallet_reorg_reconfirmation_is_deduplicated() {
 		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 		let chain_source = TestChainSource::Esplora(&electrsd);
 
@@ -3360,20 +3384,28 @@ mod events {
 		let n_confirmed_first = count_confirmed(&node, txid);
 		assert_eq!(n_confirmed_first, 1, "expected 1 confirmed event before reorg");
 
-		// Reorg the block away; the tx re-confirms in the replacement block.
+		// Mine an empty replacement block so the transaction remains unconfirmed.
 		invalidate_blocks(&bitcoind.client, 1);
+		let block_address = bitcoind.client.new_address().unwrap();
+		bitcoind.client.generate_block(&block_address.to_string(), &[], true).unwrap();
+		wait_for_unconfirmed_transaction(&electrsd.client, txid).await;
+		node.sync_wallets().unwrap();
+
+		let (n_reorged, n_confirmed_during_reorg) =
+			count_reorg_and_confirmation_events(&node, txid);
+		assert_eq!(n_reorged, 1, "expected one OnchainTransactionReorged event");
+		assert_eq!(n_confirmed_during_reorg, 0, "transaction must be unconfirmed after reorg");
+
+		// Mine the transaction again and verify the confirmation is also deduplicated.
 		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
 		node.sync_wallets().unwrap();
 
-		let n_reorged = count_reorged(&node, txid);
-		let n_confirmed_2 = count_confirmed(&node, txid);
-		assert!(
-			n_reorged <= 1,
-			"OnchainTransactionReorged must not be duplicated, got {n_reorged}"
-		);
-		assert!(
-			n_confirmed_2 <= 1,
-			"OnchainTransactionConfirmed must not be duplicated after reorg, got {n_confirmed_2}"
+		let (n_reorged_after_confirmation, n_confirmed_2) =
+			count_reorg_and_confirmation_events(&node, txid);
+		assert_eq!(n_reorged_after_confirmation, 0);
+		assert_eq!(
+			n_confirmed_2, 1,
+			"expected one OnchainTransactionConfirmed after reorg, got {n_confirmed_2}"
 		);
 
 		node.stop().unwrap();
@@ -3449,12 +3481,14 @@ mod events {
 // Derived on-chain wallet accounts
 // ---------------------------------------------------------------------------
 mod derived_accounts {
+	#[cfg(feature = "uniffi")]
+	use std::sync::Arc;
 	use std::time::{Duration, SystemTime, UNIX_EPOCH};
 	use std::{env, str::FromStr};
 
 	use bitcoin::bip32::{ChildNumber, Xpub};
 	use bitcoin::secp256k1::Secp256k1;
-	use bitcoin::{Address, Amount, CompressedPublicKey, Network};
+	use bitcoin::{Address, Amount, CompressedPublicKey, FeeRate, Network};
 	use electrsd::corepc_node::{Conf as BitcoindConf, Node as BitcoinD};
 	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
@@ -3479,6 +3513,16 @@ mod derived_accounts {
 	#[cfg(feature = "uniffi")]
 	fn api_seed_bytes(seed: [u8; 64]) -> Vec<u8> {
 		seed.to_vec()
+	}
+
+	#[cfg(not(feature = "uniffi"))]
+	fn api_fee_rate(fee_rate: FeeRate) -> FeeRate {
+		fee_rate
+	}
+
+	#[cfg(feature = "uniffi")]
+	fn api_fee_rate(fee_rate: FeeRate) -> Arc<FeeRate> {
+		Arc::new(fee_rate)
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -3528,6 +3572,64 @@ mod derived_accounts {
 		let primary_after =
 			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 0).unwrap();
 		assert!(primary_after.total_sats > 0);
+
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_rbf_preserves_derived_recipient_and_uses_existing_funds() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+
+		let primary_address = node.onchain_payment().new_address().unwrap();
+		let derived_funding_address =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
+		let derived_recipient =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
+		fund_multiple_and_sync(
+			&bitcoind,
+			&electrsd,
+			&node,
+			vec![(primary_address, 55_000), (derived_funding_address, 60_000)],
+		)
+		.await;
+
+		let spendable = node.onchain_payment().list_spendable_outputs().unwrap();
+		let primary_utxo = spendable.iter().find(|utxo| utxo.value_sats == 55_000).unwrap().clone();
+		let derived_utxo = spendable.iter().find(|utxo| utxo.value_sats == 60_000).unwrap().clone();
+		let original_txid = node
+			.onchain_payment()
+			.send_to_address(
+				&derived_recipient,
+				50_000,
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(250))),
+				Some(vec![primary_utxo]),
+			)
+			.unwrap();
+		wait_for_tx(&electrsd.client, original_txid).await;
+		node.sync_wallets().unwrap();
+
+		let replacement_txid = node
+			.onchain_payment()
+			.bump_fee_by_rbf(&original_txid, api_fee_rate(FeeRate::from_sat_per_kwu(25_000)))
+			.unwrap();
+		wait_for_tx(&electrsd.client, replacement_txid).await;
+		let replacement = electrsd.client.transaction_get(&replacement_txid).unwrap();
+
+		assert!(replacement
+			.input
+			.iter()
+			.any(|input| input.previous_output == derived_utxo.outpoint));
+		assert!(replacement.input.iter().all(|input| input.previous_output.txid != original_txid));
+		assert!(replacement.output.iter().any(|output| {
+			output.script_pubkey == derived_recipient.script_pubkey()
+				&& output.value == Amount::from_sat(50_000)
+		}));
 
 		node.stop().unwrap();
 	}
