@@ -5964,11 +5964,11 @@ class Node:
 
     def add_onchain_wallet_account(self, address_type: "AddressType",account_index: "int",xpub: "str") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterUInt32.check_lower(account_index)
-        
+
         _UniffiConverterString.check_lower(xpub)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_add_onchain_wallet_account,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
         _UniffiConverterUInt32.lower(account_index),
@@ -6076,9 +6076,9 @@ class Node:
 
     def export_onchain_wallet_account_xpub(self, address_type: "AddressType",account_index: "int") -> "str":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterUInt32.check_lower(account_index)
-        
+
         return _UniffiConverterString.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_export_onchain_wallet_account_xpub,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
@@ -6141,9 +6141,9 @@ class Node:
 
     def get_balance_for_onchain_wallet_account(self, address_type: "AddressType",account_index: "int") -> "AddressTypeBalance":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterUInt32.check_lower(account_index)
-        
+
         return _UniffiConverterTypeAddressTypeBalance.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_get_balance_for_onchain_wallet_account,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
@@ -7048,9 +7048,9 @@ class OnchainPayment:
 
     def new_address_for_account(self, address_type: "AddressType",account_index: "int") -> "Address":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterUInt32.check_lower(account_index)
-        
+
         return _UniffiConverterTypeAddress.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_for_account,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
@@ -7084,9 +7084,9 @@ class OnchainPayment:
 
     def new_address_info_for_account(self, address_type: "AddressType",account_index: "int") -> "AddressInfo":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterUInt32.check_lower(account_index)
-        
+
         return _UniffiConverterTypeAddressInfo.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_account,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
@@ -17525,4 +17525,3 @@ __all__ = [
     "UnifiedQrPayment",
     "VssHeaderProvider",
 ]
-

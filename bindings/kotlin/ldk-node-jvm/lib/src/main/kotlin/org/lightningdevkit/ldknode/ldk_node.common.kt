@@ -428,7 +428,7 @@ interface NodeInterface {
     
     @Throws(NodeException::class)
     fun `addOnchainWalletAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `xpub`: kotlin.String)
-    
+
     fun `announcementAddresses`(): List<SocketAddress>?
     
     fun `bolt11Payment`(): Bolt11Payment
@@ -453,7 +453,7 @@ interface NodeInterface {
     
     @Throws(NodeException::class)
     fun `exportOnchainWalletAccountXpub`(`addressType`: AddressType, `accountIndex`: kotlin.UInt): kotlin.String
-    
+
     @Throws(NodeException::class)
     fun `exportPathfindingScores`(): kotlin.ByteArray
     
@@ -468,7 +468,7 @@ interface NodeInterface {
     
     @Throws(NodeException::class)
     fun `getBalanceForOnchainWalletAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt): AddressTypeBalance
-    
+
     fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
     
     fun `listBalances`(): BalanceDetails
@@ -478,7 +478,7 @@ interface NodeInterface {
     fun `listMonitoredAddressTypes`(): List<AddressType>
     
     fun `listOnchainWalletAccounts`(): List<OnchainWalletAccount>
-    
+
     fun `listPayments`(): List<PaymentDetails>
     
     fun `listPeers`(): List<PeerDetails>
@@ -621,7 +621,7 @@ interface OnchainPaymentInterface {
     
     @Throws(NodeException::class)
     fun `newAddressForAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt): Address
-    
+
     @Throws(NodeException::class)
     fun `newAddressForType`(`addressType`: AddressType): Address
     
@@ -630,7 +630,7 @@ interface OnchainPaymentInterface {
     
     @Throws(NodeException::class)
     fun `newAddressInfoForAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt): AddressInfo
-    
+
     @Throws(NodeException::class)
     fun `newAddressInfoForType`(`addressType`: AddressType): AddressInfo
     
@@ -1128,7 +1128,7 @@ data class NodeStatus (
 
 @kotlinx.serialization.Serializable
 data class OnchainWalletAccount (
-    val `addressType`: AddressType, 
+    val `addressType`: AddressType,
     val `accountIndex`: kotlin.UInt
 ) {
     companion object
@@ -2545,4 +2545,3 @@ typealias UntrustedString = kotlin.String
  * It's also what we have an external type that references a custom type.
  */
 typealias UserChannelId = kotlin.String
-
