@@ -46,21 +46,12 @@ where
 {
 	populate_psbt_inputs_from_wallets(&mut psbt, wallets);
 
-	let mut wallets_that_signed = 0u32;
 	#[allow(deprecated)]
 	let sign_options = SignOptions { trust_witness_utxo: true, ..Default::default() };
 
 	for (key, wallet) in wallets.iter_mut() {
 		match wallet.sign(&mut psbt, sign_options.clone()) {
-			Ok(_finalized) => {
-				// BDK returns `finalized = true` only when ALL inputs are
-				// signed.  For multi-wallet PSBTs no single wallet will
-				// finalize the whole PSBT, so we track whether at least one
-				// wallet contributed signatures instead of relying on
-				// `finalized`.
-				wallets_that_signed += 1;
-				log::trace!("Wallet {:?} signed PSBT inputs", key);
-			},
+			Ok(_) => log::trace!("Wallet {:?} processed PSBT inputs", key),
 			Err(e) => {
 				log::trace!(
 					"Wallet {:?} could not sign PSBT: {} (expected for foreign inputs)",
@@ -71,8 +62,9 @@ where
 		}
 	}
 
-	if wallets_that_signed == 0 {
-		log::warn!("No wallet was able to sign any inputs in the PSBT");
+	if psbt.inputs.iter().any(|input| !is_finalized(input)) {
+		log::error!("At least one PSBT input remains unsigned");
+		return Err(Error::OnchainTxSigningFailed);
 	}
 
 	match psbt.extract_tx() {
@@ -89,6 +81,11 @@ where
 			Err(Error::OnchainTxSigningFailed)
 		},
 	}
+}
+
+fn is_finalized(input: &psbt::Input) -> bool {
+	matches!(input.final_script_sig.as_ref(), Some(script) if !script.is_empty())
+		|| matches!(input.final_script_witness.as_ref(), Some(witness) if !witness.is_empty())
 }
 
 /// Populate PSBT inputs with UTXO data from all wallets.
@@ -156,5 +153,40 @@ fn populate_psbt_inputs_from_wallets<K, P>(
 				txin.previous_output
 			);
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use bitcoin::{ScriptBuf, Witness};
+
+	use super::is_finalized;
+
+	#[test]
+	fn rejects_empty_final_scripts() {
+		assert!(!is_finalized(&bitcoin::psbt::Input::default()));
+		let script_input =
+			bitcoin::psbt::Input { final_script_sig: Some(ScriptBuf::new()), ..Default::default() };
+		assert!(!is_finalized(&script_input));
+		let witness_input = bitcoin::psbt::Input {
+			final_script_witness: Some(Witness::new()),
+			..Default::default()
+		};
+		assert!(!is_finalized(&witness_input));
+	}
+
+	#[test]
+	fn accepts_finalized_script_or_witness() {
+		let script_input = bitcoin::psbt::Input {
+			final_script_sig: Some(ScriptBuf::from_bytes(vec![1])),
+			..Default::default()
+		};
+		assert!(is_finalized(&script_input));
+
+		let mut witness = Witness::new();
+		witness.push([1]);
+		let witness_input =
+			bitcoin::psbt::Input { final_script_witness: Some(witness), ..Default::default() };
+		assert!(is_finalized(&witness_input));
 	}
 }

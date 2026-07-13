@@ -4526,7 +4526,7 @@ mod derived_accounts {
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-	async fn test_derived_account_discovers_external_xpub_addresses_after_prior_sync() {
+	async fn test_derived_account_discovers_revealed_external_xpub_address_after_prior_sync() {
 		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 		let chain_source = TestChainSource::Electrum(&electrsd);
 		let config = node_config(AddressType::NativeSegwit, vec![]);
@@ -4543,15 +4543,22 @@ mod derived_accounts {
 				.total_sats >= 59_000
 		);
 
-		// After a successful sync, a later externally derived address must still be discovered
-		// (derived accounts always full-scan; incremental would miss this).
-		let second = native_segwit_receive_address_from_xpub(&xpub, 1);
+		let external_index = 30;
+		node.onchain_payment()
+			.reveal_receive_addresses_to_account(AddressType::NativeSegwit, 1, external_index)
+			.unwrap();
+		let second = native_segwit_receive_address_from_xpub(&xpub, external_index);
 		fund_and_sync(&bitcoind, &electrsd, &node, second, 70_000).await;
 		assert!(
 			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
 				.unwrap()
 				.total_sats >= 129_000
 		);
+		let next = node
+			.onchain_payment()
+			.new_address_info_for_account(AddressType::NativeSegwit, 1)
+			.unwrap();
+		assert_eq!(next.index, external_index + 1);
 
 		node.stop().unwrap();
 	}

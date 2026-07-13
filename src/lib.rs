@@ -2047,8 +2047,9 @@ impl Node {
 
 	/// Retrieves an overview of all known balances.
 	///
-	/// On-chain totals include derived accounts registered via
-	/// [`Node::add_onchain_wallet_account`].
+	/// On-chain totals include derived accounts currently registered via
+	/// [`Node::add_onchain_wallet_account`]. Derived funds are omitted until the app re-registers the
+	/// account after a restart.
 	pub fn list_balances(&self) -> BalanceDetails {
 		let cur_anchor_reserve_sats =
 			total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
@@ -2230,13 +2231,18 @@ impl Node {
 	///
 	/// Validates `xpub` against the node's master seed. Idempotent for the same xpub.
 	/// Account `0` and indexes above [`crate::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`] are
-	/// rejected with [`Error::InvalidQuantity`].
+	/// rejected with [`Error::InvalidQuantity`]. A mismatched xpub returns
+	/// [`Error::InvalidSeedBytes`].
 	///
 	/// Not persisted across restarts; re-add after each build. BDK data remains persisted.
 	///
-	/// Derived accounts use full scans so addresses issued from the exported xpub remain discoverable
-	/// on Esplora/Electrum. Bitcoind replays the current mempool but cannot scan confirmed history
-	/// from before a brand-new account's first registration.
+	/// Registered funds participate in normal wallet coin selection and signing. Change remains on
+	/// the configured primary account-`0` wallet.
+	///
+	/// Esplora/Electrum perform a full scan after registration. When issuing more addresses from the
+	/// exported xpub, call [`OnchainPayment::reveal_receive_addresses_to_account`] with the highest
+	/// issued index. Bitcoind replays the current mempool but cannot scan confirmed history from before
+	/// a brand-new account's first registration.
 	pub fn add_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32, xpub: String,
 	) -> Result<(), Error> {
@@ -2244,6 +2250,9 @@ impl Node {
 	}
 
 	/// Retrieves the on-chain balance for a specific wallet account.
+	///
+	/// Funds in a registered account are available to normal wallet payments, whose change is sent to
+	/// the configured primary account-`0` wallet.
 	pub fn get_balance_for_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32,
 	) -> Result<AddressTypeBalance, Error> {
@@ -2256,7 +2265,8 @@ impl Node {
 	/// Returns all currently loaded on-chain wallet accounts, including derived accounts.
 	///
 	/// Derived accounts must be re-registered after restart via
-	/// [`Node::add_onchain_wallet_account`].
+	/// [`Node::add_onchain_wallet_account`]. Until then, they are absent from this list and from
+	/// aggregate balances.
 	pub fn list_onchain_wallet_accounts(&self) -> Vec<OnchainWalletAccount> {
 		self.wallet.get_loaded_onchain_wallet_accounts()
 	}
@@ -2472,8 +2482,7 @@ impl NodeMetrics {
 	pub(crate) fn get_wallet_sync_timestamp(
 		&self, wallet_account: OnchainWalletAccount,
 	) -> Option<u64> {
-		// Derived accounts always full-scan and do not persist sync timestamps (avoids an even TLV
-		// that would break rollback to older node builds).
+		// Derived-account scan completion is runtime-only, so each registration after restart full-scans.
 		if wallet_account.account_index != 0 {
 			return None;
 		}

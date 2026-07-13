@@ -835,6 +835,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to_account() != 53588:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm() != 14084:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address() != 37748:
@@ -2346,6 +2348,14 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to.
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to_account.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_uint32,
+    ctypes.c_uint32,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to_account.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_select_utxos_with_algorithm.argtypes = (
     ctypes.c_void_p,
     ctypes.c_uint64,
@@ -3400,6 +3410,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_t
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to_account.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to_account.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm.restype = ctypes.c_uint16
@@ -6869,6 +6882,8 @@ class OnchainPaymentProtocol(typing.Protocol):
         raise NotImplementedError
     def reveal_receive_addresses_to(self, address_type: "AddressType",index: "int"):
         raise NotImplementedError
+    def reveal_receive_addresses_to_account(self, address_type: "AddressType",account_index: "int",index: "int"):
+        raise NotImplementedError
     def select_utxos_with_algorithm(self, target_amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",algorithm: "CoinSelectionAlgorithm",utxos: "typing.Optional[typing.List[SpendableUtxo]]"):
         raise NotImplementedError
     def send_all_to_address(self, address: "Address",retain_reserve: "bool",fee_rate: "typing.Optional[FeeRate]"):
@@ -7116,6 +7131,23 @@ class OnchainPayment:
         
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
+        _UniffiConverterUInt32.lower(index))
+
+
+
+
+
+
+    def reveal_receive_addresses_to_account(self, address_type: "AddressType",account_index: "int",index: "int") -> None:
+        _UniffiConverterTypeAddressType.check_lower(address_type)
+
+        _UniffiConverterUInt32.check_lower(account_index)
+
+        _UniffiConverterUInt32.check_lower(index)
+
+        _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to_account,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddressType.lower(address_type),
+        _UniffiConverterUInt32.lower(account_index),
         _UniffiConverterUInt32.lower(index))
 
 

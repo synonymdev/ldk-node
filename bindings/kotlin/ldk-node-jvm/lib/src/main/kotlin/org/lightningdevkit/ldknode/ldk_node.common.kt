@@ -638,6 +638,9 @@ interface OnchainPaymentInterface {
     fun `revealReceiveAddressesTo`(`addressType`: AddressType, `index`: kotlin.UInt)
     
     @Throws(NodeException::class)
+    fun `revealReceiveAddressesToAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `index`: kotlin.UInt)
+
+    @Throws(NodeException::class)
     fun `selectUtxosWithAlgorithm`(`targetAmountSats`: kotlin.ULong, `feeRate`: FeeRate?, `algorithm`: CoinSelectionAlgorithm, `utxos`: List<SpendableUtxo>?): List<SpendableUtxo>
     
     @Throws(NodeException::class)

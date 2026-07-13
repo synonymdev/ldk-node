@@ -252,6 +252,21 @@ impl OnchainPayment {
 		self.wallet.reveal_receive_addresses_to(address_type, index)
 	}
 
+	/// Reveal external receive addresses through `index` for a specific wallet account.
+	///
+	/// Apps issuing addresses from an exported account xpub should call this with the highest issued
+	/// index so wallet sync includes the corresponding scripts.
+	pub fn reveal_receive_addresses_to_account(
+		&self, address_type: AddressType, account_index: u32, index: u32,
+	) -> Result<(), Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+
+		let wallet_account = OnchainWalletAccount { address_type, account_index };
+		self.wallet.reveal_receive_addresses_to_account(wallet_account, index)
+	}
+
 	/// Returns a list of all UTXOs that are safe to spend.
 	///
 	/// This excludes any outputs that are currently being used to fund Lightning channels.

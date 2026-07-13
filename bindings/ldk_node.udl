@@ -363,6 +363,8 @@ interface OnchainPayment {
     [Throws=NodeError]
     void reveal_receive_addresses_to(AddressType address_type, u32 index);
     [Throws=NodeError]
+    void reveal_receive_addresses_to_account(AddressType address_type, u32 account_index, u32 index);
+    [Throws=NodeError]
     sequence<SpendableUtxo> list_spendable_outputs();
     [Throws=NodeError]
     sequence<SpendableUtxo> select_utxos_with_algorithm(u64 target_amount_sats, FeeRate? fee_rate, CoinSelectionAlgorithm algorithm, sequence<SpendableUtxo>? utxos);

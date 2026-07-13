@@ -179,10 +179,8 @@ pub(super) fn collect_additional_sync_requests(
 		.iter()
 		.copied()
 		.filter_map(|wallet_account| {
-			// Derived accounts always full-scan: addresses may be issued from an exported
-			// xpub outside the node and never revealed to BDK.
-			let do_incremental = wallet_account.account_index == 0
-				&& node_metrics.read().unwrap().get_wallet_sync_timestamp(wallet_account).is_some();
+			let do_incremental =
+				should_use_incremental_sync(wallet_account, onchain_wallet, node_metrics);
 			let request = if do_incremental {
 				onchain_wallet
 					.get_wallet_incremental_sync_request(wallet_account)
@@ -203,6 +201,17 @@ pub(super) fn collect_additional_sync_requests(
 		.collect()
 }
 
+fn should_use_incremental_sync(
+	wallet_account: OnchainWalletAccount, onchain_wallet: &Wallet,
+	node_metrics: &Arc<RwLock<NodeMetrics>>,
+) -> bool {
+	if wallet_account.account_index == 0 {
+		node_metrics.read().unwrap().get_wallet_sync_timestamp(wallet_account).is_some()
+	} else {
+		onchain_wallet.has_synced_derived_account(wallet_account)
+	}
+}
+
 /// Returns `(events, any_applied)` where `any_applied` is true if at least one
 /// additional wallet update was successfully applied.
 pub(super) fn apply_additional_sync_results(
@@ -220,6 +229,9 @@ pub(super) fn apply_additional_sync_results(
 						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 					{
 						node_metrics.write().unwrap().set_wallet_sync_timestamp(wallet_account, ts);
+					}
+					if wallet_account.account_index != 0 {
+						onchain_wallet.mark_derived_account_synced(wallet_account);
 					}
 					events.extend(wallet_events);
 				},
@@ -1169,4 +1181,53 @@ fn periodically_archive_fully_resolved_monitors(
 		write_node_metrics(&*locked_node_metrics, kv_store, logger)?;
 	}
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Arc;
+
+	use bitcoin::Network;
+
+	use super::{collect_additional_sync_requests, WalletSyncRequest};
+	use crate::builder::NodeBuilder;
+	use crate::config::{AddressType, Config, OnchainWalletAccount};
+	use crate::io::test_utils::InMemoryStore;
+	use crate::types::DynStore;
+
+	#[test]
+	fn derived_accounts_switch_to_incremental_sync_after_initial_scan() {
+		let seed = [42u8; 64];
+		let mut config = Config::default();
+		config.network = Network::Regtest;
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes(seed);
+		builder.set_log_facade_logger();
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = builder.build_with_store(store).unwrap();
+		let account =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let xpub = node
+			.export_onchain_wallet_account_xpub(account.address_type, account.account_index)
+			.unwrap();
+		node.add_onchain_wallet_account(account.address_type, account.account_index, xpub).unwrap();
+
+		let requests = collect_additional_sync_requests(
+			&[account],
+			&node.wallet,
+			&node.node_metrics,
+			&node.logger,
+		);
+		assert!(matches!(requests[0].1, WalletSyncRequest::FullScan(_)));
+
+		node.wallet.mark_derived_account_synced(account);
+		let requests = collect_additional_sync_requests(
+			&[account],
+			&node.wallet,
+			&node.node_metrics,
+			&node.logger,
+		);
+		assert!(matches!(requests[0].1, WalletSyncRequest::Incremental(_)));
+	}
 }

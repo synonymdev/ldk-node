@@ -43,6 +43,8 @@ use crate::{Error, NodeMetrics};
 
 const CHAIN_POLLING_INTERVAL_SECS: u64 = 2;
 const CHAIN_POLLING_TIMEOUT_SECS: u64 = 10;
+const MAX_ACCOUNT_SET_CHANGE_RETRIES: u8 = 3;
+const ACCOUNT_SET_CHANGE_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 enum ListenerSyncOutcome {
 	Complete(u64),
@@ -311,6 +313,7 @@ impl BitcoindChainSource {
 			})?;
 		}
 
+		let mut account_set_change_retries = 0;
 		loop {
 			match self
 				.poll_and_update_listeners_inner(
@@ -321,7 +324,7 @@ impl BitcoindChainSource {
 				)
 				.await
 			{
-				Ok(ListenerSyncOutcome::AccountSetChanged) => continue,
+				Ok(ListenerSyncOutcome::AccountSetChanged) => {},
 				Ok(ListenerSyncOutcome::Complete(account_generation)) => {
 					let _account_operation = onchain_wallet.lock_account_operations();
 					if onchain_wallet.account_generation() != account_generation {
@@ -329,13 +332,13 @@ impl BitcoindChainSource {
 							self.logger,
 							"On-chain account set changed during sync; retrying."
 						);
-						continue;
+					} else {
+						self.wallet_polling_status
+							.lock()
+							.unwrap()
+							.propagate_result_to_subscribers(Ok(()));
+						return Ok(());
 					}
-					self.wallet_polling_status
-						.lock()
-						.unwrap()
-						.propagate_result_to_subscribers(Ok(()));
-					return Ok(());
 				},
 				Err(e) => {
 					self.wallet_polling_status
@@ -345,6 +348,21 @@ impl BitcoindChainSource {
 					return Err(e);
 				},
 			}
+
+			if account_set_change_retries == MAX_ACCOUNT_SET_CHANGE_RETRIES {
+				log_error!(
+					self.logger,
+					"On-chain account set kept changing during wallet sync; giving up."
+				);
+				let error = Error::WalletOperationFailed;
+				self.wallet_polling_status
+					.lock()
+					.unwrap()
+					.propagate_result_to_subscribers(Err(error.clone()));
+				return Err(error);
+			}
+			account_set_change_retries += 1;
+			tokio::time::sleep(ACCOUNT_SET_CHANGE_RETRY_DELAY).await;
 		}
 	}
 
@@ -1501,8 +1519,6 @@ impl Cache for BoundedHeaderCache {
 struct AccountChainListener {
 	wallet: Arc<Wallet>,
 	account: OnchainWalletAccount,
-	fork_point: Mutex<Option<BestBlock>>,
-	reorg_blocks: Mutex<Vec<(bitcoin::Block, u32)>>,
 	apply_error: Mutex<Option<Error>>,
 }
 
@@ -1514,13 +1530,7 @@ enum AccountChainListenerOutcome {
 
 impl AccountChainListener {
 	fn new(wallet: Arc<Wallet>, account: OnchainWalletAccount) -> Self {
-		Self {
-			wallet,
-			account,
-			fork_point: Mutex::new(None),
-			reorg_blocks: Mutex::new(Vec::new()),
-			apply_error: Mutex::new(None),
-		}
+		Self { wallet, account, apply_error: Mutex::new(None) }
 	}
 
 	fn account(&self) -> OnchainWalletAccount {
@@ -1528,25 +1538,24 @@ impl AccountChainListener {
 	}
 
 	fn finish(&self, account_generation: u64) -> Result<AccountChainListenerOutcome, Error> {
-		match self.finish_inner() {
-			Err(_) if self.wallet.account_generation() != account_generation => {
-				Ok(AccountChainListenerOutcome::AccountSetChanged)
-			},
-			Err(e) => Err(e),
-			Ok(()) => Ok(AccountChainListenerOutcome::Complete),
-		}
-	}
-
-	fn finish_inner(&self) -> Result<(), Error> {
 		if let Some(error) = self.apply_error.lock().unwrap().take() {
+			let account_was_removed = self.wallet.account_generation() != account_generation
+				&& !self.wallet.has_onchain_wallet_account(self.account);
+			if account_was_removed {
+				return Ok(AccountChainListenerOutcome::AccountSetChanged);
+			}
 			return Err(error);
 		}
+		Ok(AccountChainListenerOutcome::Complete)
+	}
 
-		let Some(fork_point) = self.fork_point.lock().unwrap().take() else {
-			return Ok(());
-		};
-		let blocks: Vec<_> = self.reorg_blocks.lock().unwrap().drain(..).collect();
-		self.wallet.apply_reorg_blocks_to_account(self.account, fork_point, &blocks)
+	fn record_apply_result(&self, result: Result<(), Error>) {
+		if let Err(error) = result {
+			let mut apply_error = self.apply_error.lock().unwrap();
+			if apply_error.is_none() {
+				*apply_error = Some(error);
+			}
+		}
 	}
 }
 
@@ -1555,25 +1564,21 @@ impl Listen for AccountChainListener {
 		&self, _header: &bitcoin::block::Header,
 		_txdata: &lightning::chain::transaction::TransactionData, _height: u32,
 	) {
-		debug_assert!(false, "Syncing filtered blocks is currently not supported");
+		self.record_apply_result(Err(Error::WalletOperationFailed));
 	}
 
 	fn block_connected(&self, block: &bitcoin::Block, height: u32) {
 		if self.apply_error.lock().unwrap().is_some() {
 			return;
 		}
-		if self.fork_point.lock().unwrap().is_some() {
-			self.reorg_blocks.lock().unwrap().push((block.clone(), height));
-			return;
-		}
-		if let Err(e) = self.wallet.apply_block_to_account(self.account, block, height) {
-			*self.apply_error.lock().unwrap() = Some(e);
-		}
+		self.record_apply_result(self.wallet.apply_block_to_account(self.account, block, height));
 	}
 
 	fn blocks_disconnected(&self, fork_point: BestBlock) {
-		*self.fork_point.lock().unwrap() = Some(fork_point);
-		self.reorg_blocks.lock().unwrap().clear();
+		if self.apply_error.lock().unwrap().is_some() {
+			return;
+		}
+		self.record_apply_result(self.wallet.rewind_wallet_account(self.account, fork_point));
 	}
 }
 
@@ -1607,7 +1612,7 @@ mod tests {
 	use bitcoin::blockdata::constants::genesis_block;
 	use bitcoin::hashes::Hash;
 	use bitcoin::{FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
-	use lightning::chain::Listen;
+	use lightning::chain::{BestBlock, Listen};
 	use lightning_block_sync::http::JsonResponse;
 	use proptest::arbitrary::any;
 	use proptest::collection::vec;
@@ -1625,8 +1630,7 @@ mod tests {
 	use crate::types::DynStore;
 	use crate::Error;
 
-	#[test]
-	fn account_listener_retries_stale_membership_but_preserves_apply_errors() {
+	fn test_node() -> (crate::Node, [u8; 64]) {
 		let seed = [42u8; 64];
 		let mut config = Config::default();
 		config.network = Network::Regtest;
@@ -1635,7 +1639,20 @@ mod tests {
 		builder.set_entropy_seed_bytes(seed);
 		builder.set_log_facade_logger();
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
-		let node = builder.build_with_store(store).unwrap();
+		(builder.build_with_store(store).unwrap(), seed)
+	}
+
+	fn child_block(parent: &bitcoin::Block, nonce: u32) -> bitcoin::Block {
+		let mut header = parent.header;
+		header.prev_blockhash = parent.block_hash();
+		header.time = header.time.saturating_add(1);
+		header.nonce = nonce;
+		bitcoin::Block { header, txdata: Vec::new() }
+	}
+
+	#[test]
+	fn account_listener_retries_stale_membership_but_preserves_apply_errors() {
+		let (node, seed) = test_node();
 
 		node.wallet.add_monitored_address_type(AddressType::Legacy, &seed).unwrap();
 		let generation = node.wallet.account_generation();
@@ -1648,14 +1665,62 @@ mod tests {
 			Ok(AccountChainListenerOutcome::AccountSetChanged)
 		);
 
-		let current_generation = node.wallet.account_generation();
+		let listener_generation = node.wallet.account_generation();
 		let primary = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
 		let failed_listener = AccountChainListener::new(Arc::clone(&node.wallet), primary);
 		*failed_listener.apply_error.lock().unwrap() = Some(Error::PersistenceFailed);
+		node.wallet.add_monitored_address_type(AddressType::Legacy, &seed).unwrap();
 		assert!(matches!(
-			failed_listener.finish(current_generation),
+			failed_listener.finish(listener_generation),
 			Err(Error::PersistenceFailed)
 		));
+	}
+
+	#[test]
+	fn account_listener_streams_replacement_blocks_after_rewind() {
+		let (node, _) = test_node();
+		let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+		let generation = node.wallet.account_generation();
+		let listener = AccountChainListener::new(Arc::clone(&node.wallet), account);
+		let genesis = genesis_block(Network::Regtest);
+		listener.blocks_disconnected(BestBlock::new(genesis.block_hash(), 0));
+
+		let block1 = child_block(&genesis, 1);
+		listener.block_connected(&block1, 1);
+		let tip_after_first = node
+			.wallet
+			.account_sync_snapshot()
+			.1
+			.into_iter()
+			.find(|(candidate, _)| *candidate == account)
+			.unwrap()
+			.1;
+		assert_eq!(tip_after_first.block_hash, block1.block_hash());
+
+		let block2 = child_block(&block1, 2);
+		listener.block_connected(&block2, 2);
+		assert_eq!(listener.finish(generation), Ok(AccountChainListenerOutcome::Complete));
+		let tip_after_second = node
+			.wallet
+			.account_sync_snapshot()
+			.1
+			.into_iter()
+			.find(|(candidate, _)| *candidate == account)
+			.unwrap()
+			.1;
+		assert_eq!(tip_after_second.block_hash, block2.block_hash());
+	}
+
+	#[test]
+	fn account_listener_rejects_filtered_blocks() {
+		let (node, _) = test_node();
+		let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+		let generation = node.wallet.account_generation();
+		let listener = AccountChainListener::new(Arc::clone(&node.wallet), account);
+		let genesis = genesis_block(Network::Regtest);
+
+		listener.filtered_block_connected(&genesis.header, &[], 0);
+		assert!(matches!(listener.finish(generation), Err(Error::WalletOperationFailed)));
 	}
 
 	#[test]

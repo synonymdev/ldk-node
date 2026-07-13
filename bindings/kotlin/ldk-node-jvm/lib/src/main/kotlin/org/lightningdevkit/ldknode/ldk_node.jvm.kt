@@ -1546,6 +1546,8 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2690,6 +2692,13 @@ internal interface UniffiLib : Library {
         `index`: Int,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to_account(
+        `ptr`: Pointer?,
+        `addressType`: RustBufferByValue,
+        `accountIndex`: Int,
+        `index`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_method_onchainpayment_select_utxos_with_algorithm(
         `ptr`: Pointer?,
         `targetAmountSats`: Long,
@@ -3463,6 +3472,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to_account(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address(
@@ -4097,6 +4108,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to_account() != 53588.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm() != 14084.toShort()) {
@@ -8480,6 +8494,21 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(
                     it,
                     FfiConverterTypeAddressType.lower(`addressType`),
+                    FfiConverterUInt.lower(`index`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+    @Throws(NodeException::class)
+    override fun `revealReceiveAddressesToAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `index`: kotlin.UInt) {
+        callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to_account(
+                    it,
+                    FfiConverterTypeAddressType.lower(`addressType`),
+                    FfiConverterUInt.lower(`accountIndex`),
                     FfiConverterUInt.lower(`index`),
                     uniffiRustCallStatus,
                 )

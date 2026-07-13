@@ -3384,6 +3384,8 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws
 
+    func revealReceiveAddressesToAccount(addressType: AddressType, accountIndex: UInt32, index: UInt32) throws
+
     func selectUtxosWithAlgorithm(targetAmountSats: UInt64, feeRate: FeeRate?, algorithm: CoinSelectionAlgorithm, utxos: [SpendableUtxo]?) throws -> [SpendableUtxo]
 
     func sendAllToAddress(address: Address, retainReserve: Bool, feeRate: FeeRate?) throws -> Txid
@@ -3556,6 +3558,15 @@ open class OnchainPayment:
             uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(self.uniffiClonePointer(),
                                                                                  FfiConverterTypeAddressType.lower(addressType),
                                                                                  FfiConverterUInt32.lower(index), $0)
+        }
+    }
+
+    open func revealReceiveAddressesToAccount(addressType: AddressType, accountIndex: UInt32, index: UInt32) throws {
+        try rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to_account(self.uniffiClonePointer(),
+                                                                                         FfiConverterTypeAddressType.lower(addressType),
+                                                                                         FfiConverterUInt32.lower(accountIndex),
+                                                                                         FfiConverterUInt32.lower(index), $0)
         }
     }
 
@@ -13443,6 +13454,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to_account() != 53588 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algorithm() != 14084 {

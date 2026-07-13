@@ -27,9 +27,8 @@ use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use bdk_chain::local_chain::CheckPoint;
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
-use bdk_chain::{BlockId, ChainPosition};
+use bdk_chain::ChainPosition;
 use bdk_wallet::event::WalletEvent;
 use bdk_wallet::{
 	AddressInfo, Balance, KeychainKind, LocalOutput, PersistedWallet, Update, WalletPersister,
@@ -431,113 +430,6 @@ where
 				(*key, checkpoint.hash(), checkpoint.height())
 			})
 			.collect()
-	}
-
-	/// Reconcile one wallet at `fork_point` and scan every replacement block.
-	///
-	/// The replacement branch must be contiguous and reach the wallet's previous tip height. This
-	/// keeps BDK's chain update unambiguous and ensures transactions in intermediate replacement
-	/// blocks are indexed before the new tip is persisted.
-	pub fn apply_reorg_blocks_to(
-		&mut self, key: &K, fork_point: BlockId, blocks: &[(Block, u32)],
-	) -> Result<HashSet<Txid>, Error> {
-		let wallet = self.wallets.get_mut(key).ok_or(Error::WalletNotFound)?;
-		let original_tip = wallet.latest_checkpoint();
-		if original_tip.height() < fork_point.height {
-			log::error!(
-				"Cannot reconcile wallet {:?} from fork point {} above tip {}",
-				key,
-				fork_point.height,
-				original_tip.height()
-			);
-			return Err(Error::WalletOperationFailed);
-		}
-
-		let replacement_tip_height =
-			blocks.last().map(|(_, height)| *height).unwrap_or(fork_point.height);
-		if replacement_tip_height < original_tip.height() {
-			log::error!(
-				"Cannot reconcile wallet {:?}: replacement tip {} is below wallet tip {}",
-				key,
-				replacement_tip_height,
-				original_tip.height()
-			);
-			return Err(Error::WalletOperationFailed);
-		}
-
-		let mut update_ids: Vec<BlockId> = original_tip
-			.iter()
-			.filter(|checkpoint| checkpoint.height() <= fork_point.height)
-			.map(|checkpoint| checkpoint.block_id())
-			.collect();
-		update_ids.reverse();
-
-		match update_ids.last() {
-			Some(checkpoint) if checkpoint.height == fork_point.height => {
-				if checkpoint.hash != fork_point.hash {
-					log::error!(
-						"Wallet {:?} disagrees with fork point {} at height {}",
-						key,
-						fork_point.hash,
-						fork_point.height
-					);
-					return Err(Error::WalletOperationFailed);
-				}
-			},
-			Some(_) => update_ids.push(fork_point),
-			None => return Err(Error::WalletOperationFailed),
-		}
-
-		let mut expected_height =
-			fork_point.height.checked_add(1).ok_or(Error::WalletOperationFailed)?;
-		let mut previous_hash = fork_point.hash;
-		for (block, height) in blocks {
-			if *height != expected_height || block.header.prev_blockhash != previous_hash {
-				log::error!(
-					"Non-contiguous replacement block {} at height {} for wallet {:?}",
-					block.block_hash(),
-					height,
-					key
-				);
-				return Err(Error::WalletOperationFailed);
-			}
-			previous_hash = block.block_hash();
-			update_ids.push(BlockId { height: *height, hash: previous_hash });
-			expected_height = expected_height.checked_add(1).ok_or(Error::WalletOperationFailed)?;
-		}
-
-		let chain_update = CheckPoint::from_block_ids(update_ids).map_err(|_| {
-			log::error!("Failed to construct replacement checkpoint chain for wallet {:?}", key);
-			Error::WalletOperationFailed
-		})?;
-		wallet.apply_update(Update { chain: Some(chain_update), ..Default::default() }).map_err(
-			|e| {
-				log::error!("Failed to apply replacement chain to wallet {:?}: {}", key, e);
-				Error::WalletOperationFailed
-			},
-		)?;
-
-		for (block, height) in blocks {
-			wallet.apply_block(block, *height).map_err(|e| {
-				log::error!(
-					"Failed to scan replacement block {} at height {} for wallet {:?}: {}",
-					block.block_hash(),
-					height,
-					key,
-					e
-				);
-				Error::WalletOperationFailed
-			})?;
-		}
-
-		if let Some(persister) = self.persisters.get_mut(key) {
-			wallet.persist(persister).map_err(|e| {
-				log::error!("Failed to persist wallet {:?} after reorg: {}", key, e);
-				Error::PersistenceFailed
-			})?;
-		}
-
-		Ok(wallet.transactions().map(|wtx| wtx.tx_node.txid).collect())
 	}
 
 	/// Apply a connected block to a single wallet, then persist.
@@ -2225,15 +2117,6 @@ mod tests {
 		}
 	}
 
-	fn regtest_child_block_with_transaction(
-		prev: &Block, distinct: u8, transaction: Transaction,
-	) -> Block {
-		let mut block = regtest_child_block(prev, distinct);
-		block.txdata.push(transaction);
-		block.header.merkle_root = block.compute_merkle_root().unwrap();
-		block
-	}
-
 	#[test]
 	fn apply_block_skips_wallets_already_ahead_during_catch_up() {
 		use bitcoin::blockdata::constants::genesis_block;
@@ -2351,50 +2234,6 @@ mod tests {
 	}
 
 	#[test]
-	fn reorg_reconciliation_scans_intermediate_replacement_blocks() {
-		use bdk_wallet::Update;
-		use bitcoin::blockdata::constants::genesis_block;
-
-		let mut primary_persister = NoopPersister;
-		let mut primary = create_empty_wallet(&mut primary_persister);
-		let genesis = genesis_block(Network::Regtest);
-		primary.apply_block(&genesis, 0).unwrap();
-		let receive_script =
-			primary.reveal_next_address(KeychainKind::External).address.script_pubkey();
-
-		let block1_a = regtest_child_block(&genesis, 1);
-		let block2_a = regtest_child_block(&block1_a, 1);
-		let funding_tx = Transaction {
-			version: bitcoin::transaction::Version::TWO,
-			lock_time: bitcoin::absolute::LockTime::ZERO,
-			input: vec![TxIn {
-				previous_output: OutPoint { txid: Txid::from_byte_array([0x44; 32]), vout: 0 },
-				..Default::default()
-			}],
-			output: vec![TxOut { value: Amount::from_sat(70_000), script_pubkey: receive_script }],
-		};
-		let funding_txid = funding_tx.compute_txid();
-		let block1_b = regtest_child_block_with_transaction(&genesis, 2, funding_tx);
-		let block2_b = regtest_child_block(&block1_b, 2);
-		assert_ne!(block2_a.block_hash(), block2_b.block_hash());
-
-		let sparse_stale = BlockId { height: 2, hash: block2_a.block_hash() };
-		let checkpoint = primary.latest_checkpoint().insert(sparse_stale);
-		primary.apply_update(Update { chain: Some(checkpoint), ..Default::default() }).unwrap();
-
-		let mut agg = AggregateWallet::new(primary, primary_persister, 0u8, vec![]);
-		agg.apply_reorg_blocks_to(
-			&0u8,
-			BlockId { height: 0, hash: genesis.block_hash() },
-			&[(block1_b.clone(), 1), (block2_b.clone(), 2)],
-		)
-		.expect("replacement branch must reconcile");
-		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().hash(), block2_b.block_hash());
-		assert!(agg.wallet(&0u8).unwrap().get_tx(funding_txid).is_some());
-		assert_eq!(agg.wallet(&0u8).unwrap().balance().confirmed, Amount::from_sat(70_000));
-	}
-
-	#[test]
 	fn apply_block_to_updates_only_the_targeted_wallet() {
 		use bitcoin::blockdata::constants::genesis_block;
 
@@ -2419,74 +2258,6 @@ mod tests {
 	}
 
 	#[test]
-	fn reorg_reconciliation_preserves_historical_sparse_checkpoints() {
-		use bdk_wallet::Update;
-		use bitcoin::blockdata::constants::genesis_block;
-
-		let mut primary_persister = NoopPersister;
-		let mut primary = create_empty_wallet(&mut primary_persister);
-		let genesis = genesis_block(Network::Regtest);
-		primary.apply_block(&genesis, 0).unwrap();
-
-		let block1 = regtest_child_block(&genesis, 1);
-		let block2 = regtest_child_block(&block1, 1);
-		let block3_a = regtest_child_block(&block2, 1);
-		let block4_a = regtest_child_block(&block3_a, 1);
-		let block3_b = regtest_child_block(&block2, 2);
-		let block4_b = regtest_child_block(&block3_b, 2);
-
-		let sparse_checkpoint =
-			primary.latest_checkpoint().insert(BlockId { height: 2, hash: block2.block_hash() });
-		primary
-			.apply_update(Update { chain: Some(sparse_checkpoint), ..Default::default() })
-			.unwrap();
-		primary.apply_block(&block3_a, 3).unwrap();
-		primary.apply_block(&block4_a, 4).unwrap();
-
-		let mut agg = AggregateWallet::new(primary, primary_persister, 0u8, vec![]);
-		agg.apply_reorg_blocks_to(
-			&0u8,
-			BlockId { height: 2, hash: block2.block_hash() },
-			&[(block3_b.clone(), 3), (block4_b.clone(), 4)],
-		)
-		.expect("replacement branch must retain the common sparse checkpoint");
-
-		let tip = agg.wallet(&0u8).unwrap().latest_checkpoint();
-		assert_eq!(tip.hash(), block4_b.block_hash());
-		assert_eq!(tip.get(2).unwrap().hash(), block2.block_hash());
-	}
-
-	#[test]
-	fn reorg_reconciliation_rejects_replacement_below_wallet_tip() {
-		use bdk_wallet::Update;
-		use bitcoin::blockdata::constants::genesis_block;
-
-		let mut persister = NoopPersister;
-		let mut wallet = create_empty_wallet(&mut persister);
-		let genesis = genesis_block(Network::Regtest);
-		wallet.apply_block(&genesis, 0).unwrap();
-		let block1_a = regtest_child_block(&genesis, 1);
-		let block2_a = regtest_child_block(&block1_a, 1);
-		let block1_b = regtest_child_block(&genesis, 2);
-		let block2_b = regtest_child_block(&block1_b, 2);
-		let checkpoint =
-			wallet.latest_checkpoint().insert(BlockId { height: 2, hash: block2_a.block_hash() });
-		wallet.apply_update(Update { chain: Some(checkpoint), ..Default::default() }).unwrap();
-
-		let mut agg = AggregateWallet::new(wallet, persister, 0u8, vec![]);
-		let fork_point = BlockId { height: 0, hash: genesis.block_hash() };
-		assert_eq!(
-			agg.apply_reorg_blocks_to(&0u8, fork_point, &[(block1_b.clone(), 1)]),
-			Err(Error::WalletOperationFailed)
-		);
-		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().hash(), block2_a.block_hash());
-
-		agg.apply_reorg_blocks_to(&0u8, fork_point, &[(block1_b, 1), (block2_b.clone(), 2)])
-			.expect("wallet must reconcile once the replacement reaches its previous height");
-		assert_eq!(agg.wallet(&0u8).unwrap().latest_checkpoint().hash(), block2_b.block_hash());
-	}
-
-	#[test]
 	fn apply_block_retries_persist_when_block_is_already_known() {
 		use bitcoin::blockdata::constants::genesis_block;
 
@@ -2507,20 +2278,6 @@ mod tests {
 		assert_eq!(agg.primary_wallet().latest_checkpoint().hash(), block1.block_hash());
 
 		agg.apply_block(&block1, 1).expect("known block must retry stranded persist");
-		assert_eq!(failures.load(Ordering::SeqCst), 0);
-
-		let replacement = regtest_child_block(&genesis, 2);
-		failures.store(1, Ordering::SeqCst);
-		assert_eq!(
-			agg.apply_reorg_blocks_to(
-				&0u8,
-				BlockId { height: 0, hash: genesis.block_hash() },
-				&[(replacement.clone(), 1)],
-			),
-			Err(Error::PersistenceFailed)
-		);
-		assert_eq!(agg.primary_wallet().latest_checkpoint().hash(), replacement.block_hash());
-		agg.persist_all().expect("pending reorg changes must remain retryable");
 		assert_eq!(failures.load(Ordering::SeqCst), 0);
 	}
 
