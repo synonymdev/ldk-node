@@ -11,5 +11,8 @@ fi
 cargo build --profile release-smaller --features uniffi || exit 1
 $UNIFFI_BINDGEN_BIN generate bindings/ldk_node.udl --language python -o "$BINDINGS_DIR" || exit 1
 
+echo "Normalizing generated Python whitespace..."
+./scripts/normalize_generated_whitespace.sh "$BINDINGS_DIR/ldk_node.py" || exit 1
+
 mkdir -p $BINDINGS_DIR
 cp "$DYNAMIC_LIB_PATH" "$BINDINGS_DIR" || exit 1

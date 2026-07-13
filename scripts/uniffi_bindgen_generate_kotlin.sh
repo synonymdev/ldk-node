@@ -47,11 +47,17 @@ $UNIFFI_BINDGEN_BIN bindings/ldk_node.udl --lib-file $DYNAMIC_LIB_PATH --config 
 
 # Fix incorrect kotlinx.coroutines.IO import (removed in newer kotlinx.coroutines versions)
 echo "Fixing Kotlin coroutines imports..."
-KOTLIN_BINDINGS_FILE="$JVM_LIB_DIR/lib/src/main/kotlin/org/lightningdevkit/ldknode/ldk_node.jvm.kt"
+KOTLIN_BINDINGS_DIR="$JVM_LIB_DIR/lib/src/main/kotlin/org/lightningdevkit/ldknode"
+KOTLIN_BINDINGS_FILE="$KOTLIN_BINDINGS_DIR/ldk_node.jvm.kt"
 if [ -f "$KOTLIN_BINDINGS_FILE" ]; then
 	sed -i.bak '/import kotlinx\.coroutines\.IO/d' "$KOTLIN_BINDINGS_FILE"
 	rm -f "$KOTLIN_BINDINGS_FILE.bak"
 fi
+
+echo "Normalizing generated Kotlin whitespace..."
+./scripts/normalize_generated_whitespace.sh \
+	"$KOTLIN_BINDINGS_DIR/ldk_node.common.kt" \
+	"$KOTLIN_BINDINGS_DIR/ldk_node.jvm.kt" || exit 1
 
 # Sync version from Cargo.toml
 echo "Syncing version from Cargo.toml..."

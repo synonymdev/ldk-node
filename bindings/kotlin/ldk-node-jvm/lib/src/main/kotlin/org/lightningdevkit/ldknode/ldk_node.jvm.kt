@@ -470,11 +470,11 @@ internal open class UniffiForeignFutureStruct(
     @JvmField internal var `free`: UniffiForeignFutureFree?,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `handle` = 0.toLong(),
-        
+
         `free` = null,
-        
+
     )
 
     internal class UniffiByValue(
@@ -501,11 +501,11 @@ internal open class UniffiForeignFutureStructU8Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0.toByte(),
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -535,11 +535,11 @@ internal open class UniffiForeignFutureStructI8Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0.toByte(),
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -569,11 +569,11 @@ internal open class UniffiForeignFutureStructU16Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0.toShort(),
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -603,11 +603,11 @@ internal open class UniffiForeignFutureStructI16Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0.toShort(),
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -637,11 +637,11 @@ internal open class UniffiForeignFutureStructU32Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0,
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -671,11 +671,11 @@ internal open class UniffiForeignFutureStructI32Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0,
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -705,11 +705,11 @@ internal open class UniffiForeignFutureStructU64Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0.toLong(),
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -739,11 +739,11 @@ internal open class UniffiForeignFutureStructI64Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0.toLong(),
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -773,11 +773,11 @@ internal open class UniffiForeignFutureStructF32Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0.0f,
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -807,11 +807,11 @@ internal open class UniffiForeignFutureStructF64Struct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = 0.0,
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -841,11 +841,11 @@ internal open class UniffiForeignFutureStructPointerStruct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = NullPointer,
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -875,11 +875,11 @@ internal open class UniffiForeignFutureStructRustBufferStruct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `returnValue` = RustBufferHelper.allocValue(),
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -908,9 +908,9 @@ internal open class UniffiForeignFutureStructVoidStruct(
     @JvmField internal var `callStatus`: UniffiRustCallStatusByValue,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `callStatus` = UniffiRustCallStatusHelper.allocValue(),
-        
+
     )
 
     internal class UniffiByValue(
@@ -943,11 +943,11 @@ internal open class UniffiVTableCallbackInterfaceLogWriterStruct(
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree?,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `log` = null,
-        
+
         `uniffiFree` = null,
-        
+
     )
 
     internal class UniffiByValue(
@@ -974,11 +974,11 @@ internal open class UniffiVTableCallbackInterfaceVssHeaderProviderStruct(
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree?,
 ) : com.sun.jna.Structure() {
     constructor(): this(
-        
+
         `getHeaders` = null,
-        
+
         `uniffiFree` = null,
-        
+
     )
 
     internal class UniffiByValue(
@@ -1576,7 +1576,7 @@ internal interface UniffiLib : Library {
                     uniffiCallbackInterfaceLogWriter.register(lib)
                     }
         }
-        
+
         // The Cleaner for the whole library
         internal val CLEANER: UniffiCleaner by lazy {
             UniffiCleaner.create()
@@ -3534,7 +3534,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun ffi_ldk_node_uniffi_contract_version(
     ): Int
-    
+
 }
 
 private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
@@ -4486,7 +4486,7 @@ open class Bolt11Invoice: Disposable, Bolt11InvoiceInterface {
         }!!
     }
 
-    
+
     override fun `amountMilliSatoshis`(): kotlin.ULong? {
         return FfiConverterOptionalULong.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -4665,8 +4665,8 @@ open class Bolt11Invoice: Disposable, Bolt11InvoiceInterface {
     }
 
 
-    
-    
+
+
     override fun toString(): String {
         return FfiConverterString.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -4677,7 +4677,7 @@ open class Bolt11Invoice: Disposable, Bolt11InvoiceInterface {
             }
         })
     }
-    
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is Bolt11Invoice) return false
@@ -4691,11 +4691,11 @@ open class Bolt11Invoice: Disposable, Bolt11InvoiceInterface {
             }
         })
     }
-    
 
-    
+
+
     companion object {
-        
+
         @Throws(NodeException::class)
         fun `fromStr`(`invoiceStr`: kotlin.String): Bolt11Invoice {
             return FfiConverterTypeBolt11Invoice.lift(uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -4706,9 +4706,9 @@ open class Bolt11Invoice: Disposable, Bolt11InvoiceInterface {
             }!!)
         }
 
-        
+
     }
-    
+
 }
 
 
@@ -4886,7 +4886,7 @@ open class Bolt11Payment: Disposable, Bolt11PaymentInterface {
         }!!
     }
 
-    
+
     @Throws(NodeException::class)
     override fun `claimForHash`(`paymentHash`: PaymentHash, `claimableAmountMsat`: kotlin.ULong, `preimage`: PaymentPreimage) {
         callWithPointer {
@@ -5125,13 +5125,13 @@ open class Bolt11Payment: Disposable, Bolt11PaymentInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -5255,7 +5255,7 @@ open class Bolt12Invoice: Disposable, Bolt12InvoiceInterface {
         }!!
     }
 
-    
+
     override fun `absoluteExpirySeconds`(): kotlin.ULong? {
         return FfiConverterOptionalULong.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -5477,12 +5477,12 @@ open class Bolt12Invoice: Disposable, Bolt12InvoiceInterface {
     }
 
 
-    
-    
 
-    
+
+
+
     companion object {
-        
+
         @Throws(NodeException::class)
         fun `fromStr`(`invoiceStr`: kotlin.String): Bolt12Invoice {
             return FfiConverterTypeBolt12Invoice.lift(uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -5493,9 +5493,9 @@ open class Bolt12Invoice: Disposable, Bolt12InvoiceInterface {
             }!!)
         }
 
-        
+
     }
-    
+
 }
 
 
@@ -5619,7 +5619,7 @@ open class Bolt12Payment: Disposable, Bolt12PaymentInterface {
         }!!
     }
 
-    
+
     @Throws(NodeException::class)
     override fun `blindedPathsForAsyncRecipient`(`recipientId`: kotlin.ByteArray): kotlin.ByteArray {
         return FfiConverterByteArray.lift(callWithPointer {
@@ -5752,13 +5752,13 @@ open class Bolt12Payment: Disposable, Bolt12PaymentInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -5890,7 +5890,7 @@ open class Builder: Disposable, BuilderInterface {
         }!!
     }
 
-    
+
     @Throws(BuildException::class)
     override fun `build`(): Node {
         return FfiConverterTypeNode.lift(callWithPointer {
@@ -6305,12 +6305,12 @@ open class Builder: Disposable, BuilderInterface {
     }
 
 
-    
-    
 
-    
+
+
+
     companion object {
-        
+
         fun `fromConfig`(`config`: Config): Builder {
             return FfiConverterTypeBuilder.lift(uniffiRustCall { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_constructor_builder_from_config(
@@ -6320,9 +6320,9 @@ open class Builder: Disposable, BuilderInterface {
             }!!)
         }
 
-        
+
     }
-    
+
 }
 
 
@@ -6446,7 +6446,7 @@ open class FeeRate: Disposable, FeeRateInterface {
         }!!
     }
 
-    
+
     override fun `toSatPerKwu`(): kotlin.ULong {
         return FfiConverterULong.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -6481,12 +6481,12 @@ open class FeeRate: Disposable, FeeRateInterface {
     }
 
 
-    
-    
 
-    
+
+
+
     companion object {
-        
+
         fun `fromSatPerKwu`(`satKwu`: kotlin.ULong): FeeRate {
             return FfiConverterTypeFeeRate.lift(uniffiRustCall { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_constructor_feerate_from_sat_per_kwu(
@@ -6496,7 +6496,7 @@ open class FeeRate: Disposable, FeeRateInterface {
             }!!)
         }
 
-        
+
         fun `fromSatPerVbUnchecked`(`satVb`: kotlin.ULong): FeeRate {
             return FfiConverterTypeFeeRate.lift(uniffiRustCall { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_constructor_feerate_from_sat_per_vb_unchecked(
@@ -6506,9 +6506,9 @@ open class FeeRate: Disposable, FeeRateInterface {
             }!!)
         }
 
-        
+
     }
-    
+
 }
 
 
@@ -6632,7 +6632,7 @@ open class Lsps1Liquidity: Disposable, Lsps1LiquidityInterface {
         }!!
     }
 
-    
+
     @Throws(NodeException::class)
     override fun `checkOrderStatus`(`orderId`: Lsps1OrderId): Lsps1OrderStatus {
         return FfiConverterTypeLSPS1OrderStatus.lift(callWithPointer {
@@ -6663,13 +6663,13 @@ open class Lsps1Liquidity: Disposable, Lsps1LiquidityInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -6793,7 +6793,7 @@ open class LogWriterImpl: Disposable, LogWriter {
         }!!
     }
 
-    
+
     override fun `log`(`record`: LogRecord) {
         callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -6807,13 +6807,13 @@ open class LogWriterImpl: Disposable, LogWriter {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -7005,7 +7005,7 @@ open class NetworkGraph: Disposable, NetworkGraphInterface {
         }!!
     }
 
-    
+
     override fun `channel`(`shortChannelId`: kotlin.ULong): ChannelInfo? {
         return FfiConverterOptionalTypeChannelInfo.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -7053,13 +7053,13 @@ open class NetworkGraph: Disposable, NetworkGraphInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -7183,7 +7183,7 @@ open class Node: Disposable, NodeInterface {
         }!!
     }
 
-    
+
     @Throws(NodeException::class)
     override fun `addAddressTypeToMonitor`(`addressType`: AddressType, `seedBytes`: List<kotlin.UByte>) {
         callWithPointer {
@@ -7858,13 +7858,13 @@ open class Node: Disposable, NodeInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -7988,7 +7988,7 @@ open class Offer: Disposable, OfferInterface {
         }!!
     }
 
-    
+
     override fun `absoluteExpirySeconds`(): kotlin.ULong? {
         return FfiConverterOptionalULong.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -8124,8 +8124,8 @@ open class Offer: Disposable, OfferInterface {
     }
 
 
-    
-    
+
+
     override fun toString(): String {
         return FfiConverterString.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -8136,7 +8136,7 @@ open class Offer: Disposable, OfferInterface {
             }
         })
     }
-    
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is Offer) return false
@@ -8150,11 +8150,11 @@ open class Offer: Disposable, OfferInterface {
             }
         })
     }
-    
 
-    
+
+
     companion object {
-        
+
         @Throws(NodeException::class)
         fun `fromStr`(`offerStr`: kotlin.String): Offer {
             return FfiConverterTypeOffer.lift(uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -8165,9 +8165,9 @@ open class Offer: Disposable, OfferInterface {
             }!!)
         }
 
-        
+
     }
-    
+
 }
 
 
@@ -8291,7 +8291,7 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
         }!!
     }
 
-    
+
     @Throws(NodeException::class)
     override fun `accelerateByCpfp`(`txid`: Txid, `feeRate`: FeeRate?, `destinationAddress`: Address?): Txid {
         return FfiConverterTypeTxid.lift(callWithPointer {
@@ -8564,13 +8564,13 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -8694,7 +8694,7 @@ open class Refund: Disposable, RefundInterface {
         }!!
     }
 
-    
+
     override fun `absoluteExpirySeconds`(): kotlin.ULong? {
         return FfiConverterOptionalULong.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -8806,8 +8806,8 @@ open class Refund: Disposable, RefundInterface {
     }
 
 
-    
-    
+
+
     override fun toString(): String {
         return FfiConverterString.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -8818,7 +8818,7 @@ open class Refund: Disposable, RefundInterface {
             }
         })
     }
-    
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is Refund) return false
@@ -8832,11 +8832,11 @@ open class Refund: Disposable, RefundInterface {
             }
         })
     }
-    
 
-    
+
+
     companion object {
-        
+
         @Throws(NodeException::class)
         fun `fromStr`(`refundStr`: kotlin.String): Refund {
             return FfiConverterTypeRefund.lift(uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -8847,9 +8847,9 @@ open class Refund: Disposable, RefundInterface {
             }!!)
         }
 
-        
+
     }
-    
+
 }
 
 
@@ -8973,7 +8973,7 @@ open class SpontaneousPayment: Disposable, SpontaneousPaymentInterface {
         }!!
     }
 
-    
+
     @Throws(NodeException::class)
     override fun `send`(`amountMsat`: kotlin.ULong, `nodeId`: PublicKey, `routeParameters`: RouteParametersConfig?): PaymentId {
         return FfiConverterTypePaymentId.lift(callWithPointer {
@@ -9053,13 +9053,13 @@ open class SpontaneousPayment: Disposable, SpontaneousPaymentInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -9183,7 +9183,7 @@ open class UnifiedQrPayment: Disposable, UnifiedQrPaymentInterface {
         }!!
     }
 
-    
+
     @Throws(NodeException::class)
     override fun `receive`(`amountSats`: kotlin.ULong, `message`: kotlin.String, `expirySec`: kotlin.UInt): kotlin.String {
         return FfiConverterString.lift(callWithPointer {
@@ -9214,13 +9214,13 @@ open class UnifiedQrPayment: Disposable, UnifiedQrPaymentInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 
@@ -9344,7 +9344,7 @@ open class VssHeaderProvider: Disposable, VssHeaderProviderInterface {
         }!!
     }
 
-    
+
     @Throws(VssHeaderProviderException::class, kotlin.coroutines.cancellation.CancellationException::class)
     override suspend fun `getHeaders`(`request`: List<kotlin.UByte>): Map<kotlin.String, kotlin.String> {
         return uniffiRustCallAsync(
@@ -9366,13 +9366,13 @@ open class VssHeaderProvider: Disposable, VssHeaderProviderInterface {
     }
 
 
-    
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 

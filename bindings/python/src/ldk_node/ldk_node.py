@@ -3687,7 +3687,7 @@ class Bolt11InvoiceProtocol(typing.Protocol):
 
 class Bolt11Invoice:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -3711,7 +3711,7 @@ class Bolt11Invoice:
     @classmethod
     def from_str(cls, invoice_str: "str"):
         _UniffiConverterString.check_lower(invoice_str)
-        
+
         # Call the (fallible) function before creating any half-baked object instances.
         pointer = _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_constructor_bolt11invoice_from_str,
         _UniffiConverterString.lower(invoice_str))
@@ -3856,7 +3856,7 @@ class Bolt11Invoice:
 
     def would_expire(self, at_time_seconds: "int") -> "bool":
         _UniffiConverterUInt64.check_lower(at_time_seconds)
-        
+
         return _UniffiConverterBool.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_bolt11invoice_would_expire,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(at_time_seconds))
@@ -3965,7 +3965,7 @@ class Bolt11PaymentProtocol(typing.Protocol):
 
 class Bolt11Payment:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -3990,11 +3990,11 @@ class Bolt11Payment:
 
     def claim_for_hash(self, payment_hash: "PaymentHash",claimable_amount_msat: "int",preimage: "PaymentPreimage") -> None:
         _UniffiConverterTypePaymentHash.check_lower(payment_hash)
-        
+
         _UniffiConverterUInt64.check_lower(claimable_amount_msat)
-        
+
         _UniffiConverterTypePaymentPreimage.check_lower(preimage)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_claim_for_hash,self._uniffi_clone_pointer(),
         _UniffiConverterTypePaymentHash.lower(payment_hash),
         _UniffiConverterUInt64.lower(claimable_amount_msat),
@@ -4007,7 +4007,7 @@ class Bolt11Payment:
 
     def estimate_routing_fees(self, invoice: "Bolt11Invoice") -> "int":
         _UniffiConverterTypeBolt11Invoice.check_lower(invoice)
-        
+
         return _UniffiConverterUInt64.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_estimate_routing_fees,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11Invoice.lower(invoice))
@@ -4019,9 +4019,9 @@ class Bolt11Payment:
 
     def estimate_routing_fees_using_amount(self, invoice: "Bolt11Invoice",amount_msat: "int") -> "int":
         _UniffiConverterTypeBolt11Invoice.check_lower(invoice)
-        
+
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         return _UniffiConverterUInt64.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_estimate_routing_fees_using_amount,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11Invoice.lower(invoice),
@@ -4034,7 +4034,7 @@ class Bolt11Payment:
 
     def fail_for_hash(self, payment_hash: "PaymentHash") -> None:
         _UniffiConverterTypePaymentHash.check_lower(payment_hash)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_fail_for_hash,self._uniffi_clone_pointer(),
         _UniffiConverterTypePaymentHash.lower(payment_hash))
 
@@ -4045,11 +4045,11 @@ class Bolt11Payment:
 
     def receive(self, amount_msat: "int",description: "Bolt11InvoiceDescription",expiry_secs: "int") -> "Bolt11Invoice":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypeBolt11InvoiceDescription.check_lower(description)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         return _UniffiConverterTypeBolt11Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_receive,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -4063,13 +4063,13 @@ class Bolt11Payment:
 
     def receive_for_hash(self, amount_msat: "int",description: "Bolt11InvoiceDescription",expiry_secs: "int",payment_hash: "PaymentHash") -> "Bolt11Invoice":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypeBolt11InvoiceDescription.check_lower(description)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         _UniffiConverterTypePaymentHash.check_lower(payment_hash)
-        
+
         return _UniffiConverterTypeBolt11Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_receive_for_hash,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -4084,9 +4084,9 @@ class Bolt11Payment:
 
     def receive_variable_amount(self, description: "Bolt11InvoiceDescription",expiry_secs: "int") -> "Bolt11Invoice":
         _UniffiConverterTypeBolt11InvoiceDescription.check_lower(description)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         return _UniffiConverterTypeBolt11Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_receive_variable_amount,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11InvoiceDescription.lower(description),
@@ -4099,11 +4099,11 @@ class Bolt11Payment:
 
     def receive_variable_amount_for_hash(self, description: "Bolt11InvoiceDescription",expiry_secs: "int",payment_hash: "PaymentHash") -> "Bolt11Invoice":
         _UniffiConverterTypeBolt11InvoiceDescription.check_lower(description)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         _UniffiConverterTypePaymentHash.check_lower(payment_hash)
-        
+
         return _UniffiConverterTypeBolt11Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_receive_variable_amount_for_hash,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11InvoiceDescription.lower(description),
@@ -4117,11 +4117,11 @@ class Bolt11Payment:
 
     def receive_variable_amount_via_jit_channel(self, description: "Bolt11InvoiceDescription",expiry_secs: "int",max_proportional_lsp_fee_limit_ppm_msat: "typing.Optional[int]") -> "Bolt11Invoice":
         _UniffiConverterTypeBolt11InvoiceDescription.check_lower(description)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(max_proportional_lsp_fee_limit_ppm_msat)
-        
+
         return _UniffiConverterTypeBolt11Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_receive_variable_amount_via_jit_channel,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11InvoiceDescription.lower(description),
@@ -4135,13 +4135,13 @@ class Bolt11Payment:
 
     def receive_variable_amount_via_jit_channel_for_hash(self, description: "Bolt11InvoiceDescription",expiry_secs: "int",max_proportional_lsp_fee_limit_ppm_msat: "typing.Optional[int]",payment_hash: "PaymentHash") -> "Bolt11Invoice":
         _UniffiConverterTypeBolt11InvoiceDescription.check_lower(description)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(max_proportional_lsp_fee_limit_ppm_msat)
-        
+
         _UniffiConverterTypePaymentHash.check_lower(payment_hash)
-        
+
         return _UniffiConverterTypeBolt11Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_receive_variable_amount_via_jit_channel_for_hash,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11InvoiceDescription.lower(description),
@@ -4156,13 +4156,13 @@ class Bolt11Payment:
 
     def receive_via_jit_channel(self, amount_msat: "int",description: "Bolt11InvoiceDescription",expiry_secs: "int",max_lsp_fee_limit_msat: "typing.Optional[int]") -> "Bolt11Invoice":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypeBolt11InvoiceDescription.check_lower(description)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(max_lsp_fee_limit_msat)
-        
+
         return _UniffiConverterTypeBolt11Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_receive_via_jit_channel,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -4177,15 +4177,15 @@ class Bolt11Payment:
 
     def receive_via_jit_channel_for_hash(self, amount_msat: "int",description: "Bolt11InvoiceDescription",expiry_secs: "int",max_lsp_fee_limit_msat: "typing.Optional[int]",payment_hash: "PaymentHash") -> "Bolt11Invoice":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypeBolt11InvoiceDescription.check_lower(description)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(max_lsp_fee_limit_msat)
-        
+
         _UniffiConverterTypePaymentHash.check_lower(payment_hash)
-        
+
         return _UniffiConverterTypeBolt11Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_receive_via_jit_channel_for_hash,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -4201,9 +4201,9 @@ class Bolt11Payment:
 
     def send(self, invoice: "Bolt11Invoice",route_parameters: "typing.Optional[RouteParametersConfig]") -> "PaymentId":
         _UniffiConverterTypeBolt11Invoice.check_lower(invoice)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypePaymentId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11Invoice.lower(invoice),
@@ -4216,9 +4216,9 @@ class Bolt11Payment:
 
     def send_probes(self, invoice: "Bolt11Invoice",route_parameters: "typing.Optional[RouteParametersConfig]") -> "typing.List[ProbeHandle]":
         _UniffiConverterTypeBolt11Invoice.check_lower(invoice)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterSequenceTypeProbeHandle.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11Invoice.lower(invoice),
@@ -4231,11 +4231,11 @@ class Bolt11Payment:
 
     def send_probes_using_amount(self, invoice: "Bolt11Invoice",amount_msat: "int",route_parameters: "typing.Optional[RouteParametersConfig]") -> "typing.List[ProbeHandle]":
         _UniffiConverterTypeBolt11Invoice.check_lower(invoice)
-        
+
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterSequenceTypeProbeHandle.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_probes_using_amount,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11Invoice.lower(invoice),
@@ -4249,11 +4249,11 @@ class Bolt11Payment:
 
     def send_using_amount(self, invoice: "Bolt11Invoice",amount_msat: "int",route_parameters: "typing.Optional[RouteParametersConfig]") -> "PaymentId":
         _UniffiConverterTypeBolt11Invoice.check_lower(invoice)
-        
+
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypePaymentId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt11payment_send_using_amount,self._uniffi_clone_pointer(),
         _UniffiConverterTypeBolt11Invoice.lower(invoice),
@@ -4341,7 +4341,7 @@ class Bolt12InvoiceProtocol(typing.Protocol):
 
 class Bolt12Invoice:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -4365,7 +4365,7 @@ class Bolt12Invoice:
     @classmethod
     def from_str(cls, invoice_str: "str"):
         _UniffiConverterString.check_lower(invoice_str)
-        
+
         # Call the (fallible) function before creating any half-baked object instances.
         pointer = _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_constructor_bolt12invoice_from_str,
         _UniffiConverterString.lower(invoice_str))
@@ -4607,7 +4607,7 @@ class Bolt12PaymentProtocol(typing.Protocol):
 
 class Bolt12Payment:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -4632,7 +4632,7 @@ class Bolt12Payment:
 
     def blinded_paths_for_async_recipient(self, recipient_id: "bytes") -> "bytes":
         _UniffiConverterBytes.check_lower(recipient_id)
-        
+
         return _UniffiConverterBytes.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt12payment_blinded_paths_for_async_recipient,self._uniffi_clone_pointer(),
         _UniffiConverterBytes.lower(recipient_id))
@@ -4644,15 +4644,15 @@ class Bolt12Payment:
 
     def initiate_refund(self, amount_msat: "int",expiry_secs: "int",quantity: "typing.Optional[int]",payer_note: "typing.Optional[str]",route_parameters: "typing.Optional[RouteParametersConfig]") -> "Refund":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_secs)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(quantity)
-        
+
         _UniffiConverterOptionalString.check_lower(payer_note)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypeRefund.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt12payment_initiate_refund,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -4668,13 +4668,13 @@ class Bolt12Payment:
 
     def receive(self, amount_msat: "int",description: "str",expiry_secs: "typing.Optional[int]",quantity: "typing.Optional[int]") -> "Offer":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterString.check_lower(description)
-        
+
         _UniffiConverterOptionalUInt32.check_lower(expiry_secs)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(quantity)
-        
+
         return _UniffiConverterTypeOffer.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt12payment_receive,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -4698,9 +4698,9 @@ class Bolt12Payment:
 
     def receive_variable_amount(self, description: "str",expiry_secs: "typing.Optional[int]") -> "Offer":
         _UniffiConverterString.check_lower(description)
-        
+
         _UniffiConverterOptionalUInt32.check_lower(expiry_secs)
-        
+
         return _UniffiConverterTypeOffer.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt12payment_receive_variable_amount,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(description),
@@ -4713,7 +4713,7 @@ class Bolt12Payment:
 
     def request_refund_payment(self, refund: "Refund") -> "Bolt12Invoice":
         _UniffiConverterTypeRefund.check_lower(refund)
-        
+
         return _UniffiConverterTypeBolt12Invoice.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt12payment_request_refund_payment,self._uniffi_clone_pointer(),
         _UniffiConverterTypeRefund.lower(refund))
@@ -4725,13 +4725,13 @@ class Bolt12Payment:
 
     def send(self, offer: "Offer",quantity: "typing.Optional[int]",payer_note: "typing.Optional[str]",route_parameters: "typing.Optional[RouteParametersConfig]") -> "PaymentId":
         _UniffiConverterTypeOffer.check_lower(offer)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(quantity)
-        
+
         _UniffiConverterOptionalString.check_lower(payer_note)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypePaymentId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt12payment_send,self._uniffi_clone_pointer(),
         _UniffiConverterTypeOffer.lower(offer),
@@ -4746,15 +4746,15 @@ class Bolt12Payment:
 
     def send_using_amount(self, offer: "Offer",amount_msat: "int",quantity: "typing.Optional[int]",payer_note: "typing.Optional[str]",route_parameters: "typing.Optional[RouteParametersConfig]") -> "PaymentId":
         _UniffiConverterTypeOffer.check_lower(offer)
-        
+
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(quantity)
-        
+
         _UniffiConverterOptionalString.check_lower(payer_note)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypePaymentId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt12payment_send_using_amount,self._uniffi_clone_pointer(),
         _UniffiConverterTypeOffer.lower(offer),
@@ -4770,7 +4770,7 @@ class Bolt12Payment:
 
     def set_paths_to_static_invoice_server(self, paths: "bytes") -> None:
         _UniffiConverterBytes.check_lower(paths)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_bolt12payment_set_paths_to_static_invoice_server,self._uniffi_clone_pointer(),
         _UniffiConverterBytes.lower(paths))
 
@@ -4902,7 +4902,7 @@ class Builder:
     @classmethod
     def from_config(cls, config: "Config"):
         _UniffiConverterTypeConfig.check_lower(config)
-        
+
         # Call the (fallible) function before creating any half-baked object instances.
         pointer = _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_constructor_builder_from_config,
         _UniffiConverterTypeConfig.lower(config))
@@ -4930,13 +4930,13 @@ class Builder:
 
     def build_with_vss_store(self, vss_url: "str",store_id: "str",lnurl_auth_server_url: "str",fixed_headers: "dict[str, str]") -> "Node":
         _UniffiConverterString.check_lower(vss_url)
-        
+
         _UniffiConverterString.check_lower(store_id)
-        
+
         _UniffiConverterString.check_lower(lnurl_auth_server_url)
-        
+
         _UniffiConverterMapStringString.check_lower(fixed_headers)
-        
+
         return _UniffiConverterTypeNode.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(vss_url),
@@ -4951,11 +4951,11 @@ class Builder:
 
     def build_with_vss_store_and_fixed_headers(self, vss_url: "str",store_id: "str",fixed_headers: "dict[str, str]") -> "Node":
         _UniffiConverterString.check_lower(vss_url)
-        
+
         _UniffiConverterString.check_lower(store_id)
-        
+
         _UniffiConverterMapStringString.check_lower(fixed_headers)
-        
+
         return _UniffiConverterTypeNode.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_fixed_headers,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(vss_url),
@@ -4969,11 +4969,11 @@ class Builder:
 
     def build_with_vss_store_and_header_provider(self, vss_url: "str",store_id: "str",header_provider: "VssHeaderProvider") -> "Node":
         _UniffiConverterString.check_lower(vss_url)
-        
+
         _UniffiConverterString.check_lower(store_id)
-        
+
         _UniffiConverterTypeVssHeaderProvider.check_lower(header_provider)
-        
+
         return _UniffiConverterTypeNode.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_header_provider,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(vss_url),
@@ -4987,7 +4987,7 @@ class Builder:
 
     def set_accept_stale_channel_monitors(self, accept: "bool") -> None:
         _UniffiConverterBool.check_lower(accept)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors,self._uniffi_clone_pointer(),
         _UniffiConverterBool.lower(accept))
 
@@ -4998,7 +4998,7 @@ class Builder:
 
     def set_address_type(self, address_type: "AddressType") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_address_type,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type))
 
@@ -5009,7 +5009,7 @@ class Builder:
 
     def set_address_types_to_monitor(self, address_types_to_monitor: "typing.List[AddressType]") -> None:
         _UniffiConverterSequenceTypeAddressType.check_lower(address_types_to_monitor)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_address_types_to_monitor,self._uniffi_clone_pointer(),
         _UniffiConverterSequenceTypeAddressType.lower(address_types_to_monitor))
 
@@ -5020,7 +5020,7 @@ class Builder:
 
     def set_announcement_addresses(self, announcement_addresses: "typing.List[SocketAddress]") -> None:
         _UniffiConverterSequenceTypeSocketAddress.check_lower(announcement_addresses)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_set_announcement_addresses,self._uniffi_clone_pointer(),
         _UniffiConverterSequenceTypeSocketAddress.lower(announcement_addresses))
 
@@ -5031,7 +5031,7 @@ class Builder:
 
     def set_async_payments_role(self, role: "typing.Optional[AsyncPaymentsRole]") -> None:
         _UniffiConverterOptionalTypeAsyncPaymentsRole.check_lower(role)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_set_async_payments_role,self._uniffi_clone_pointer(),
         _UniffiConverterOptionalTypeAsyncPaymentsRole.lower(role))
 
@@ -5042,17 +5042,17 @@ class Builder:
 
     def set_chain_source_bitcoind_rest(self, rest_host: "str",rest_port: "int",rpc_host: "str",rpc_port: "int",rpc_user: "str",rpc_password: "str") -> None:
         _UniffiConverterString.check_lower(rest_host)
-        
+
         _UniffiConverterUInt16.check_lower(rest_port)
-        
+
         _UniffiConverterString.check_lower(rpc_host)
-        
+
         _UniffiConverterUInt16.check_lower(rpc_port)
-        
+
         _UniffiConverterString.check_lower(rpc_user)
-        
+
         _UniffiConverterString.check_lower(rpc_password)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_chain_source_bitcoind_rest,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(rest_host),
         _UniffiConverterUInt16.lower(rest_port),
@@ -5068,13 +5068,13 @@ class Builder:
 
     def set_chain_source_bitcoind_rpc(self, rpc_host: "str",rpc_port: "int",rpc_user: "str",rpc_password: "str") -> None:
         _UniffiConverterString.check_lower(rpc_host)
-        
+
         _UniffiConverterUInt16.check_lower(rpc_port)
-        
+
         _UniffiConverterString.check_lower(rpc_user)
-        
+
         _UniffiConverterString.check_lower(rpc_password)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_chain_source_bitcoind_rpc,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(rpc_host),
         _UniffiConverterUInt16.lower(rpc_port),
@@ -5088,9 +5088,9 @@ class Builder:
 
     def set_chain_source_electrum(self, server_url: "str",config: "typing.Optional[ElectrumSyncConfig]") -> None:
         _UniffiConverterString.check_lower(server_url)
-        
+
         _UniffiConverterOptionalTypeElectrumSyncConfig.check_lower(config)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_chain_source_electrum,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(server_url),
         _UniffiConverterOptionalTypeElectrumSyncConfig.lower(config))
@@ -5102,9 +5102,9 @@ class Builder:
 
     def set_chain_source_esplora(self, server_url: "str",config: "typing.Optional[EsploraSyncConfig]") -> None:
         _UniffiConverterString.check_lower(server_url)
-        
+
         _UniffiConverterOptionalTypeEsploraSyncConfig.check_lower(config)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_chain_source_esplora,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(server_url),
         _UniffiConverterOptionalTypeEsploraSyncConfig.lower(config))
@@ -5116,7 +5116,7 @@ class Builder:
 
     def set_channel_data_migration(self, migration: "ChannelDataMigration") -> None:
         _UniffiConverterTypeChannelDataMigration.check_lower(migration)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_channel_data_migration,self._uniffi_clone_pointer(),
         _UniffiConverterTypeChannelDataMigration.lower(migration))
 
@@ -5127,7 +5127,7 @@ class Builder:
 
     def set_custom_logger(self, log_writer: "LogWriter") -> None:
         _UniffiConverterTypeLogWriter.check_lower(log_writer)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_custom_logger,self._uniffi_clone_pointer(),
         _UniffiConverterTypeLogWriter.lower(log_writer))
 
@@ -5138,9 +5138,9 @@ class Builder:
 
     def set_entropy_bip39_mnemonic(self, mnemonic: "Mnemonic",passphrase: "typing.Optional[str]") -> None:
         _UniffiConverterTypeMnemonic.check_lower(mnemonic)
-        
+
         _UniffiConverterOptionalString.check_lower(passphrase)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_entropy_bip39_mnemonic,self._uniffi_clone_pointer(),
         _UniffiConverterTypeMnemonic.lower(mnemonic),
         _UniffiConverterOptionalString.lower(passphrase))
@@ -5152,7 +5152,7 @@ class Builder:
 
     def set_entropy_seed_bytes(self, seed_bytes: "typing.List[int]") -> None:
         _UniffiConverterSequenceUInt8.check_lower(seed_bytes)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_set_entropy_seed_bytes,self._uniffi_clone_pointer(),
         _UniffiConverterSequenceUInt8.lower(seed_bytes))
 
@@ -5163,7 +5163,7 @@ class Builder:
 
     def set_entropy_seed_path(self, seed_path: "str") -> None:
         _UniffiConverterString.check_lower(seed_path)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_entropy_seed_path,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(seed_path))
 
@@ -5174,9 +5174,9 @@ class Builder:
 
     def set_filesystem_logger(self, log_file_path: "typing.Optional[str]",max_log_level: "typing.Optional[LogLevel]") -> None:
         _UniffiConverterOptionalString.check_lower(log_file_path)
-        
+
         _UniffiConverterOptionalTypeLogLevel.check_lower(max_log_level)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_filesystem_logger,self._uniffi_clone_pointer(),
         _UniffiConverterOptionalString.lower(log_file_path),
         _UniffiConverterOptionalTypeLogLevel.lower(max_log_level))
@@ -5196,7 +5196,7 @@ class Builder:
 
     def set_gossip_source_rgs(self, rgs_server_url: "str") -> None:
         _UniffiConverterString.check_lower(rgs_server_url)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_gossip_source_rgs,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(rgs_server_url))
 
@@ -5207,11 +5207,11 @@ class Builder:
 
     def set_liquidity_source_lsps1(self, node_id: "PublicKey",address: "SocketAddress",token: "typing.Optional[str]") -> None:
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterTypeSocketAddress.check_lower(address)
-        
+
         _UniffiConverterOptionalString.check_lower(token)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_liquidity_source_lsps1,self._uniffi_clone_pointer(),
         _UniffiConverterTypePublicKey.lower(node_id),
         _UniffiConverterTypeSocketAddress.lower(address),
@@ -5224,11 +5224,11 @@ class Builder:
 
     def set_liquidity_source_lsps2(self, node_id: "PublicKey",address: "SocketAddress",token: "typing.Optional[str]") -> None:
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterTypeSocketAddress.check_lower(address)
-        
+
         _UniffiConverterOptionalString.check_lower(token)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_liquidity_source_lsps2,self._uniffi_clone_pointer(),
         _UniffiConverterTypePublicKey.lower(node_id),
         _UniffiConverterTypeSocketAddress.lower(address),
@@ -5241,7 +5241,7 @@ class Builder:
 
     def set_listening_addresses(self, listening_addresses: "typing.List[SocketAddress]") -> None:
         _UniffiConverterSequenceTypeSocketAddress.check_lower(listening_addresses)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_set_listening_addresses,self._uniffi_clone_pointer(),
         _UniffiConverterSequenceTypeSocketAddress.lower(listening_addresses))
 
@@ -5260,7 +5260,7 @@ class Builder:
 
     def set_network(self, network: "Network") -> None:
         _UniffiConverterTypeNetwork.check_lower(network)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_network,self._uniffi_clone_pointer(),
         _UniffiConverterTypeNetwork.lower(network))
 
@@ -5271,7 +5271,7 @@ class Builder:
 
     def set_node_alias(self, node_alias: "str") -> None:
         _UniffiConverterString.check_lower(node_alias)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_set_node_alias,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(node_alias))
 
@@ -5282,7 +5282,7 @@ class Builder:
 
     def set_pathfinding_scores_source(self, url: "str") -> None:
         _UniffiConverterString.check_lower(url)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(url))
 
@@ -5293,7 +5293,7 @@ class Builder:
 
     def set_scoring_decay_params(self, params: "ScoringDecayParameters") -> None:
         _UniffiConverterTypeScoringDecayParameters.check_lower(params)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_scoring_decay_params,self._uniffi_clone_pointer(),
         _UniffiConverterTypeScoringDecayParameters.lower(params))
 
@@ -5304,7 +5304,7 @@ class Builder:
 
     def set_scoring_fee_params(self, params: "ScoringFeeParameters") -> None:
         _UniffiConverterTypeScoringFeeParameters.check_lower(params)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_scoring_fee_params,self._uniffi_clone_pointer(),
         _UniffiConverterTypeScoringFeeParameters.lower(params))
 
@@ -5315,7 +5315,7 @@ class Builder:
 
     def set_storage_dir_path(self, storage_dir_path: "str") -> None:
         _UniffiConverterString.check_lower(storage_dir_path)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_builder_set_storage_dir_path,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(storage_dir_path))
 
@@ -5366,7 +5366,7 @@ class FeeRateProtocol(typing.Protocol):
 
 class FeeRate:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -5390,7 +5390,7 @@ class FeeRate:
     @classmethod
     def from_sat_per_kwu(cls, sat_kwu: "int"):
         _UniffiConverterUInt64.check_lower(sat_kwu)
-        
+
         # Call the (fallible) function before creating any half-baked object instances.
         pointer = _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_constructor_feerate_from_sat_per_kwu,
         _UniffiConverterUInt64.lower(sat_kwu))
@@ -5399,7 +5399,7 @@ class FeeRate:
     @classmethod
     def from_sat_per_vb_unchecked(cls, sat_vb: "int"):
         _UniffiConverterUInt64.check_lower(sat_vb)
-        
+
         # Call the (fallible) function before creating any half-baked object instances.
         pointer = _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_constructor_feerate_from_sat_per_vb_unchecked,
         _UniffiConverterUInt64.lower(sat_vb))
@@ -5472,7 +5472,7 @@ class LogWriter(typing.Protocol):
 
 class LogWriterImpl:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -5497,7 +5497,7 @@ class LogWriterImpl:
 
     def log(self, record: "LogRecord") -> None:
         _UniffiConverterTypeLogRecord.check_lower(record)
-        
+
         _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_logwriter_log,self._uniffi_clone_pointer(),
         _UniffiConverterTypeLogRecord.lower(record))
 
@@ -5554,7 +5554,7 @@ class _UniffiTraitImplLogWriter:
             method = uniffi_obj.log
             return method(*args)
 
-        
+
         write_return_value = lambda v: None
         _uniffi_trait_interface_call(
                 uniffi_call_status_ptr.contents,
@@ -5614,7 +5614,7 @@ class Lsps1LiquidityProtocol(typing.Protocol):
 
 class Lsps1Liquidity:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -5639,7 +5639,7 @@ class Lsps1Liquidity:
 
     def check_order_status(self, order_id: "Lsps1OrderId") -> "Lsps1OrderStatus":
         _UniffiConverterTypeLsps1OrderId.check_lower(order_id)
-        
+
         return _UniffiConverterTypeLsps1OrderStatus.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_lsps1liquidity_check_order_status,self._uniffi_clone_pointer(),
         _UniffiConverterTypeLsps1OrderId.lower(order_id))
@@ -5651,13 +5651,13 @@ class Lsps1Liquidity:
 
     def request_channel(self, lsp_balance_sat: "int",client_balance_sat: "int",channel_expiry_blocks: "int",announce_channel: "bool") -> "Lsps1OrderStatus":
         _UniffiConverterUInt64.check_lower(lsp_balance_sat)
-        
+
         _UniffiConverterUInt64.check_lower(client_balance_sat)
-        
+
         _UniffiConverterUInt32.check_lower(channel_expiry_blocks)
-        
+
         _UniffiConverterBool.check_lower(announce_channel)
-        
+
         return _UniffiConverterTypeLsps1OrderStatus.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_lsps1liquidity_request_channel,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(lsp_balance_sat),
@@ -5714,7 +5714,7 @@ class NetworkGraphProtocol(typing.Protocol):
 
 class NetworkGraph:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -5739,7 +5739,7 @@ class NetworkGraph:
 
     def channel(self, short_channel_id: "int") -> "typing.Optional[ChannelInfo]":
         _UniffiConverterUInt64.check_lower(short_channel_id)
-        
+
         return _UniffiConverterOptionalTypeChannelInfo.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_networkgraph_channel,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(short_channel_id))
@@ -5769,7 +5769,7 @@ class NetworkGraph:
 
     def node(self, node_id: "NodeId") -> "typing.Optional[NodeInfo]":
         _UniffiConverterTypeNodeId.check_lower(node_id)
-        
+
         return _UniffiConverterOptionalTypeNodeInfo.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_networkgraph_node,self._uniffi_clone_pointer(),
         _UniffiConverterTypeNodeId.lower(node_id))
@@ -5921,7 +5921,7 @@ class NodeProtocol(typing.Protocol):
 
 class Node:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -5946,9 +5946,9 @@ class Node:
 
     def add_address_type_to_monitor(self, address_type: "AddressType",seed_bytes: "typing.List[int]") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterSequenceUInt8.check_lower(seed_bytes)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_add_address_type_to_monitor,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
         _UniffiConverterSequenceUInt8.lower(seed_bytes))
@@ -5960,11 +5960,11 @@ class Node:
 
     def add_address_type_to_monitor_with_mnemonic(self, address_type: "AddressType",mnemonic: "Mnemonic",passphrase: "typing.Optional[str]") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterTypeMnemonic.check_lower(mnemonic)
-        
+
         _UniffiConverterOptionalString.check_lower(passphrase)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_add_address_type_to_monitor_with_mnemonic,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
         _UniffiConverterTypeMnemonic.lower(mnemonic),
@@ -6021,9 +6021,9 @@ class Node:
 
     def close_channel(self, user_channel_id: "UserChannelId",counterparty_node_id: "PublicKey") -> None:
         _UniffiConverterTypeUserChannelId.check_lower(user_channel_id)
-        
+
         _UniffiConverterTypePublicKey.check_lower(counterparty_node_id)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_close_channel,self._uniffi_clone_pointer(),
         _UniffiConverterTypeUserChannelId.lower(user_channel_id),
         _UniffiConverterTypePublicKey.lower(counterparty_node_id))
@@ -6044,11 +6044,11 @@ class Node:
 
     def connect(self, node_id: "PublicKey",address: "SocketAddress",persist: "bool") -> None:
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterTypeSocketAddress.check_lower(address)
-        
+
         _UniffiConverterBool.check_lower(persist)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_connect,self._uniffi_clone_pointer(),
         _UniffiConverterTypePublicKey.lower(node_id),
         _UniffiConverterTypeSocketAddress.lower(address),
@@ -6070,7 +6070,7 @@ class Node:
 
     def disconnect(self, node_id: "PublicKey") -> None:
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_disconnect,self._uniffi_clone_pointer(),
         _UniffiConverterTypePublicKey.lower(node_id))
 
@@ -6113,11 +6113,11 @@ class Node:
 
     def force_close_channel(self, user_channel_id: "UserChannelId",counterparty_node_id: "PublicKey",reason: "typing.Optional[str]") -> None:
         _UniffiConverterTypeUserChannelId.check_lower(user_channel_id)
-        
+
         _UniffiConverterTypePublicKey.check_lower(counterparty_node_id)
-        
+
         _UniffiConverterOptionalString.check_lower(reason)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_force_close_channel,self._uniffi_clone_pointer(),
         _UniffiConverterTypeUserChannelId.lower(user_channel_id),
         _UniffiConverterTypePublicKey.lower(counterparty_node_id),
@@ -6130,7 +6130,7 @@ class Node:
 
     def get_address_balance(self, address_str: "str") -> "int":
         _UniffiConverterString.check_lower(address_str)
-        
+
         return _UniffiConverterUInt64.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_get_address_balance,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(address_str))
@@ -6142,7 +6142,7 @@ class Node:
 
     def get_balance_for_address_type(self, address_type: "AddressType") -> "AddressTypeBalance":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         return _UniffiConverterTypeAddressTypeBalance.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_get_balance_for_address_type,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type))
@@ -6169,7 +6169,7 @@ class Node:
 
     def get_transaction_details(self, txid: "Txid") -> "typing.Optional[TransactionDetails]":
         _UniffiConverterTypeTxid.check_lower(txid)
-        
+
         return _UniffiConverterOptionalTypeTransactionDetails.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_get_transaction_details,self._uniffi_clone_pointer(),
         _UniffiConverterTypeTxid.lower(txid))
@@ -6271,14 +6271,14 @@ class Node:
     async def next_event_async(self, ) -> "Event":
         return await _uniffi_rust_call_async(
             _UniffiLib.uniffi_ldk_node_fn_method_node_next_event_async(
-                self._uniffi_clone_pointer(), 
+                self._uniffi_clone_pointer(),
             ),
             _UniffiLib.ffi_ldk_node_rust_future_poll_rust_buffer,
             _UniffiLib.ffi_ldk_node_rust_future_complete_rust_buffer,
             _UniffiLib.ffi_ldk_node_rust_future_free_rust_buffer,
             # lift function
             _UniffiConverterTypeEvent.lift,
-            
+
     # Error FFI converter
 
     None,
@@ -6317,15 +6317,15 @@ class Node:
 
     def open_announced_channel(self, node_id: "PublicKey",address: "SocketAddress",channel_amount_sats: "int",push_to_counterparty_msat: "typing.Optional[int]",channel_config: "typing.Optional[ChannelConfig]") -> "UserChannelId":
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterTypeSocketAddress.check_lower(address)
-        
+
         _UniffiConverterUInt64.check_lower(channel_amount_sats)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(push_to_counterparty_msat)
-        
+
         _UniffiConverterOptionalTypeChannelConfig.check_lower(channel_config)
-        
+
         return _UniffiConverterTypeUserChannelId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_open_announced_channel,self._uniffi_clone_pointer(),
         _UniffiConverterTypePublicKey.lower(node_id),
@@ -6341,15 +6341,15 @@ class Node:
 
     def open_channel(self, node_id: "PublicKey",address: "SocketAddress",channel_amount_sats: "int",push_to_counterparty_msat: "typing.Optional[int]",channel_config: "typing.Optional[ChannelConfig]") -> "UserChannelId":
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterTypeSocketAddress.check_lower(address)
-        
+
         _UniffiConverterUInt64.check_lower(channel_amount_sats)
-        
+
         _UniffiConverterOptionalUInt64.check_lower(push_to_counterparty_msat)
-        
+
         _UniffiConverterOptionalTypeChannelConfig.check_lower(channel_config)
-        
+
         return _UniffiConverterTypeUserChannelId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_open_channel,self._uniffi_clone_pointer(),
         _UniffiConverterTypePublicKey.lower(node_id),
@@ -6365,7 +6365,7 @@ class Node:
 
     def payment(self, payment_id: "PaymentId") -> "typing.Optional[PaymentDetails]":
         _UniffiConverterTypePaymentId.check_lower(payment_id)
-        
+
         return _UniffiConverterOptionalTypePaymentDetails.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_payment,self._uniffi_clone_pointer(),
         _UniffiConverterTypePaymentId.lower(payment_id))
@@ -6377,7 +6377,7 @@ class Node:
 
     def remove_address_type_from_monitor(self, address_type: "AddressType") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_remove_address_type_from_monitor,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type))
 
@@ -6388,7 +6388,7 @@ class Node:
 
     def remove_payment(self, payment_id: "PaymentId") -> None:
         _UniffiConverterTypePaymentId.check_lower(payment_id)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_remove_payment,self._uniffi_clone_pointer(),
         _UniffiConverterTypePaymentId.lower(payment_id))
 
@@ -6399,9 +6399,9 @@ class Node:
 
     def set_primary_address_type(self, address_type: "AddressType",seed_bytes: "typing.List[int]") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterSequenceUInt8.check_lower(seed_bytes)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_set_primary_address_type,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
         _UniffiConverterSequenceUInt8.lower(seed_bytes))
@@ -6413,11 +6413,11 @@ class Node:
 
     def set_primary_address_type_with_mnemonic(self, address_type: "AddressType",mnemonic: "Mnemonic",passphrase: "typing.Optional[str]") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterTypeMnemonic.check_lower(mnemonic)
-        
+
         _UniffiConverterOptionalString.check_lower(passphrase)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_set_primary_address_type_with_mnemonic,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
         _UniffiConverterTypeMnemonic.lower(mnemonic),
@@ -6430,7 +6430,7 @@ class Node:
 
     def sign_message(self, msg: "typing.List[int]") -> "str":
         _UniffiConverterSequenceUInt8.check_lower(msg)
-        
+
         return _UniffiConverterString.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_sign_message,self._uniffi_clone_pointer(),
         _UniffiConverterSequenceUInt8.lower(msg))
@@ -6442,11 +6442,11 @@ class Node:
 
     def splice_in(self, user_channel_id: "UserChannelId",counterparty_node_id: "PublicKey",splice_amount_sats: "int") -> None:
         _UniffiConverterTypeUserChannelId.check_lower(user_channel_id)
-        
+
         _UniffiConverterTypePublicKey.check_lower(counterparty_node_id)
-        
+
         _UniffiConverterUInt64.check_lower(splice_amount_sats)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_splice_in,self._uniffi_clone_pointer(),
         _UniffiConverterTypeUserChannelId.lower(user_channel_id),
         _UniffiConverterTypePublicKey.lower(counterparty_node_id),
@@ -6459,13 +6459,13 @@ class Node:
 
     def splice_out(self, user_channel_id: "UserChannelId",counterparty_node_id: "PublicKey",address: "Address",splice_amount_sats: "int") -> None:
         _UniffiConverterTypeUserChannelId.check_lower(user_channel_id)
-        
+
         _UniffiConverterTypePublicKey.check_lower(counterparty_node_id)
-        
+
         _UniffiConverterTypeAddress.check_lower(address)
-        
+
         _UniffiConverterUInt64.check_lower(splice_amount_sats)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_splice_out,self._uniffi_clone_pointer(),
         _UniffiConverterTypeUserChannelId.lower(user_channel_id),
         _UniffiConverterTypePublicKey.lower(counterparty_node_id),
@@ -6530,11 +6530,11 @@ class Node:
 
     def update_channel_config(self, user_channel_id: "UserChannelId",counterparty_node_id: "PublicKey",channel_config: "ChannelConfig") -> None:
         _UniffiConverterTypeUserChannelId.check_lower(user_channel_id)
-        
+
         _UniffiConverterTypePublicKey.check_lower(counterparty_node_id)
-        
+
         _UniffiConverterTypeChannelConfig.check_lower(channel_config)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_update_channel_config,self._uniffi_clone_pointer(),
         _UniffiConverterTypeUserChannelId.lower(user_channel_id),
         _UniffiConverterTypePublicKey.lower(counterparty_node_id),
@@ -6547,7 +6547,7 @@ class Node:
 
     def update_sync_intervals(self, intervals: "RuntimeSyncIntervals") -> None:
         _UniffiConverterTypeRuntimeSyncIntervals.check_lower(intervals)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_node_update_sync_intervals,self._uniffi_clone_pointer(),
         _UniffiConverterTypeRuntimeSyncIntervals.lower(intervals))
 
@@ -6558,11 +6558,11 @@ class Node:
 
     def verify_signature(self, msg: "typing.List[int]",sig: "str",pkey: "PublicKey") -> "bool":
         _UniffiConverterSequenceUInt8.check_lower(msg)
-        
+
         _UniffiConverterString.check_lower(sig)
-        
+
         _UniffiConverterTypePublicKey.check_lower(pkey)
-        
+
         return _UniffiConverterBool.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_node_verify_signature,self._uniffi_clone_pointer(),
         _UniffiConverterSequenceUInt8.lower(msg),
@@ -6643,7 +6643,7 @@ class OfferProtocol(typing.Protocol):
 
 class Offer:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -6667,7 +6667,7 @@ class Offer:
     @classmethod
     def from_str(cls, offer_str: "str"):
         _UniffiConverterString.check_lower(offer_str)
-        
+
         # Call the (fallible) function before creating any half-baked object instances.
         pointer = _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_constructor_offer_from_str,
         _UniffiConverterString.lower(offer_str))
@@ -6731,7 +6731,7 @@ class Offer:
 
     def is_valid_quantity(self, quantity: "int") -> "bool":
         _UniffiConverterUInt64.check_lower(quantity)
-        
+
         return _UniffiConverterBool.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_offer_is_valid_quantity,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(quantity))
@@ -6779,7 +6779,7 @@ class Offer:
 
     def supports_chain(self, chain: "Network") -> "bool":
         _UniffiConverterTypeNetwork.check_lower(chain)
-        
+
         return _UniffiConverterBool.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_offer_supports_chain,self._uniffi_clone_pointer(),
         _UniffiConverterTypeNetwork.lower(chain))
@@ -6894,7 +6894,7 @@ class OnchainPaymentProtocol(typing.Protocol):
 
 class OnchainPayment:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -6919,11 +6919,11 @@ class OnchainPayment:
 
     def accelerate_by_cpfp(self, txid: "Txid",fee_rate: "typing.Optional[FeeRate]",destination_address: "typing.Optional[Address]") -> "Txid":
         _UniffiConverterTypeTxid.check_lower(txid)
-        
+
         _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
-        
+
         _UniffiConverterOptionalTypeAddress.check_lower(destination_address)
-        
+
         return _UniffiConverterTypeTxid.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_accelerate_by_cpfp,self._uniffi_clone_pointer(),
         _UniffiConverterTypeTxid.lower(txid),
@@ -6937,11 +6937,11 @@ class OnchainPayment:
 
     def address_info_for_type_at_index(self, address_type: "AddressType",keychain: "KeychainKind",index: "int") -> "AddressInfo":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterTypeKeychainKind.check_lower(keychain)
-        
+
         _UniffiConverterUInt32.check_lower(index)
-        
+
         return _UniffiConverterTypeAddressInfo.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_address_info_for_type_at_index,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
@@ -6955,13 +6955,13 @@ class OnchainPayment:
 
     def address_infos_for_type(self, address_type: "AddressType",keychain: "KeychainKind",start_index: "int",count: "int") -> "typing.List[AddressInfo]":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterTypeKeychainKind.check_lower(keychain)
-        
+
         _UniffiConverterUInt32.check_lower(start_index)
-        
+
         _UniffiConverterUInt32.check_lower(count)
-        
+
         return _UniffiConverterSequenceTypeAddressInfo.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
@@ -6976,9 +6976,9 @@ class OnchainPayment:
 
     def bump_fee_by_rbf(self, txid: "Txid",fee_rate: "FeeRate") -> "Txid":
         _UniffiConverterTypeTxid.check_lower(txid)
-        
+
         _UniffiConverterTypeFeeRate.check_lower(fee_rate)
-        
+
         return _UniffiConverterTypeTxid.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf,self._uniffi_clone_pointer(),
         _UniffiConverterTypeTxid.lower(txid),
@@ -6991,9 +6991,9 @@ class OnchainPayment:
 
     def calculate_cpfp_fee_rate(self, parent_txid: "Txid",urgent: "bool") -> "FeeRate":
         _UniffiConverterTypeTxid.check_lower(parent_txid)
-        
+
         _UniffiConverterBool.check_lower(urgent)
-        
+
         return _UniffiConverterTypeFeeRate.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_cpfp_fee_rate,self._uniffi_clone_pointer(),
         _UniffiConverterTypeTxid.lower(parent_txid),
@@ -7006,11 +7006,11 @@ class OnchainPayment:
 
     def calculate_send_all_fee(self, address: "Address",retain_reserves: "bool",fee_rate: "typing.Optional[FeeRate]") -> "int":
         _UniffiConverterTypeAddress.check_lower(address)
-        
+
         _UniffiConverterBool.check_lower(retain_reserves)
-        
+
         _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
-        
+
         return _UniffiConverterUInt64.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_send_all_fee,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddress.lower(address),
@@ -7024,13 +7024,13 @@ class OnchainPayment:
 
     def calculate_total_fee(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]") -> "int":
         _UniffiConverterTypeAddress.check_lower(address)
-        
+
         _UniffiConverterUInt64.check_lower(amount_sats)
-        
+
         _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
-        
+
         _UniffiConverterOptionalSequenceTypeSpendableUtxo.check_lower(utxos_to_spend)
-        
+
         return _UniffiConverterUInt64.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_total_fee,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddress.lower(address),
@@ -7078,7 +7078,7 @@ class OnchainPayment:
 
     def new_address_for_type(self, address_type: "AddressType") -> "Address":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         return _UniffiConverterTypeAddress.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_for_type,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type))
@@ -7114,7 +7114,7 @@ class OnchainPayment:
 
     def new_address_info_for_type(self, address_type: "AddressType") -> "AddressInfo":
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         return _UniffiConverterTypeAddressInfo.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type))
@@ -7126,9 +7126,9 @@ class OnchainPayment:
 
     def reveal_receive_addresses_to(self, address_type: "AddressType",index: "int") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
-        
+
         _UniffiConverterUInt32.check_lower(index)
-        
+
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddressType.lower(address_type),
         _UniffiConverterUInt32.lower(index))
@@ -7157,13 +7157,13 @@ class OnchainPayment:
 
     def select_utxos_with_algorithm(self, target_amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",algorithm: "CoinSelectionAlgorithm",utxos: "typing.Optional[typing.List[SpendableUtxo]]") -> "typing.List[SpendableUtxo]":
         _UniffiConverterUInt64.check_lower(target_amount_sats)
-        
+
         _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
-        
+
         _UniffiConverterTypeCoinSelectionAlgorithm.check_lower(algorithm)
-        
+
         _UniffiConverterOptionalSequenceTypeSpendableUtxo.check_lower(utxos)
-        
+
         return _UniffiConverterSequenceTypeSpendableUtxo.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_select_utxos_with_algorithm,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(target_amount_sats),
@@ -7178,11 +7178,11 @@ class OnchainPayment:
 
     def send_all_to_address(self, address: "Address",retain_reserve: "bool",fee_rate: "typing.Optional[FeeRate]") -> "Txid":
         _UniffiConverterTypeAddress.check_lower(address)
-        
+
         _UniffiConverterBool.check_lower(retain_reserve)
-        
+
         _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
-        
+
         return _UniffiConverterTypeTxid.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddress.lower(address),
@@ -7196,13 +7196,13 @@ class OnchainPayment:
 
     def send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]") -> "Txid":
         _UniffiConverterTypeAddress.check_lower(address)
-        
+
         _UniffiConverterUInt64.check_lower(amount_sats)
-        
+
         _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
-        
+
         _UniffiConverterOptionalSequenceTypeSpendableUtxo.check_lower(utxos_to_spend)
-        
+
         return _UniffiConverterTypeTxid.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddress.lower(address),
@@ -7271,7 +7271,7 @@ class RefundProtocol(typing.Protocol):
 
 class Refund:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -7295,7 +7295,7 @@ class Refund:
     @classmethod
     def from_str(cls, refund_str: "str"):
         _UniffiConverterString.check_lower(refund_str)
-        
+
         # Call the (fallible) function before creating any half-baked object instances.
         pointer = _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_constructor_refund_from_str,
         _UniffiConverterString.lower(refund_str))
@@ -7470,7 +7470,7 @@ class SpontaneousPaymentProtocol(typing.Protocol):
 
 class SpontaneousPayment:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -7495,11 +7495,11 @@ class SpontaneousPayment:
 
     def send(self, amount_msat: "int",node_id: "PublicKey",route_parameters: "typing.Optional[RouteParametersConfig]") -> "PaymentId":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypePaymentId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -7513,9 +7513,9 @@ class SpontaneousPayment:
 
     def send_probes(self, amount_msat: "int",node_id: "PublicKey") -> "typing.List[ProbeHandle]":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         return _UniffiConverterSequenceTypeProbeHandle.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_probes,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -7528,13 +7528,13 @@ class SpontaneousPayment:
 
     def send_with_custom_tlvs(self, amount_msat: "int",node_id: "PublicKey",route_parameters: "typing.Optional[RouteParametersConfig]",custom_tlvs: "typing.List[CustomTlvRecord]") -> "PaymentId":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         _UniffiConverterSequenceTypeCustomTlvRecord.check_lower(custom_tlvs)
-        
+
         return _UniffiConverterTypePaymentId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_with_custom_tlvs,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -7549,13 +7549,13 @@ class SpontaneousPayment:
 
     def send_with_preimage(self, amount_msat: "int",node_id: "PublicKey",preimage: "PaymentPreimage",route_parameters: "typing.Optional[RouteParametersConfig]") -> "PaymentId":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterTypePaymentPreimage.check_lower(preimage)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypePaymentId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_with_preimage,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -7570,15 +7570,15 @@ class SpontaneousPayment:
 
     def send_with_preimage_and_custom_tlvs(self, amount_msat: "int",node_id: "PublicKey",custom_tlvs: "typing.List[CustomTlvRecord]",preimage: "PaymentPreimage",route_parameters: "typing.Optional[RouteParametersConfig]") -> "PaymentId":
         _UniffiConverterUInt64.check_lower(amount_msat)
-        
+
         _UniffiConverterTypePublicKey.check_lower(node_id)
-        
+
         _UniffiConverterSequenceTypeCustomTlvRecord.check_lower(custom_tlvs)
-        
+
         _UniffiConverterTypePaymentPreimage.check_lower(preimage)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypePaymentId.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_spontaneouspayment_send_with_preimage_and_custom_tlvs,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_msat),
@@ -7632,7 +7632,7 @@ class UnifiedQrPaymentProtocol(typing.Protocol):
 
 class UnifiedQrPayment:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -7657,11 +7657,11 @@ class UnifiedQrPayment:
 
     def receive(self, amount_sats: "int",message: "str",expiry_sec: "int") -> "str":
         _UniffiConverterUInt64.check_lower(amount_sats)
-        
+
         _UniffiConverterString.check_lower(message)
-        
+
         _UniffiConverterUInt32.check_lower(expiry_sec)
-        
+
         return _UniffiConverterString.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_unifiedqrpayment_receive,self._uniffi_clone_pointer(),
         _UniffiConverterUInt64.lower(amount_sats),
@@ -7675,9 +7675,9 @@ class UnifiedQrPayment:
 
     def send(self, uri_str: "str",route_parameters: "typing.Optional[RouteParametersConfig]") -> "QrPaymentResult":
         _UniffiConverterString.check_lower(uri_str)
-        
+
         _UniffiConverterOptionalTypeRouteParametersConfig.check_lower(route_parameters)
-        
+
         return _UniffiConverterTypeQrPaymentResult.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_unifiedqrpayment_send,self._uniffi_clone_pointer(),
         _UniffiConverterString.lower(uri_str),
@@ -7726,7 +7726,7 @@ class VssHeaderProviderProtocol(typing.Protocol):
 
 class VssHeaderProvider:
     _pointer: ctypes.c_void_p
-    
+
     def __init__(self, *args, **kwargs):
         raise ValueError("This class has no default constructor")
 
@@ -7750,10 +7750,10 @@ class VssHeaderProvider:
 
     async def get_headers(self, request: "typing.List[int]") -> "dict[str, str]":
         _UniffiConverterSequenceUInt8.check_lower(request)
-        
+
         return await _uniffi_rust_call_async(
             _UniffiLib.uniffi_ldk_node_fn_method_vssheaderprovider_get_headers(
-                self._uniffi_clone_pointer(), 
+                self._uniffi_clone_pointer(),
         _UniffiConverterSequenceUInt8.lower(request)
             ),
             _UniffiLib.ffi_ldk_node_rust_future_poll_rust_buffer,
@@ -7761,7 +7761,7 @@ class VssHeaderProvider:
             _UniffiLib.ffi_ldk_node_rust_future_free_rust_buffer,
             # lift function
             _UniffiConverterMapStringString.lift,
-            
+
     # Error FFI converter
 _UniffiConverterTypeVssHeaderProviderError,
 
@@ -10171,13 +10171,13 @@ class _UniffiConverterTypeTxOutput(_UniffiConverterRustBuffer):
 
 class AddressType(enum.Enum):
     LEGACY = 0
-    
+
     NESTED_SEGWIT = 1
-    
+
     NATIVE_SEGWIT = 2
-    
+
     TAPROOT = 3
-    
+
 
 
 class _UniffiConverterTypeAddressType(_UniffiConverterRustBuffer):
@@ -10225,9 +10225,9 @@ class _UniffiConverterTypeAddressType(_UniffiConverterRustBuffer):
 
 class AsyncPaymentsRole(enum.Enum):
     CLIENT = 0
-    
+
     SERVER = 1
-    
+
 
 
 class _UniffiConverterTypeAsyncPaymentsRole(_UniffiConverterRustBuffer):
@@ -10263,13 +10263,13 @@ class _UniffiConverterTypeAsyncPaymentsRole(_UniffiConverterRustBuffer):
 
 class BalanceSource(enum.Enum):
     HOLDER_FORCE_CLOSED = 0
-    
+
     COUNTERPARTY_FORCE_CLOSED = 1
-    
+
     COOP_CLOSE = 2
-    
+
     HTLC = 3
-    
+
 
 
 class _UniffiConverterTypeBalanceSource(_UniffiConverterRustBuffer):
@@ -10335,7 +10335,7 @@ class Bolt11InvoiceDescription:
             if self.hash != other.hash:
                 return False
             return True
-    
+
     class DIRECT:
         description: "str"
 
@@ -10351,8 +10351,8 @@ class Bolt11InvoiceDescription:
             if self.description != other.description:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -10360,7 +10360,7 @@ class Bolt11InvoiceDescription:
         return isinstance(self, Bolt11InvoiceDescription.HASH)
     def is_direct(self) -> bool:
         return isinstance(self, Bolt11InvoiceDescription.DIRECT)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -10681,7 +10681,7 @@ class ClosureReason:
             if self.peer_msg != other.peer_msg:
                 return False
             return True
-    
+
     class HOLDER_FORCE_CLOSED:
         broadcasted_latest_txn: "typing.Optional[bool]"
         message: "str"
@@ -10701,7 +10701,7 @@ class ClosureReason:
             if self.message != other.message:
                 return False
             return True
-    
+
     class LEGACY_COOPERATIVE_CLOSURE:
 
         def __init__(self,):
@@ -10714,7 +10714,7 @@ class ClosureReason:
             if not other.is_legacy_cooperative_closure():
                 return False
             return True
-    
+
     class COUNTERPARTY_INITIATED_COOPERATIVE_CLOSURE:
 
         def __init__(self,):
@@ -10727,7 +10727,7 @@ class ClosureReason:
             if not other.is_counterparty_initiated_cooperative_closure():
                 return False
             return True
-    
+
     class LOCALLY_INITIATED_COOPERATIVE_CLOSURE:
 
         def __init__(self,):
@@ -10740,7 +10740,7 @@ class ClosureReason:
             if not other.is_locally_initiated_cooperative_closure():
                 return False
             return True
-    
+
     class COMMITMENT_TX_CONFIRMED:
 
         def __init__(self,):
@@ -10753,7 +10753,7 @@ class ClosureReason:
             if not other.is_commitment_tx_confirmed():
                 return False
             return True
-    
+
     class FUNDING_TIMED_OUT:
 
         def __init__(self,):
@@ -10766,7 +10766,7 @@ class ClosureReason:
             if not other.is_funding_timed_out():
                 return False
             return True
-    
+
     class PROCESSING_ERROR:
         err: "str"
 
@@ -10782,7 +10782,7 @@ class ClosureReason:
             if self.err != other.err:
                 return False
             return True
-    
+
     class DISCONNECTED_PEER:
 
         def __init__(self,):
@@ -10795,7 +10795,7 @@ class ClosureReason:
             if not other.is_disconnected_peer():
                 return False
             return True
-    
+
     class OUTDATED_CHANNEL_MANAGER:
 
         def __init__(self,):
@@ -10808,7 +10808,7 @@ class ClosureReason:
             if not other.is_outdated_channel_manager():
                 return False
             return True
-    
+
     class COUNTERPARTY_COOP_CLOSED_UNFUNDED_CHANNEL:
 
         def __init__(self,):
@@ -10821,7 +10821,7 @@ class ClosureReason:
             if not other.is_counterparty_coop_closed_unfunded_channel():
                 return False
             return True
-    
+
     class LOCALLY_COOP_CLOSED_UNFUNDED_CHANNEL:
 
         def __init__(self,):
@@ -10834,7 +10834,7 @@ class ClosureReason:
             if not other.is_locally_coop_closed_unfunded_channel():
                 return False
             return True
-    
+
     class FUNDING_BATCH_CLOSURE:
 
         def __init__(self,):
@@ -10847,7 +10847,7 @@ class ClosureReason:
             if not other.is_funding_batch_closure():
                 return False
             return True
-    
+
     class HTL_CS_TIMED_OUT:
         payment_hash: "typing.Optional[PaymentHash]"
 
@@ -10863,7 +10863,7 @@ class ClosureReason:
             if self.payment_hash != other.payment_hash:
                 return False
             return True
-    
+
     class PEER_FEERATE_TOO_LOW:
         peer_feerate_sat_per_kw: "int"
         required_feerate_sat_per_kw: "int"
@@ -10883,8 +10883,8 @@ class ClosureReason:
             if self.required_feerate_sat_per_kw != other.required_feerate_sat_per_kw:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -10918,7 +10918,7 @@ class ClosureReason:
         return isinstance(self, ClosureReason.HTL_CS_TIMED_OUT)
     def is_peer_feerate_too_low(self) -> bool:
         return isinstance(self, ClosureReason.PEER_FEERATE_TOO_LOW)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -11089,13 +11089,13 @@ class _UniffiConverterTypeClosureReason(_UniffiConverterRustBuffer):
 
 class CoinSelectionAlgorithm(enum.Enum):
     BRANCH_AND_BOUND = 0
-    
+
     LARGEST_FIRST = 1
-    
+
     OLDEST_FIRST = 2
-    
+
     SINGLE_RANDOM_DRAW = 3
-    
+
 
 
 class _UniffiConverterTypeCoinSelectionAlgorithm(_UniffiConverterRustBuffer):
@@ -11169,7 +11169,7 @@ class ConfirmationStatus:
             if self.timestamp != other.timestamp:
                 return False
             return True
-    
+
     class UNCONFIRMED:
 
         def __init__(self,):
@@ -11182,8 +11182,8 @@ class ConfirmationStatus:
             if not other.is_unconfirmed():
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -11191,7 +11191,7 @@ class ConfirmationStatus:
         return isinstance(self, ConfirmationStatus.CONFIRMED)
     def is_unconfirmed(self) -> bool:
         return isinstance(self, ConfirmationStatus.UNCONFIRMED)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -11246,15 +11246,15 @@ class _UniffiConverterTypeConfirmationStatus(_UniffiConverterRustBuffer):
 
 class Currency(enum.Enum):
     BITCOIN = 0
-    
+
     BITCOIN_TESTNET = 1
-    
+
     REGTEST = 2
-    
+
     SIMNET = 3
-    
+
     SIGNET = 4
-    
+
 
 
 class _UniffiConverterTypeCurrency(_UniffiConverterRustBuffer):
@@ -11338,7 +11338,7 @@ class Event:
             if self.fee_paid_msat != other.fee_paid_msat:
                 return False
             return True
-    
+
     class PAYMENT_FAILED:
         payment_id: "typing.Optional[PaymentId]"
         payment_hash: "typing.Optional[PaymentHash]"
@@ -11362,7 +11362,7 @@ class Event:
             if self.reason != other.reason:
                 return False
             return True
-    
+
     class PAYMENT_RECEIVED:
         payment_id: "typing.Optional[PaymentId]"
         payment_hash: "PaymentHash"
@@ -11390,7 +11390,7 @@ class Event:
             if self.custom_records != other.custom_records:
                 return False
             return True
-    
+
     class PAYMENT_CLAIMABLE:
         payment_id: "PaymentId"
         payment_hash: "PaymentHash"
@@ -11422,7 +11422,7 @@ class Event:
             if self.custom_records != other.custom_records:
                 return False
             return True
-    
+
     class PAYMENT_FORWARDED:
         prev_channel_id: "ChannelId"
         next_channel_id: "ChannelId"
@@ -11474,7 +11474,7 @@ class Event:
             if self.outbound_amount_forwarded_msat != other.outbound_amount_forwarded_msat:
                 return False
             return True
-    
+
     class PROBE_SUCCESSFUL:
         payment_id: "PaymentId"
         payment_hash: "PaymentHash"
@@ -11498,7 +11498,7 @@ class Event:
             if self.route_fee_msat != other.route_fee_msat:
                 return False
             return True
-    
+
     class PROBE_FAILED:
         payment_id: "PaymentId"
         payment_hash: "PaymentHash"
@@ -11526,7 +11526,7 @@ class Event:
             if self.route_fee_msat != other.route_fee_msat:
                 return False
             return True
-    
+
     class CHANNEL_PENDING:
         channel_id: "ChannelId"
         user_channel_id: "UserChannelId"
@@ -11558,7 +11558,7 @@ class Event:
             if self.funding_txo != other.funding_txo:
                 return False
             return True
-    
+
     class CHANNEL_READY:
         channel_id: "ChannelId"
         user_channel_id: "UserChannelId"
@@ -11586,7 +11586,7 @@ class Event:
             if self.funding_txo != other.funding_txo:
                 return False
             return True
-    
+
     class CHANNEL_CLOSED:
         channel_id: "ChannelId"
         user_channel_id: "UserChannelId"
@@ -11614,7 +11614,7 @@ class Event:
             if self.reason != other.reason:
                 return False
             return True
-    
+
     class SPLICE_PENDING:
         channel_id: "ChannelId"
         user_channel_id: "UserChannelId"
@@ -11642,7 +11642,7 @@ class Event:
             if self.new_funding_txo != other.new_funding_txo:
                 return False
             return True
-    
+
     class SPLICE_FAILED:
         channel_id: "ChannelId"
         user_channel_id: "UserChannelId"
@@ -11670,7 +11670,7 @@ class Event:
             if self.abandoned_funding_txo != other.abandoned_funding_txo:
                 return False
             return True
-    
+
     class ONCHAIN_TRANSACTION_CONFIRMED:
         txid: "Txid"
         block_hash: "BlockHash"
@@ -11702,7 +11702,7 @@ class Event:
             if self.details != other.details:
                 return False
             return True
-    
+
     class ONCHAIN_TRANSACTION_RECEIVED:
         txid: "Txid"
         details: "TransactionDetails"
@@ -11722,7 +11722,7 @@ class Event:
             if self.details != other.details:
                 return False
             return True
-    
+
     class ONCHAIN_TRANSACTION_REPLACED:
         txid: "Txid"
         conflicts: "typing.List[Txid]"
@@ -11742,7 +11742,7 @@ class Event:
             if self.conflicts != other.conflicts:
                 return False
             return True
-    
+
     class ONCHAIN_TRANSACTION_REORGED:
         txid: "Txid"
 
@@ -11758,7 +11758,7 @@ class Event:
             if self.txid != other.txid:
                 return False
             return True
-    
+
     class ONCHAIN_TRANSACTION_EVICTED:
         txid: "Txid"
 
@@ -11774,7 +11774,7 @@ class Event:
             if self.txid != other.txid:
                 return False
             return True
-    
+
     class SYNC_PROGRESS:
         sync_type: "SyncType"
         progress_percent: "int"
@@ -11802,7 +11802,7 @@ class Event:
             if self.target_block_height != other.target_block_height:
                 return False
             return True
-    
+
     class SYNC_COMPLETED:
         sync_type: "SyncType"
         synced_block_height: "int"
@@ -11822,7 +11822,7 @@ class Event:
             if self.synced_block_height != other.synced_block_height:
                 return False
             return True
-    
+
     class BALANCE_CHANGED:
         old_spendable_onchain_balance_sats: "int"
         new_spendable_onchain_balance_sats: "int"
@@ -11858,8 +11858,8 @@ class Event:
             if self.new_total_lightning_balance_sats != other.new_total_lightning_balance_sats:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -11903,7 +11903,7 @@ class Event:
         return isinstance(self, Event.SYNC_COMPLETED)
     def is_balance_changed(self) -> bool:
         return isinstance(self, Event.BALANCE_CHANGED)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -12324,9 +12324,9 @@ class _UniffiConverterTypeEvent(_UniffiConverterRustBuffer):
 
 class KeychainKind(enum.Enum):
     EXTERNAL = 0
-    
+
     INTERNAL = 1
-    
+
 
 
 class _UniffiConverterTypeKeychainKind(_UniffiConverterRustBuffer):
@@ -12408,7 +12408,7 @@ class LightningBalance:
             if self.inbound_htlc_rounded_msat != other.inbound_htlc_rounded_msat:
                 return False
             return True
-    
+
     class CLAIMABLE_AWAITING_CONFIRMATIONS:
         channel_id: "ChannelId"
         counterparty_node_id: "PublicKey"
@@ -12440,7 +12440,7 @@ class LightningBalance:
             if self.source != other.source:
                 return False
             return True
-    
+
     class CONTENTIOUS_CLAIMABLE:
         channel_id: "ChannelId"
         counterparty_node_id: "PublicKey"
@@ -12476,7 +12476,7 @@ class LightningBalance:
             if self.payment_preimage != other.payment_preimage:
                 return False
             return True
-    
+
     class MAYBE_TIMEOUT_CLAIMABLE_HTLC:
         channel_id: "ChannelId"
         counterparty_node_id: "PublicKey"
@@ -12512,7 +12512,7 @@ class LightningBalance:
             if self.outbound_payment != other.outbound_payment:
                 return False
             return True
-    
+
     class MAYBE_PREIMAGE_CLAIMABLE_HTLC:
         channel_id: "ChannelId"
         counterparty_node_id: "PublicKey"
@@ -12544,7 +12544,7 @@ class LightningBalance:
             if self.payment_hash != other.payment_hash:
                 return False
             return True
-    
+
     class COUNTERPARTY_REVOKED_OUTPUT_CLAIMABLE:
         channel_id: "ChannelId"
         counterparty_node_id: "PublicKey"
@@ -12568,8 +12568,8 @@ class LightningBalance:
             if self.amount_satoshis != other.amount_satoshis:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -12585,7 +12585,7 @@ class LightningBalance:
         return isinstance(self, LightningBalance.MAYBE_PREIMAGE_CLAIMABLE_HTLC)
     def is_counterparty_revoked_output_claimable(self) -> bool:
         return isinstance(self, LightningBalance.COUNTERPARTY_REVOKED_OUTPUT_CLAIMABLE)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -12762,17 +12762,17 @@ class _UniffiConverterTypeLightningBalance(_UniffiConverterRustBuffer):
 
 class LogLevel(enum.Enum):
     GOSSIP = 0
-    
+
     TRACE = 1
-    
+
     DEBUG = 2
-    
+
     INFO = 3
-    
+
     WARN = 4
-    
+
     ERROR = 5
-    
+
 
 
 class _UniffiConverterTypeLogLevel(_UniffiConverterRustBuffer):
@@ -12832,11 +12832,11 @@ class _UniffiConverterTypeLogLevel(_UniffiConverterRustBuffer):
 
 class Lsps1PaymentState(enum.Enum):
     EXPECT_PAYMENT = 0
-    
+
     PAID = 1
-    
+
     REFUNDED = 2
-    
+
 
 
 class _UniffiConverterTypeLsps1PaymentState(_UniffiConverterRustBuffer):
@@ -12896,7 +12896,7 @@ class MaxDustHtlcExposure:
             if self.limit_msat != other.limit_msat:
                 return False
             return True
-    
+
     class FEE_RATE_MULTIPLIER:
         multiplier: "int"
 
@@ -12912,8 +12912,8 @@ class MaxDustHtlcExposure:
             if self.multiplier != other.multiplier:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -12921,7 +12921,7 @@ class MaxDustHtlcExposure:
         return isinstance(self, MaxDustHtlcExposure.FIXED_LIMIT)
     def is_fee_rate_multiplier(self) -> bool:
         return isinstance(self, MaxDustHtlcExposure.FEE_RATE_MULTIPLIER)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -12973,13 +12973,13 @@ class _UniffiConverterTypeMaxDustHtlcExposure(_UniffiConverterRustBuffer):
 
 class Network(enum.Enum):
     BITCOIN = 0
-    
+
     TESTNET = 1
-    
+
     SIGNET = 2
-    
+
     REGTEST = 3
-    
+
 
 
 class _UniffiConverterTypeNetwork(_UniffiConverterRustBuffer):
@@ -13946,7 +13946,7 @@ class OfferAmount:
             if self.amount_msats != other.amount_msats:
                 return False
             return True
-    
+
     class CURRENCY:
         iso4217_code: "str"
         amount: "int"
@@ -13966,8 +13966,8 @@ class OfferAmount:
             if self.amount != other.amount:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -13975,7 +13975,7 @@ class OfferAmount:
         return isinstance(self, OfferAmount.BITCOIN)
     def is_currency(self) -> bool:
         return isinstance(self, OfferAmount.CURRENCY)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -14030,9 +14030,9 @@ class _UniffiConverterTypeOfferAmount(_UniffiConverterRustBuffer):
 
 class PaymentDirection(enum.Enum):
     INBOUND = 0
-    
+
     OUTBOUND = 1
-    
+
 
 
 class _UniffiConverterTypePaymentDirection(_UniffiConverterRustBuffer):
@@ -14068,25 +14068,25 @@ class _UniffiConverterTypePaymentDirection(_UniffiConverterRustBuffer):
 
 class PaymentFailureReason(enum.Enum):
     RECIPIENT_REJECTED = 0
-    
+
     USER_ABANDONED = 1
-    
+
     RETRIES_EXHAUSTED = 2
-    
+
     PAYMENT_EXPIRED = 3
-    
+
     ROUTE_NOT_FOUND = 4
-    
+
     UNEXPECTED_ERROR = 5
-    
+
     UNKNOWN_REQUIRED_FEATURES = 6
-    
+
     INVOICE_REQUEST_EXPIRED = 7
-    
+
     INVOICE_REQUEST_REJECTED = 8
-    
+
     BLINDED_PATH_CREATION_FAILED = 9
-    
+
 
 
 class _UniffiConverterTypePaymentFailureReason(_UniffiConverterRustBuffer):
@@ -14192,7 +14192,7 @@ class PaymentKind:
             if self.status != other.status:
                 return False
             return True
-    
+
     class BOLT11:
         hash: "PaymentHash"
         preimage: "typing.Optional[PaymentPreimage]"
@@ -14224,7 +14224,7 @@ class PaymentKind:
             if self.bolt11 != other.bolt11:
                 return False
             return True
-    
+
     class BOLT11_JIT:
         hash: "PaymentHash"
         preimage: "typing.Optional[PaymentPreimage]"
@@ -14264,7 +14264,7 @@ class PaymentKind:
             if self.bolt11 != other.bolt11:
                 return False
             return True
-    
+
     class BOLT12_OFFER:
         hash: "typing.Optional[PaymentHash]"
         preimage: "typing.Optional[PaymentPreimage]"
@@ -14300,7 +14300,7 @@ class PaymentKind:
             if self.quantity != other.quantity:
                 return False
             return True
-    
+
     class BOLT12_REFUND:
         hash: "typing.Optional[PaymentHash]"
         preimage: "typing.Optional[PaymentPreimage]"
@@ -14332,7 +14332,7 @@ class PaymentKind:
             if self.quantity != other.quantity:
                 return False
             return True
-    
+
     class SPONTANEOUS:
         hash: "PaymentHash"
         preimage: "typing.Optional[PaymentPreimage]"
@@ -14352,8 +14352,8 @@ class PaymentKind:
             if self.preimage != other.preimage:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -14369,7 +14369,7 @@ class PaymentKind:
         return isinstance(self, PaymentKind.BOLT12_REFUND)
     def is_spontaneous(self) -> bool:
         return isinstance(self, PaymentKind.SPONTANEOUS)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -14528,11 +14528,11 @@ class _UniffiConverterTypePaymentKind(_UniffiConverterRustBuffer):
 
 class PaymentStatus(enum.Enum):
     PENDING = 0
-    
+
     SUCCEEDED = 1
-    
+
     FAILED = 2
-    
+
 
 
 class _UniffiConverterTypePaymentStatus(_UniffiConverterRustBuffer):
@@ -14596,7 +14596,7 @@ class PendingSweepBalance:
             if self.amount_satoshis != other.amount_satoshis:
                 return False
             return True
-    
+
     class BROADCAST_AWAITING_CONFIRMATION:
         channel_id: "typing.Optional[ChannelId]"
         latest_broadcast_height: "int"
@@ -14624,7 +14624,7 @@ class PendingSweepBalance:
             if self.amount_satoshis != other.amount_satoshis:
                 return False
             return True
-    
+
     class AWAITING_THRESHOLD_CONFIRMATIONS:
         channel_id: "typing.Optional[ChannelId]"
         latest_spending_txid: "Txid"
@@ -14656,8 +14656,8 @@ class PendingSweepBalance:
             if self.amount_satoshis != other.amount_satoshis:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -14667,7 +14667,7 @@ class PendingSweepBalance:
         return isinstance(self, PendingSweepBalance.BROADCAST_AWAITING_CONFIRMATION)
     def is_awaiting_threshold_confirmations(self) -> bool:
         return isinstance(self, PendingSweepBalance.AWAITING_THRESHOLD_CONFIRMATIONS)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -14772,7 +14772,7 @@ class QrPaymentResult:
             if self.txid != other.txid:
                 return False
             return True
-    
+
     class BOLT11:
         payment_id: "PaymentId"
 
@@ -14788,7 +14788,7 @@ class QrPaymentResult:
             if self.payment_id != other.payment_id:
                 return False
             return True
-    
+
     class BOLT12:
         payment_id: "PaymentId"
 
@@ -14804,8 +14804,8 @@ class QrPaymentResult:
             if self.payment_id != other.payment_id:
                 return False
             return True
-    
-    
+
+
 
     # For each variant, we have an `is_NAME` method for easily checking
     # whether an instance is that variant.
@@ -14815,7 +14815,7 @@ class QrPaymentResult:
         return isinstance(self, QrPaymentResult.BOLT11)
     def is_bolt12(self) -> bool:
         return isinstance(self, QrPaymentResult.BOLT12)
-    
+
 
 # Now, a little trick - we make each nested variant class be a subclass of the main
 # enum class, so that method calls and instance checks etc will work intuitively.
@@ -14878,11 +14878,11 @@ class _UniffiConverterTypeQrPaymentResult(_UniffiConverterRustBuffer):
 
 class SyncType(enum.Enum):
     ONCHAIN_WALLET = 0
-    
+
     LIGHTNING_WALLET = 1
-    
+
     FEE_RATE_CACHE = 2
-    
+
 
 
 class _UniffiConverterTypeSyncType(_UniffiConverterRustBuffer):
@@ -15006,15 +15006,15 @@ class _UniffiConverterTypeVssHeaderProviderError(_UniffiConverterRustBuffer):
 
 class WordCount(enum.Enum):
     WORDS12 = 0
-    
+
     WORDS15 = 1
-    
+
     WORDS18 = 2
-    
+
     WORDS21 = 3
-    
+
     WORDS24 = 4
-    
+
 
 
 class _UniffiConverterTypeWordCount(_UniffiConverterRustBuffer):
@@ -17450,9 +17450,9 @@ def default_config() -> "Config":
 
 def derive_node_secret_from_mnemonic(mnemonic: "str",passphrase: "typing.Optional[str]") -> "typing.List[int]":
     _UniffiConverterString.check_lower(mnemonic)
-    
+
     _UniffiConverterOptionalString.check_lower(passphrase)
-    
+
     return _UniffiConverterSequenceUInt8.lift(_uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_func_derive_node_secret_from_mnemonic,
         _UniffiConverterString.lower(mnemonic),
         _UniffiConverterOptionalString.lower(passphrase)))
@@ -17460,7 +17460,7 @@ def derive_node_secret_from_mnemonic(mnemonic: "str",passphrase: "typing.Optiona
 
 def generate_entropy_mnemonic(word_count: "typing.Optional[WordCount]") -> "Mnemonic":
     _UniffiConverterOptionalTypeWordCount.check_lower(word_count)
-    
+
     return _UniffiConverterTypeMnemonic.lift(_uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_func_generate_entropy_mnemonic,
         _UniffiConverterOptionalTypeWordCount.lower(word_count)))
 
