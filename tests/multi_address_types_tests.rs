@@ -3471,6 +3471,16 @@ mod derived_accounts {
 		node_config, read_node_seed, test_recipient, CHANNEL_PEER_FUNDING_SATS,
 	};
 
+	#[cfg(not(feature = "uniffi"))]
+	fn api_seed_bytes(seed: [u8; 64]) -> [u8; 64] {
+		seed
+	}
+
+	#[cfg(feature = "uniffi")]
+	fn api_seed_bytes(seed: [u8; 64]) -> Vec<u8> {
+		seed.to_vec()
+	}
+
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 	async fn test_derived_account_receive_spend_and_combined_balance() {
 		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
@@ -3862,7 +3872,7 @@ mod derived_accounts {
 			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
 		fund_and_sync(&bitcoind, &electrsd, &node, derived_addr, 100_000).await;
 
-		node.set_primary_address_type(AddressType::Taproot, seed).unwrap();
+		node.set_primary_address_type(AddressType::Taproot, api_seed_bytes(seed)).unwrap();
 		assert!(node.onchain_payment().new_address().unwrap().script_pubkey().is_p2tr());
 		assert!(node
 			.list_onchain_wallet_accounts()
