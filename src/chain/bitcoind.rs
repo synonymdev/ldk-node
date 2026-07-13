@@ -403,14 +403,21 @@ impl BitcoindChainSource {
 		drop(locked_header_cache);
 
 		for listener in &account_listeners {
-			if let Err(err) = listener.finish() {
-				log_error!(
-					self.logger,
-					"Per-account wallet sync apply failed for {:?}: {}",
-					listener.account(),
-					err
-				);
-				return Err(err);
+			match listener.finish(account_generation) {
+				Ok(AccountChainListenerOutcome::Complete) => {},
+				Ok(AccountChainListenerOutcome::AccountSetChanged) => {
+					log_info!(self.logger, "On-chain account set changed during sync; retrying.");
+					return Ok(ListenerSyncOutcome::AccountSetChanged);
+				},
+				Err(err) => {
+					log_error!(
+						self.logger,
+						"Per-account wallet sync apply failed for {:?}: {}",
+						listener.account(),
+						err
+					);
+					return Err(err);
+				},
 			}
 		}
 		onchain_wallet.finish_pending_sync(false)?;
@@ -1499,6 +1506,12 @@ struct AccountChainListener {
 	apply_error: Mutex<Option<Error>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum AccountChainListenerOutcome {
+	Complete,
+	AccountSetChanged,
+}
+
 impl AccountChainListener {
 	fn new(wallet: Arc<Wallet>, account: OnchainWalletAccount) -> Self {
 		Self {
@@ -1514,7 +1527,17 @@ impl AccountChainListener {
 		self.account
 	}
 
-	fn finish(&self) -> Result<(), Error> {
+	fn finish(&self, account_generation: u64) -> Result<AccountChainListenerOutcome, Error> {
+		match self.finish_inner() {
+			Err(_) if self.wallet.account_generation() != account_generation => {
+				Ok(AccountChainListenerOutcome::AccountSetChanged)
+			},
+			Err(e) => Err(e),
+			Ok(()) => Ok(AccountChainListenerOutcome::Complete),
+		}
+	}
+
+	fn finish_inner(&self) -> Result<(), Error> {
 		if let Some(error) = self.apply_error.lock().unwrap().take() {
 			return Err(error);
 		}
@@ -1579,18 +1602,61 @@ impl std::fmt::Display for HttpError {
 
 #[cfg(test)]
 mod tests {
+	use std::sync::Arc;
+
+	use bitcoin::blockdata::constants::genesis_block;
 	use bitcoin::hashes::Hash;
-	use bitcoin::{FeeRate, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
+	use bitcoin::{FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
+	use lightning::chain::Listen;
 	use lightning_block_sync::http::JsonResponse;
 	use proptest::arbitrary::any;
 	use proptest::collection::vec;
 	use proptest::{prop_assert_eq, prop_compose, proptest};
 	use serde_json::json;
 
+	use crate::builder::NodeBuilder;
 	use crate::chain::bitcoind::{
-		should_emit_mempool_entry, BitcoindClient, FeeResponse, GetMempoolEntryResponse,
-		GetRawMempoolResponse, GetRawTransactionResponse, MempoolMinFeeResponse, MempoolUpdate,
+		should_emit_mempool_entry, AccountChainListener, AccountChainListenerOutcome,
+		BitcoindClient, FeeResponse, GetMempoolEntryResponse, GetRawMempoolResponse,
+		GetRawTransactionResponse, MempoolMinFeeResponse, MempoolUpdate,
 	};
+	use crate::config::{AddressType, Config, OnchainWalletAccount};
+	use crate::io::test_utils::InMemoryStore;
+	use crate::types::DynStore;
+	use crate::Error;
+
+	#[test]
+	fn account_listener_retries_stale_membership_but_preserves_apply_errors() {
+		let seed = [42u8; 64];
+		let mut config = Config::default();
+		config.network = Network::Regtest;
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes(seed);
+		builder.set_log_facade_logger();
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = builder.build_with_store(store).unwrap();
+
+		node.wallet.add_monitored_address_type(AddressType::Legacy, &seed).unwrap();
+		let generation = node.wallet.account_generation();
+		let account = OnchainWalletAccount::account_zero(AddressType::Legacy);
+		let stale_listener = AccountChainListener::new(Arc::clone(&node.wallet), account);
+		node.wallet.remove_monitored_address_type(AddressType::Legacy).unwrap();
+		stale_listener.block_connected(&genesis_block(Network::Regtest), 0);
+		assert_eq!(
+			stale_listener.finish(generation),
+			Ok(AccountChainListenerOutcome::AccountSetChanged)
+		);
+
+		let current_generation = node.wallet.account_generation();
+		let primary = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+		let failed_listener = AccountChainListener::new(Arc::clone(&node.wallet), primary);
+		*failed_listener.apply_error.lock().unwrap() = Some(Error::PersistenceFailed);
+		assert!(matches!(
+			failed_listener.finish(current_generation),
+			Err(Error::PersistenceFailed)
+		));
+	}
 
 	#[test]
 	fn mempool_timestamp_advances_only_after_commit() {

@@ -655,25 +655,19 @@ impl Wallet {
 
 		{
 			let mut aggregate = self.inner.lock().unwrap();
-			aggregate.add_wallet(wallet_account, wallet, persister).map_err(|e| {
+			aggregate.add_wallet_and_persist(wallet_account, wallet, persister).map_err(|e| {
 				log_error!(
 					self.logger,
 					"Failed to add derived account {:?}: {}",
 					wallet_account,
 					e
 				);
-				Error::WalletOperationFailed
+				match e {
+					bdk_wallet_aggregate::Error::PersistenceFailed => Error::PersistenceFailed,
+					_ => Error::WalletOperationFailed,
+				}
 			})?;
 			self.account_generation.fetch_add(1, Ordering::AcqRel);
-			aggregate.persist_all().map_err(|e| {
-				log_error!(
-					self.logger,
-					"Failed to persist derived account {:?}: {}",
-					wallet_account,
-					e
-				);
-				Error::PersistenceFailed
-			})?;
 			let mut runtime_config = self.address_type_runtime_config.write().unwrap();
 			if !runtime_config.derived_accounts.contains(&wallet_account) {
 				runtime_config.derived_accounts.push(wallet_account);

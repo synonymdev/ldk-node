@@ -212,6 +212,18 @@ where
 		Ok(())
 	}
 
+	/// Add a secondary wallet and roll it back if persistence fails.
+	pub fn add_wallet_and_persist(
+		&mut self, key: K, wallet: PersistedWallet<P>, persister: P,
+	) -> Result<(), Error> {
+		self.add_wallet(key, wallet, persister)?;
+		if let Err(e) = self.persist_all() {
+			self.remove_wallet(key).expect("newly added wallet must be removable");
+			return Err(e);
+		}
+		Ok(())
+	}
+
 	/// Change the primary wallet. New primary must already be in the aggregate.
 	pub fn set_primary(&mut self, new_primary: K) -> Result<(), Error> {
 		if !self.wallets.contains_key(&new_primary) {
@@ -1657,6 +1669,7 @@ where
 
 #[cfg(test)]
 mod tests {
+	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::sync::{Arc, Mutex};
 
 	use bdk_chain::Merge;
@@ -1701,6 +1714,31 @@ mod tests {
 		}
 	}
 
+	struct FailOncePersister {
+		failures: Arc<AtomicUsize>,
+		inner: MemoryPersister,
+	}
+
+	impl WalletPersister for FailOncePersister {
+		type Error = std::io::Error;
+
+		fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error> {
+			Ok(persister.inner.change_set.lock().unwrap().clone())
+		}
+
+		fn persist(persister: &mut Self, change_set: &ChangeSet) -> Result<(), Self::Error> {
+			if persister.failures.load(Ordering::SeqCst) > 0 {
+				persister.failures.fetch_sub(1, Ordering::SeqCst);
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::Other,
+					"injected persist failure",
+				));
+			}
+			persister.inner.change_set.lock().unwrap().merge(change_set.clone());
+			Ok(())
+		}
+	}
+
 	fn test_xprv() -> Xpriv {
 		Xpriv::new_master(Network::Regtest, &[0x42; 32]).unwrap()
 	}
@@ -1722,7 +1760,11 @@ mod tests {
 		.unwrap()
 	}
 
-	fn load_empty_wallet(persister: &mut MemoryPersister) -> PersistedWallet<MemoryPersister> {
+	fn load_empty_wallet<P>(persister: &mut P) -> PersistedWallet<P>
+	where
+		P: WalletPersister,
+		P::Error: std::fmt::Debug,
+	{
 		let xprv = test_xprv();
 		Wallet::load()
 			.descriptor(KeychainKind::External, Some(Bip84(xprv, KeychainKind::External)))
@@ -1732,6 +1774,36 @@ mod tests {
 			.load_wallet(persister)
 			.unwrap()
 			.expect("wallet should have been persisted")
+	}
+
+	#[test]
+	fn add_wallet_and_persist_rolls_back_on_persist_failure() {
+		let failures = Arc::new(AtomicUsize::new(0));
+		let mut primary_persister = FailOncePersister {
+			failures: Arc::clone(&failures),
+			inner: MemoryPersister::default(),
+		};
+		let primary = create_empty_wallet(&mut primary_persister);
+		let mut secondary_persister = FailOncePersister {
+			failures: Arc::clone(&failures),
+			inner: MemoryPersister::default(),
+		};
+		let mut secondary = create_empty_wallet(&mut secondary_persister);
+		secondary.reveal_next_address(KeychainKind::External);
+		let secondary_state = secondary_persister.inner.clone();
+
+		let mut aggregate = AggregateWallet::new(primary, primary_persister, 0u8, vec![]);
+		failures.store(1, Ordering::SeqCst);
+		assert_eq!(
+			aggregate.add_wallet_and_persist(1, secondary, secondary_persister),
+			Err(Error::PersistenceFailed)
+		);
+		assert!(!aggregate.loaded_keys().contains(&1));
+
+		let mut retry_persister = FailOncePersister { failures, inner: secondary_state };
+		let retry_wallet = load_empty_wallet(&mut retry_persister);
+		aggregate.add_wallet_and_persist(1, retry_wallet, retry_persister).unwrap();
+		assert!(aggregate.loaded_keys().contains(&1));
 	}
 
 	fn create_funded_wallet(
@@ -2416,34 +2488,7 @@ mod tests {
 
 	#[test]
 	fn apply_block_retries_persist_when_block_is_already_known() {
-		use std::sync::atomic::{AtomicUsize, Ordering};
-
 		use bitcoin::blockdata::constants::genesis_block;
-
-		struct FailOncePersister {
-			failures: Arc<AtomicUsize>,
-			inner: MemoryPersister,
-		}
-
-		impl WalletPersister for FailOncePersister {
-			type Error = std::io::Error;
-
-			fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error> {
-				Ok(persister.inner.change_set.lock().unwrap().clone())
-			}
-
-			fn persist(persister: &mut Self, change_set: &ChangeSet) -> Result<(), Self::Error> {
-				if persister.failures.load(Ordering::SeqCst) > 0 {
-					persister.failures.fetch_sub(1, Ordering::SeqCst);
-					return Err(std::io::Error::new(
-						std::io::ErrorKind::Other,
-						"injected persist failure",
-					));
-				}
-				persister.inner.change_set.lock().unwrap().merge(change_set.clone());
-				Ok(())
-			}
-		}
 
 		let failures = Arc::new(AtomicUsize::new(0));
 		let mut primary_persister = FailOncePersister {
