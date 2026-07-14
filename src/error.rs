@@ -152,7 +152,9 @@ pub enum Error {
 	AddressTypeIsPrimary,
 	/// The address type is not currently being monitored.
 	AddressTypeNotMonitored,
-	/// The given seed bytes have an invalid length.
+	/// The derived on-chain wallet account is not currently registered.
+	OnchainWalletAccountNotRegistered,
+	/// The seed bytes or a seed-derived wallet account are invalid.
 	InvalidSeedBytes,
 }
 
@@ -256,8 +258,11 @@ impl fmt::Display for Error {
 			Self::AddressTypeNotMonitored => {
 				write!(f, "The address type is not currently being monitored.")
 			},
+			Self::OnchainWalletAccountNotRegistered => {
+				write!(f, "The on-chain wallet account is not currently registered.")
+			},
 			Self::InvalidSeedBytes => {
-				write!(f, "The given seed bytes have an invalid length.")
+				write!(f, "The seed bytes or seed-derived wallet account are invalid.")
 			},
 		}
 	}

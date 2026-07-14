@@ -156,9 +156,8 @@ impl AddressType {
 ///
 /// Account `0` is the main account ([`Config::address_type`] /
 /// [`crate::Node::set_primary_address_type`]). Accounts `1+` are derived accounts
-/// registered at runtime via [`crate::Node::add_onchain_wallet_account`].
-///
-/// Derived-account registration is not persisted across restarts.
+/// loaded from [`Config::onchain_wallet_accounts`] or registered at runtime via
+/// [`crate::Node::add_onchain_wallet_account`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OnchainWalletAccount {
 	/// The script/address type of this wallet account.
@@ -189,6 +188,22 @@ impl OnchainWalletAccount {
 			format!("{}_{}", self.address_type.storage_suffix(), self.account_index)
 		}
 	}
+}
+
+/// Configures a derived on-chain wallet account to load when the node is built.
+///
+/// The xpub must match the account derived from the node's seed. Account `0` is reserved for
+/// [`Config::address_type`] and [`Config::address_types_to_monitor`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnchainWalletAccountConfig {
+	/// The script/address type of this wallet account.
+	pub address_type: AddressType,
+	/// BIP44 account index between `1` and [`MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`], inclusive.
+	///
+	/// [`MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`]: crate::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX
+	pub account_index: u32,
+	/// Account-level extended public key derived from the node's seed.
+	pub xpub: String,
 }
 
 impl Default for AddressType {
@@ -237,28 +252,28 @@ impl Config {
 	}
 }
 
-/// Runtime address-type configuration, initialized from [`Config`] and updated at runtime.
-///
-/// Derived accounts are tracked separately and are not restored from [`Config`].
+/// Runtime wallet configuration, initialized from [`Config`] and updated at runtime.
 #[derive(Debug, Clone)]
 pub(crate) struct AddressTypeRuntimeConfig {
 	/// The primary address type for account 0 (new addresses and change outputs).
 	pub(crate) primary: AddressType,
 	/// Additional account-0 address types to monitor for existing funds.
 	pub(crate) monitored: Vec<AddressType>,
-	/// Runtime-registered derived accounts (`account_index >= 1`). Not persisted.
+	/// Loaded derived accounts (`account_index >= 1`).
 	pub(crate) derived_accounts: Vec<OnchainWalletAccount>,
 }
 
 impl AddressTypeRuntimeConfig {
-	pub(crate) fn from_config(config: &Config) -> Self {
+	pub(crate) fn from_config(
+		config: &Config, derived_accounts: Vec<OnchainWalletAccount>,
+	) -> Self {
 		let monitored = config
 			.address_types_to_monitor
 			.iter()
 			.copied()
 			.filter(|&at| at != config.address_type)
 			.collect();
-		Self { primary: config.address_type, monitored, derived_accounts: Vec::new() }
+		Self { primary: config.address_type, monitored, derived_accounts }
 	}
 
 	/// Returns the additional account-0 address types to monitor, deduplicating.
@@ -390,12 +405,14 @@ pub struct Config {
 	/// [`BalanceDetails::spendable_onchain_balance_sats`]: crate::BalanceDetails::spendable_onchain_balance_sats
 	pub include_untrusted_pending_in_spendable: bool,
 	/// The address type for the primary (account `0`) on-chain wallet. Default is `NativeSegwit`.
-	///
-	/// Derived accounts are registered at runtime via [`crate::Node::add_onchain_wallet_account`]
-	/// and are never configured here.
 	pub address_type: AddressType,
 	/// Additional account-`0` address types to monitor for existing funds.
 	pub address_types_to_monitor: Vec<AddressType>,
+	/// Derived on-chain wallet accounts to load when the node is built.
+	///
+	/// Registrations are validated against the node's seed. Runtime additions and removals do not
+	/// mutate this list or persist registration changes.
+	pub onchain_wallet_accounts: Vec<OnchainWalletAccountConfig>,
 }
 
 impl Default for Config {
@@ -415,6 +432,7 @@ impl Default for Config {
 			include_untrusted_pending_in_spendable: false,
 			address_type: AddressType::default(),
 			address_types_to_monitor: Vec::new(),
+			onchain_wallet_accounts: Vec::new(),
 		}
 	}
 }

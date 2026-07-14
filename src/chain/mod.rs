@@ -260,7 +260,7 @@ pub(super) fn apply_additional_sync_results(
 		};
 
 		match onchain_wallet.apply_update_for_wallet_account(wallet_account, update) {
-			Ok(wallet_events) => {
+			Ok(Some(wallet_events)) => {
 				any_applied = true;
 				if let Some(ts) =
 					SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
@@ -271,6 +271,9 @@ pub(super) fn apply_additional_sync_results(
 					onchain_wallet.mark_derived_account_synced(wallet_account);
 				}
 				events.extend(wallet_events);
+			},
+			Ok(None) => {
+				log_debug!(logger, "Ignoring sync result for unloaded wallet {:?}", wallet_account);
 			},
 			Err(e) => {
 				log_warn!(logger, "Failed to apply update to wallet {:?}: {}", wallet_account, e);
@@ -382,6 +385,40 @@ mod sync_tests {
 
 		assert_eq!(outcome.events.len(), 1);
 		assert_eq!(outcome.result(), Err(Error::WalletOperationTimeout));
+	}
+
+	#[test]
+	fn late_sync_result_for_removed_account_is_ignored() {
+		let mut config = Config::default();
+		config.network = Network::Regtest;
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes([42u8; 64]);
+		builder.set_log_facade_logger();
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = builder.build_with_store(store).unwrap();
+		let account =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let xpub = node
+			.export_onchain_wallet_account_xpub(account.address_type, account.account_index)
+			.unwrap();
+		node.add_onchain_wallet_account(account.address_type, account.account_index, xpub).unwrap();
+		node.remove_onchain_wallet_account(account.address_type, account.account_index).unwrap();
+
+		let outcome = apply_additional_sync_results(
+			vec![(account, Ok(BdkUpdate::default()))],
+			&node.wallet,
+			&node.node_metrics,
+			&node.logger,
+		);
+
+		assert!(!outcome.any_applied);
+		assert!(outcome.events.is_empty());
+		assert_eq!(outcome.error, None);
+		assert_eq!(
+			node.remove_onchain_wallet_account(account.address_type, account.account_index),
+			Err(Error::OnchainWalletAccountNotRegistered)
+		);
 	}
 }
 

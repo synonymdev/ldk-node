@@ -5,7 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::default::Default;
 use std::path::PathBuf;
@@ -184,7 +184,7 @@ impl std::fmt::Debug for LogWriterConfig {
 /// [`Node`]: crate::Node
 #[derive(Debug, Clone, PartialEq)]
 pub enum BuildError {
-	/// The given seed bytes are invalid, e.g., have invalid length.
+	/// The seed bytes or a seed-derived wallet configuration are invalid.
 	InvalidSeedBytes,
 	/// The given seed file is invalid, e.g., has invalid length, or could not be read.
 	InvalidSeedFile,
@@ -232,7 +232,9 @@ pub enum BuildError {
 impl fmt::Display for BuildError {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
-			Self::InvalidSeedBytes => write!(f, "Given seed bytes are invalid."),
+			Self::InvalidSeedBytes => {
+				write!(f, "Given seed bytes or seed-derived wallet configuration are invalid.")
+			},
 			Self::InvalidSeedFile => write!(f, "Given seed file is invalid or could not be read."),
 			Self::InvalidSystemTime => {
 				write!(f, "System time is invalid. Clocks might have gone back in time.")
@@ -1451,56 +1453,89 @@ pub(crate) fn get_or_create_wallet_for_account(
 	}
 }
 
-fn build_additional_wallets(
-	config: &Config, xprv: Xpriv, kv_store: Arc<DynStore>, logger: Arc<Logger>,
-	chain_tip_opt: Option<&BestBlock>,
-) -> Vec<(OnchainWalletAccount, PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister)> {
-	let mut additional_wallets = Vec::new();
+fn validate_configured_onchain_wallet_accounts(
+	config: &Config, xprv: Xpriv,
+) -> Result<Vec<OnchainWalletAccount>, BuildError> {
+	let mut seen = HashSet::new();
+	let mut accounts = Vec::new();
+	for configured_account in &config.onchain_wallet_accounts {
+		let account_index = configured_account.account_index;
+		if account_index == 0 || account_index > MAX_ONCHAIN_WALLET_ACCOUNT_INDEX {
+			return Err(BuildError::InvalidSeedBytes);
+		}
 
-	for address_type in config.additional_address_types() {
-		let wallet_account = OnchainWalletAccount::account_zero(address_type);
-		match (|| -> Result<_, BuildError> {
-			let mut persister = KVStoreWalletPersister::new(
-				Arc::clone(&kv_store),
-				Arc::clone(&logger),
-				wallet_account,
-			);
+		let account =
+			OnchainWalletAccount { address_type: configured_account.address_type, account_index };
+		let expected_xpub = derive_account_xpub_string(
+			xprv,
+			config.network,
+			configured_account.address_type,
+			account_index,
+		)?;
+		if configured_account.xpub.trim() != expected_xpub {
+			return Err(BuildError::InvalidSeedBytes);
+		}
+		if seen.insert(account) {
+			accounts.push(account);
+		}
+	}
+	Ok(accounts)
+}
 
-			let (mut wallet, loaded_from_store) = get_or_create_wallet_for_account(
-				wallet_account,
-				xprv,
-				config.network,
-				&mut persister,
-			)
+fn build_wallet_for_account(
+	config: &Config, wallet_account: OnchainWalletAccount, xprv: Xpriv, kv_store: Arc<DynStore>,
+	logger: Arc<Logger>, chain_tip_opt: Option<&BestBlock>,
+) -> Result<
+	(OnchainWalletAccount, PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister),
+	BuildError,
+> {
+	let mut persister =
+		KVStoreWalletPersister::new(Arc::clone(&kv_store), Arc::clone(&logger), wallet_account);
+
+	let (mut wallet, loaded_from_store) =
+		get_or_create_wallet_for_account(wallet_account, xprv, config.network, &mut persister)
 			.map_err(|e| {
 				log_error!(logger, "Failed to setup wallet for {:?}: {}", wallet_account, e);
 				e
 			})?;
 
-			// Only checkpoint brand-new wallets to the current tip. Re-loaded wallets keep their
-			// persisted tip so chain backends can catch up without skipping history.
-			if !loaded_from_store {
-				if let Some(best_block) = chain_tip_opt {
-					let mut cp = wallet.latest_checkpoint();
-					let block_id = bdk_chain::BlockId {
-						height: best_block.height,
-						hash: best_block.block_hash,
-					};
-					cp = cp.insert(block_id);
-					let update = bdk_wallet::Update { chain: Some(cp), ..Default::default() };
-					wallet.apply_update(update).map_err(|e| {
-						log_error!(
-							logger,
-							"Failed to apply checkpoint for {:?}: {}",
-							wallet_account,
-							e
-						);
-						BuildError::WalletSetupFailed
-					})?;
-				}
-			}
-			Ok((wallet_account, wallet, persister))
-		})() {
+	// Re-loaded wallets keep their persisted tip so chain backends can catch up.
+	if !loaded_from_store {
+		if let Some(best_block) = chain_tip_opt {
+			let mut checkpoint = wallet.latest_checkpoint();
+			let block_id =
+				bdk_chain::BlockId { height: best_block.height, hash: best_block.block_hash };
+			checkpoint = checkpoint.insert(block_id);
+			let update = bdk_wallet::Update { chain: Some(checkpoint), ..Default::default() };
+			wallet.apply_update(update).map_err(|e| {
+				log_error!(logger, "Failed to apply checkpoint for {:?}: {}", wallet_account, e);
+				BuildError::WalletSetupFailed
+			})?;
+		}
+	}
+
+	Ok((wallet_account, wallet, persister))
+}
+
+fn build_additional_wallets(
+	config: &Config, configured_accounts: &[OnchainWalletAccount], xprv: Xpriv,
+	kv_store: Arc<DynStore>, logger: Arc<Logger>, chain_tip_opt: Option<&BestBlock>,
+) -> Result<
+	Vec<(OnchainWalletAccount, PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister)>,
+	BuildError,
+> {
+	let mut additional_wallets = Vec::new();
+
+	for address_type in config.additional_address_types() {
+		let wallet_account = OnchainWalletAccount::account_zero(address_type);
+		match build_wallet_for_account(
+			config,
+			wallet_account,
+			xprv,
+			Arc::clone(&kv_store),
+			Arc::clone(&logger),
+			chain_tip_opt,
+		) {
 			Ok(tuple) => {
 				log_info!(logger, "Created additional wallet for {:?}", tuple.0);
 				additional_wallets.push(tuple);
@@ -1516,7 +1551,20 @@ fn build_additional_wallets(
 		}
 	}
 
-	additional_wallets
+	for &wallet_account in configured_accounts {
+		let wallet = build_wallet_for_account(
+			config,
+			wallet_account,
+			xprv,
+			Arc::clone(&kv_store),
+			Arc::clone(&logger),
+			chain_tip_opt,
+		)?;
+		log_info!(logger, "Loaded configured wallet for {:?}", wallet_account);
+		additional_wallets.push(wallet);
+	}
+
+	Ok(additional_wallets)
 }
 
 fn apply_channel_data_migration<K>(
@@ -1704,6 +1752,7 @@ fn build_with_store_internal(
 		log_error!(logger, "Failed to derive master secret: {}", e);
 		BuildError::InvalidSeedBytes
 	})?;
+	let configured_accounts = validate_configured_onchain_wallet_accounts(&config, xprv)?;
 
 	let tx_broadcaster = Arc::new(TransactionBroadcaster::new(Arc::clone(&logger)));
 	let fee_estimator = Arc::new(OnchainFeeEstimator::new());
@@ -1784,8 +1833,10 @@ fn build_with_store_internal(
 	};
 	let bdk_wallet_loaded = wallet_load_result?;
 
-	let address_type_runtime_config =
-		Arc::new(RwLock::new(AddressTypeRuntimeConfig::from_config(&config)));
+	let address_type_runtime_config = Arc::new(RwLock::new(AddressTypeRuntimeConfig::from_config(
+		&config,
+		configured_accounts.clone(),
+	)));
 
 	// Chain source setup
 	let (chain_source, chain_tip_opt) = match chain_data_source_config {
@@ -1893,11 +1944,12 @@ fn build_with_store_internal(
 
 	let additional_wallets = build_additional_wallets(
 		&config,
+		&configured_accounts,
 		xprv,
 		Arc::clone(&kv_store),
 		Arc::clone(&logger),
 		chain_tip_opt.as_ref(),
-	);
+	)?;
 
 	let wallet = Arc::new(Wallet::new(
 		bdk_wallet,
@@ -2671,6 +2723,8 @@ mod tests {
 	use std::pin::Pin;
 	use std::sync::Arc;
 
+	use bitcoin::bip32::Xpriv;
+	use bitcoin::Network;
 	use lightning::io;
 	use lightning::ln::functional_test_utils::{
 		create_announced_chan_between_nodes, create_chanmon_cfgs, create_network, create_node_cfgs,
@@ -2687,9 +2741,11 @@ mod tests {
 	use lightning::util::ser::Writeable;
 
 	use super::{
-		apply_channel_data_migration, sanitize_alias, BuildError, ChannelDataMigration, Config,
+		apply_channel_data_migration, derive_account_xpub_string, sanitize_alias,
+		validate_configured_onchain_wallet_accounts, BuildError, ChannelDataMigration, Config,
 		NodeAlias, NodeBuilder, ScoringDecayParameters, ScoringFeeParameters,
 	};
+	use crate::config::{AddressType, OnchainWalletAccountConfig};
 	use crate::io::test_utils::InMemoryStore;
 	use crate::logger::Logger;
 	use crate::runtime::Runtime;
@@ -2729,6 +2785,63 @@ mod tests {
 		let alias = "This is a string longer than thirty-two bytes!"; // 46 bytes
 		let node = sanitize_alias(alias);
 		assert_eq!(node.err().unwrap(), BuildError::InvalidNodeAlias);
+	}
+
+	#[test]
+	fn validates_and_deduplicates_configured_onchain_wallet_accounts() {
+		let xprv = Xpriv::new_master(Network::Regtest, &[42; 64]).unwrap();
+		let xpub =
+			derive_account_xpub_string(xprv, Network::Regtest, AddressType::Taproot, 1).unwrap();
+		let configured = OnchainWalletAccountConfig {
+			address_type: AddressType::Taproot,
+			account_index: 1,
+			xpub,
+		};
+		let mut config = Config::default();
+		config.network = Network::Regtest;
+		config.onchain_wallet_accounts = vec![configured.clone(), configured];
+
+		let accounts = validate_configured_onchain_wallet_accounts(&config, xprv).unwrap();
+		assert_eq!(accounts.len(), 1);
+		assert_eq!(accounts[0].address_type, AddressType::Taproot);
+		assert_eq!(accounts[0].account_index, 1);
+
+		config.onchain_wallet_accounts[0].xpub = "wrong xpub".to_string();
+		assert_eq!(
+			validate_configured_onchain_wallet_accounts(&config, xprv),
+			Err(BuildError::InvalidSeedBytes)
+		);
+
+		config.onchain_wallet_accounts[0].account_index = 0;
+		assert_eq!(
+			validate_configured_onchain_wallet_accounts(&config, xprv),
+			Err(BuildError::InvalidSeedBytes)
+		);
+	}
+
+	#[test]
+	fn build_rejects_configured_account_xpub_from_another_seed() {
+		let foreign_xprv = Xpriv::new_master(Network::Regtest, &[43; 64]).unwrap();
+		let foreign_xpub = derive_account_xpub_string(
+			foreign_xprv,
+			Network::Regtest,
+			AddressType::NativeSegwit,
+			1,
+		)
+		.unwrap();
+		let mut config = Config::default();
+		config.network = Network::Regtest;
+		config.onchain_wallet_accounts = vec![OnchainWalletAccountConfig {
+			address_type: AddressType::NativeSegwit,
+			account_index: 1,
+			xpub: foreign_xpub,
+		}];
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_entropy_seed_bytes([42; 64]);
+		builder.set_log_facade_logger();
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+
+		assert!(matches!(builder.build_with_store(store), Err(BuildError::InvalidSeedBytes)));
 	}
 
 	#[test]
