@@ -3878,10 +3878,33 @@ mod derived_accounts {
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-	async fn test_electrum_additional_full_scan_uses_configured_gap_and_batch_size() {
+	async fn test_electrum_configured_account_full_scan_uses_custom_gap_and_batch_size() {
 		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
-		let config = node_config(AddressType::NativeSegwit, vec![]).node_config;
-		crate::common::setup_builder!(builder, config);
+		let chain_source = TestChainSource::Electrum(&electrsd);
+		let mut initial_config = node_config(AddressType::NativeSegwit, vec![]);
+		initial_config.store_type = crate::common::TestStoreType::Sqlite;
+		let node = setup_node(&chain_source, initial_config, None);
+
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		let address = native_segwit_receive_address_from_xpub(&xpub, 30);
+		let mut restart_config = node.config();
+		node.stop().unwrap();
+		drop(node);
+
+		premine_and_distribute_funds(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![address],
+			Amount::from_sat(100_000),
+		)
+		.await;
+
+		restart_config.onchain_wallet_accounts = vec![OnchainWalletAccountConfig {
+			address_type: AddressType::NativeSegwit,
+			account_index: 1,
+			xpub,
+		}];
+		crate::common::setup_builder!(builder, restart_config);
 		let electrum_url = format!("tcp://{}", electrsd.electrum_url);
 		let sync_config = ElectrumSyncConfig {
 			background_sync_config: None,
@@ -3893,19 +3916,10 @@ mod derived_accounts {
 		builder.set_log_facade_logger();
 		let node = builder.build().unwrap();
 		node.start().unwrap();
-
-		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
-		let address = native_segwit_receive_address_from_xpub(&xpub, 30);
-		premine_and_distribute_funds(
-			&bitcoind.client,
-			&electrsd.client,
-			vec![address],
-			Amount::from_sat(100_000),
-		)
-		.await;
-
-		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
 		node.sync_wallets().unwrap();
+		assert!(node.list_onchain_wallet_accounts().iter().any(|account| {
+			account.address_type == AddressType::NativeSegwit && account.account_index == 1
+		}));
 		assert_eq!(
 			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
 				.unwrap()
