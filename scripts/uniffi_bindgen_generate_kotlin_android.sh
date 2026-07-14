@@ -47,7 +47,7 @@ PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/$LLVM_ARCH_PATH/bin:$PATH"
 
 # Install the cargo-ndk version used by the mobile release scripts.
 CARGO_NDK_VERSION="3.5.4"
-if ! command -v cargo-ndk &> /dev/null || ! cargo ndk --version | grep -q "cargo-ndk $CARGO_NDK_VERSION"; then
+if ! command -v cargo-ndk &> /dev/null || ! cargo ndk --version | grep "cargo-ndk $CARGO_NDK_VERSION" >/dev/null; then
     echo "Installing cargo-ndk $CARGO_NDK_VERSION..."
     cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked --force
 fi
@@ -115,7 +115,7 @@ find_strip() {
 
 has_dwarf_debug_metadata() {
     for attempt in 1 2 3; do
-        if "$READELF_BIN" -S "$1" | grep -Eq '\.debug_info'; then
+        if "$READELF_BIN" -S "$1" | grep -E '\.debug_info' >/dev/null; then
             return 0
         fi
 
@@ -127,7 +127,7 @@ has_dwarf_debug_metadata() {
 }
 
 has_dwarf_sections() {
-    "$READELF_BIN" -S "$1" | grep -Eq '\.debug_'
+    "$READELF_BIN" -S "$1" | grep -E '\.debug_' >/dev/null
 }
 
 readelf_program_headers() {
