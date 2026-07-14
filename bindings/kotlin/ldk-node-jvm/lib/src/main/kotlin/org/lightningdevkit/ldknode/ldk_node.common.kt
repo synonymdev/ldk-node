@@ -933,7 +933,9 @@ data class CustomTlvRecord (
 @kotlinx.serialization.Serializable
 data class ElectrumSyncConfig (
     val `backgroundSyncConfig`: BackgroundSyncConfig?,
-    val `connectionTimeoutSecs`: kotlin.ULong
+    val `connectionTimeoutSecs`: kotlin.ULong,
+    val `additionalWalletFullScanBatchSize`: kotlin.UInt,
+    val `additionalWalletFullScanStopGap`: kotlin.UInt
 ) {
     companion object
 }

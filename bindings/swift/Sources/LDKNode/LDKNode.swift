@@ -5568,12 +5568,16 @@ public func FfiConverterTypeCustomTlvRecord_lower(_ value: CustomTlvRecord) -> R
 public struct ElectrumSyncConfig {
     public var backgroundSyncConfig: BackgroundSyncConfig?
     public var connectionTimeoutSecs: UInt64
+    public var additionalWalletFullScanBatchSize: UInt32
+    public var additionalWalletFullScanStopGap: UInt32
 
     /// Default memberwise initializers are never public by default, so we
     /// declare one manually.
-    public init(backgroundSyncConfig: BackgroundSyncConfig?, connectionTimeoutSecs: UInt64) {
+    public init(backgroundSyncConfig: BackgroundSyncConfig?, connectionTimeoutSecs: UInt64, additionalWalletFullScanBatchSize: UInt32, additionalWalletFullScanStopGap: UInt32) {
         self.backgroundSyncConfig = backgroundSyncConfig
         self.connectionTimeoutSecs = connectionTimeoutSecs
+        self.additionalWalletFullScanBatchSize = additionalWalletFullScanBatchSize
+        self.additionalWalletFullScanStopGap = additionalWalletFullScanStopGap
     }
 }
 
@@ -5585,12 +5589,20 @@ extension ElectrumSyncConfig: Equatable, Hashable {
         if lhs.connectionTimeoutSecs != rhs.connectionTimeoutSecs {
             return false
         }
+        if lhs.additionalWalletFullScanBatchSize != rhs.additionalWalletFullScanBatchSize {
+            return false
+        }
+        if lhs.additionalWalletFullScanStopGap != rhs.additionalWalletFullScanStopGap {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(backgroundSyncConfig)
         hasher.combine(connectionTimeoutSecs)
+        hasher.combine(additionalWalletFullScanBatchSize)
+        hasher.combine(additionalWalletFullScanStopGap)
     }
 }
 
@@ -5602,13 +5614,17 @@ public struct FfiConverterTypeElectrumSyncConfig: FfiConverterRustBuffer {
         return
             try ElectrumSyncConfig(
                 backgroundSyncConfig: FfiConverterOptionTypeBackgroundSyncConfig.read(from: &buf),
-                connectionTimeoutSecs: FfiConverterUInt64.read(from: &buf)
+                connectionTimeoutSecs: FfiConverterUInt64.read(from: &buf),
+                additionalWalletFullScanBatchSize: FfiConverterUInt32.read(from: &buf),
+                additionalWalletFullScanStopGap: FfiConverterUInt32.read(from: &buf)
             )
     }
 
     public static func write(_ value: ElectrumSyncConfig, into buf: inout [UInt8]) {
         FfiConverterOptionTypeBackgroundSyncConfig.write(value.backgroundSyncConfig, into: &buf)
         FfiConverterUInt64.write(value.connectionTimeoutSecs, into: &buf)
+        FfiConverterUInt32.write(value.additionalWalletFullScanBatchSize, into: &buf)
+        FfiConverterUInt32.write(value.additionalWalletFullScanStopGap, into: &buf)
     }
 }
 

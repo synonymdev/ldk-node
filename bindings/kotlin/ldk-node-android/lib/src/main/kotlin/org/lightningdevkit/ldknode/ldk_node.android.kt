@@ -9980,17 +9980,23 @@ object FfiConverterTypeElectrumSyncConfig: FfiConverterRustBuffer<ElectrumSyncCo
         return ElectrumSyncConfig(
             FfiConverterOptionalTypeBackgroundSyncConfig.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
         )
     }
 
     override fun allocationSize(value: ElectrumSyncConfig) = (
             FfiConverterOptionalTypeBackgroundSyncConfig.allocationSize(value.`backgroundSyncConfig`) +
-            FfiConverterULong.allocationSize(value.`connectionTimeoutSecs`)
+            FfiConverterULong.allocationSize(value.`connectionTimeoutSecs`) +
+            FfiConverterUInt.allocationSize(value.`additionalWalletFullScanBatchSize`) +
+            FfiConverterUInt.allocationSize(value.`additionalWalletFullScanStopGap`)
     )
 
     override fun write(value: ElectrumSyncConfig, buf: ByteBuffer) {
         FfiConverterOptionalTypeBackgroundSyncConfig.write(value.`backgroundSyncConfig`, buf)
         FfiConverterULong.write(value.`connectionTimeoutSecs`, buf)
+        FfiConverterUInt.write(value.`additionalWalletFullScanBatchSize`, buf)
+        FfiConverterUInt.write(value.`additionalWalletFullScanStopGap`, buf)
     }
 }
 
