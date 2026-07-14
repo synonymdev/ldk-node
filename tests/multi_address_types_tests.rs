@@ -733,7 +733,9 @@ mod send {
 	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
 
-	use crate::common::{setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource};
+	use crate::common::{
+		api_fee_rate, setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
+	};
 	use crate::helpers::{
 		confirm_and_sync, fund_and_sync, fund_multiple_and_sync, node_config, test_recipient,
 	};
@@ -803,7 +805,7 @@ mod send {
 		let custom_fee_rate = bitcoin::FeeRate::from_sat_per_kwu(800);
 		let txid = node
 			.onchain_payment()
-			.send_to_address(&test_recipient(), 50_000, Some(custom_fee_rate), None)
+			.send_to_address(&test_recipient(), 50_000, Some(api_fee_rate(custom_fee_rate)), None)
 			.expect("Send with custom fee rate should succeed");
 
 		wait_for_tx(&electrsd.client, txid).await;
@@ -1030,7 +1032,7 @@ mod send {
 		let custom_fee_rate = bitcoin::FeeRate::from_sat_per_kwu(1000);
 		let txid = node
 			.onchain_payment()
-			.send_all_to_address(&test_recipient(), true, Some(custom_fee_rate))
+			.send_all_to_address(&test_recipient(), true, Some(api_fee_rate(custom_fee_rate)))
 			.expect("send_all with custom fee rate should succeed");
 
 		wait_for_tx(&electrsd.client, txid).await;
@@ -1119,7 +1121,7 @@ mod send {
 			.onchain_payment()
 			.select_utxos_with_algorithm(
 				140_000,
-				Some(FeeRate::from_sat_per_kwu(500)),
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(500))),
 				ldk_node::CoinSelectionAlgorithm::LargestFirst,
 				None,
 			)
@@ -1804,7 +1806,9 @@ mod rbf {
 	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
 
-	use crate::common::{setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource};
+	use crate::common::{
+		api_fee_rate, setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
+	};
 	use crate::helpers::{
 		confirm_and_sync, fake_txid_for_error_tests, fund_and_sync, fund_multiple_and_sync,
 		node_config, test_recipient,
@@ -1845,7 +1849,7 @@ mod rbf {
 		let higher_fee_rate = FeeRate::from_sat_per_kwu(1000);
 		let rbf_txid = node
 			.onchain_payment()
-			.bump_fee_by_rbf(&initial_txid, higher_fee_rate)
+			.bump_fee_by_rbf(&initial_txid, api_fee_rate(higher_fee_rate))
 			.expect("RBF should succeed");
 
 		assert_ne!(initial_txid, rbf_txid);
@@ -1889,7 +1893,7 @@ mod rbf {
 		let higher_fee_rate = FeeRate::from_sat_per_kwu(2000);
 		let rbf_txid = node
 			.onchain_payment()
-			.bump_fee_by_rbf(&initial_txid, higher_fee_rate)
+			.bump_fee_by_rbf(&initial_txid, api_fee_rate(higher_fee_rate))
 			.expect("Cross-wallet RBF should succeed");
 
 		assert_ne!(initial_txid, rbf_txid);
@@ -1961,7 +1965,7 @@ mod rbf {
 
 		let rbf_txid = node
 			.onchain_payment()
-			.bump_fee_by_rbf(&initial_txid, FeeRate::from_sat_per_kwu(2000))
+			.bump_fee_by_rbf(&initial_txid, api_fee_rate(FeeRate::from_sat_per_kwu(2000)))
 			.expect("RBF with all 4 types should succeed");
 
 		assert_ne!(initial_txid, rbf_txid);
@@ -2015,7 +2019,7 @@ mod rbf {
 		let high_fee_rate = FeeRate::from_sat_per_kwu(5000);
 		let rbf_txid = node
 			.onchain_payment()
-			.bump_fee_by_rbf(&initial_txid, high_fee_rate)
+			.bump_fee_by_rbf(&initial_txid, api_fee_rate(high_fee_rate))
 			.expect("RBF with added inputs should succeed");
 
 		assert_ne!(initial_txid, rbf_txid);
@@ -2070,7 +2074,7 @@ mod rbf {
 		let high_fee_rate = FeeRate::from_sat_per_kwu(50_000);
 		let rbf_txid = node
 			.onchain_payment()
-			.bump_fee_by_rbf(&initial_txid, high_fee_rate)
+			.bump_fee_by_rbf(&initial_txid, api_fee_rate(high_fee_rate))
 			.expect("RBF should add Legacy input");
 
 		assert_ne!(initial_txid, rbf_txid);
@@ -2120,7 +2124,7 @@ mod rbf {
 		// High fee forces adding the remaining Legacy UTXO.
 		let rbf_txid = node
 			.onchain_payment()
-			.bump_fee_by_rbf(&txid, FeeRate::from_sat_per_kwu(25_000))
+			.bump_fee_by_rbf(&txid, api_fee_rate(FeeRate::from_sat_per_kwu(25_000)))
 			.expect("Cross-wallet RBF with extra input should succeed");
 
 		wait_for_tx(&electrsd.client, rbf_txid).await;
@@ -2154,7 +2158,7 @@ mod rbf {
 
 		let rbf_txid = node
 			.onchain_payment()
-			.bump_fee_by_rbf(&initial_txid, FeeRate::from_sat_per_kwu(1000))
+			.bump_fee_by_rbf(&initial_txid, api_fee_rate(FeeRate::from_sat_per_kwu(1000)))
 			.expect("RBF should succeed for Legacy primary");
 
 		assert_ne!(initial_txid, rbf_txid);
@@ -2179,13 +2183,15 @@ mod rbf {
 		let initial_fee_rate = FeeRate::from_sat_per_kwu(2000);
 		let txid = node
 			.onchain_payment()
-			.send_to_address(&test_recipient(), 50_000, Some(initial_fee_rate), None)
+			.send_to_address(&test_recipient(), 50_000, Some(api_fee_rate(initial_fee_rate)), None)
 			.unwrap();
 
 		wait_for_tx(&electrsd.client, txid).await;
 		node.sync_wallets().unwrap();
 
-		let result = node.onchain_payment().bump_fee_by_rbf(&txid, FeeRate::from_sat_per_kwu(1000));
+		let result = node
+			.onchain_payment()
+			.bump_fee_by_rbf(&txid, api_fee_rate(FeeRate::from_sat_per_kwu(1000)));
 		assert!(result.is_err());
 
 		node.stop().unwrap();
@@ -2208,7 +2214,9 @@ mod rbf {
 		wait_for_tx(&electrsd.client, txid).await;
 		confirm_and_sync(&bitcoind, &electrsd, 1, &[&node]).await;
 
-		let result = node.onchain_payment().bump_fee_by_rbf(&txid, FeeRate::from_sat_per_kwu(5000));
+		let result = node
+			.onchain_payment()
+			.bump_fee_by_rbf(&txid, api_fee_rate(FeeRate::from_sat_per_kwu(5000)));
 		assert!(result.is_err());
 
 		node.stop().unwrap();
@@ -2225,9 +2233,10 @@ mod rbf {
 		let addr = node.onchain_payment().new_address().unwrap();
 		fund_and_sync(&bitcoind, &electrsd, &node, addr, 100_000).await;
 
-		let result = node
-			.onchain_payment()
-			.bump_fee_by_rbf(&fake_txid_for_error_tests(), FeeRate::from_sat_per_kwu(2000));
+		let result = node.onchain_payment().bump_fee_by_rbf(
+			&fake_txid_for_error_tests(),
+			api_fee_rate(FeeRate::from_sat_per_kwu(2000)),
+		);
 		assert!(result.is_err());
 
 		node.stop().unwrap();
@@ -2249,8 +2258,9 @@ mod rbf {
 		wait_for_tx(&electrsd.client, txid).await;
 		node.sync_wallets().unwrap();
 
-		let result =
-			node.onchain_payment().bump_fee_by_rbf(&txid, FeeRate::from_sat_per_kwu(100_000));
+		let result = node
+			.onchain_payment()
+			.bump_fee_by_rbf(&txid, api_fee_rate(FeeRate::from_sat_per_kwu(100_000)));
 		assert!(result.is_err());
 
 		node.stop().unwrap();
@@ -2274,7 +2284,9 @@ mod rbf {
 		node.sync_wallets().unwrap();
 		std::thread::sleep(std::time::Duration::from_millis(500));
 
-		let result = node.onchain_payment().bump_fee_by_rbf(&txid, FeeRate::from_sat_per_kwu(5000));
+		let result = node
+			.onchain_payment()
+			.bump_fee_by_rbf(&txid, api_fee_rate(FeeRate::from_sat_per_kwu(5000)));
 		assert!(result.is_err(), "RBF on send-all (no change) should fail");
 
 		node.stop().unwrap();
@@ -2289,7 +2301,9 @@ mod cpfp {
 	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
 
-	use crate::common::{setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource};
+	use crate::common::{
+		api_fee_rate, setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
+	};
 	use crate::helpers::{
 		confirm_and_sync, fake_txid_for_error_tests, fund_and_sync, fund_multiple_and_sync,
 		node_config, test_recipient,
@@ -2322,7 +2336,7 @@ mod cpfp {
 		let cpfp_fee_rate = FeeRate::from_sat_per_kwu(1500);
 		let cpfp_txid = node
 			.onchain_payment()
-			.accelerate_by_cpfp(&parent_txid, Some(cpfp_fee_rate), None)
+			.accelerate_by_cpfp(&parent_txid, Some(api_fee_rate(cpfp_fee_rate)), None)
 			.unwrap();
 
 		assert_ne!(parent_txid, cpfp_txid);
@@ -2364,7 +2378,11 @@ mod cpfp {
 
 		let cpfp_txid = node
 			.onchain_payment()
-			.accelerate_by_cpfp(&parent_txid, Some(FeeRate::from_sat_per_kwu(1500)), None)
+			.accelerate_by_cpfp(
+				&parent_txid,
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(1500))),
+				None,
+			)
 			.expect("CPFP should work for cross-wallet transactions");
 
 		assert_ne!(parent_txid, cpfp_txid);
@@ -2421,7 +2439,11 @@ mod cpfp {
 
 		let cpfp_txid = node
 			.onchain_payment()
-			.accelerate_by_cpfp(&parent_txid, Some(FeeRate::from_sat_per_kwu(1500)), None)
+			.accelerate_by_cpfp(
+				&parent_txid,
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(1500))),
+				None,
+			)
 			.expect("CPFP with all 4 types should succeed");
 
 		assert_ne!(parent_txid, cpfp_txid);
@@ -2465,7 +2487,11 @@ mod cpfp {
 
 		let cpfp_txid = node
 			.onchain_payment()
-			.accelerate_by_cpfp(&parent_txid, Some(FeeRate::from_sat_per_kwu(1500)), None)
+			.accelerate_by_cpfp(
+				&parent_txid,
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(1500))),
+				None,
+			)
 			.expect("CPFP should succeed for Legacy primary");
 
 		assert_ne!(parent_txid, cpfp_txid);
@@ -2527,7 +2553,8 @@ mod coin_selection {
 	use ldk_node::config::AddressType;
 
 	use crate::common::{
-		open_channel, setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
+		api_fee_rate, open_channel, setup_bitcoind_and_electrsd, setup_node, wait_for_tx,
+		TestChainSource,
 	};
 	use crate::helpers::{
 		fund_and_sync, fund_multiple_and_sync, fund_peer_node_and_sync, node_config,
@@ -2558,7 +2585,7 @@ mod coin_selection {
 			.onchain_payment()
 			.select_utxos_with_algorithm(
 				100_000,
-				Some(FeeRate::from_sat_per_kwu(500)),
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(500))),
 				ldk_node::CoinSelectionAlgorithm::LargestFirst,
 				None,
 			)
@@ -2626,7 +2653,7 @@ mod coin_selection {
 			.calculate_total_fee(
 				&test_recipient(),
 				100_000,
-				Some(FeeRate::from_sat_per_kwu(500)),
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(500))),
 				None,
 			)
 			.unwrap();
@@ -2774,7 +2801,7 @@ mod coin_selection {
 		// High fee rate forces adding 1 Legacy UTXO.
 		let rbf_txid = node
 			.onchain_payment()
-			.bump_fee_by_rbf(&txid, FeeRate::from_sat_per_kwu(50_000))
+			.bump_fee_by_rbf(&txid, api_fee_rate(FeeRate::from_sat_per_kwu(50_000)))
 			.expect("RBF should succeed by adding Legacy input");
 
 		wait_for_tx(&electrsd.client, rbf_txid).await;
@@ -2833,7 +2860,9 @@ mod coin_selection {
 mod dynamic_address_type_changes {
 	use ldk_node::config::AddressType;
 
-	use crate::common::{setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource};
+	use crate::common::{
+		api_seed_bytes, setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
+	};
 	use crate::helpers::{
 		confirm_and_sync, fund_and_sync, node_config, read_node_seed, test_recipient,
 	};
@@ -2850,7 +2879,11 @@ mod dynamic_address_type_changes {
 		assert_eq!(monitored.len(), 1);
 		assert!(monitored.contains(&AddressType::NativeSegwit));
 
-		node.add_address_type_to_monitor(AddressType::Legacy, read_node_seed(&node)).unwrap();
+		node.add_address_type_to_monitor(
+			AddressType::Legacy,
+			api_seed_bytes(read_node_seed(&node)),
+		)
+		.unwrap();
 
 		let monitored = node.list_monitored_address_types();
 		assert!(monitored.contains(&AddressType::Legacy));
@@ -2870,7 +2903,11 @@ mod dynamic_address_type_changes {
 		let config = node_config(AddressType::NativeSegwit, vec![]);
 		let node = setup_node(&chain_source, config, None);
 
-		node.add_address_type_to_monitor(AddressType::Taproot, read_node_seed(&node)).unwrap();
+		node.add_address_type_to_monitor(
+			AddressType::Taproot,
+			api_seed_bytes(read_node_seed(&node)),
+		)
+		.unwrap();
 		let taproot_addr =
 			node.onchain_payment().new_address_for_type(AddressType::Taproot).unwrap();
 		assert!(taproot_addr.script_pubkey().is_p2tr());
@@ -2886,7 +2923,11 @@ mod dynamic_address_type_changes {
 		let config = node_config(AddressType::NativeSegwit, vec![]);
 		let node = setup_node(&chain_source, config, None);
 
-		node.add_address_type_to_monitor(AddressType::Legacy, read_node_seed(&node)).unwrap();
+		node.add_address_type_to_monitor(
+			AddressType::Legacy,
+			api_seed_bytes(read_node_seed(&node)),
+		)
+		.unwrap();
 		let legacy_addr = node.onchain_payment().new_address_for_type(AddressType::Legacy).unwrap();
 
 		fund_and_sync(&bitcoind, &electrsd, &node, legacy_addr, 100_000).await;
@@ -2905,8 +2946,10 @@ mod dynamic_address_type_changes {
 		let config = node_config(AddressType::NativeSegwit, vec![]);
 		let node = setup_node(&chain_source, config, None);
 
-		let result =
-			node.add_address_type_to_monitor(AddressType::NativeSegwit, read_node_seed(&node));
+		let result = node.add_address_type_to_monitor(
+			AddressType::NativeSegwit,
+			api_seed_bytes(read_node_seed(&node)),
+		);
 		assert_eq!(result, Err(ldk_node::NodeError::AddressTypeIsPrimary));
 
 		node.stop().unwrap();
@@ -2920,7 +2963,11 @@ mod dynamic_address_type_changes {
 		let config = node_config(AddressType::NativeSegwit, vec![]);
 		let node = setup_node(&chain_source, config, None);
 
-		node.add_address_type_to_monitor(AddressType::NestedSegwit, read_node_seed(&node)).unwrap();
+		node.add_address_type_to_monitor(
+			AddressType::NestedSegwit,
+			api_seed_bytes(read_node_seed(&node)),
+		)
+		.unwrap();
 		let nested_addr =
 			node.onchain_payment().new_address_for_type(AddressType::NestedSegwit).unwrap();
 		assert!(nested_addr.script_pubkey().is_p2sh());
@@ -2936,7 +2983,10 @@ mod dynamic_address_type_changes {
 		let config = node_config(AddressType::NativeSegwit, vec![AddressType::Legacy]);
 		let node = setup_node(&chain_source, config, None);
 
-		let result = node.add_address_type_to_monitor(AddressType::Legacy, read_node_seed(&node));
+		let result = node.add_address_type_to_monitor(
+			AddressType::Legacy,
+			api_seed_bytes(read_node_seed(&node)),
+		);
 		assert_eq!(result, Err(ldk_node::NodeError::AddressTypeAlreadyMonitored));
 
 		node.stop().unwrap();
@@ -2976,7 +3026,11 @@ mod dynamic_address_type_changes {
 		node.remove_address_type_from_monitor(AddressType::Legacy).unwrap();
 		assert!(node.get_balance_for_address_type(AddressType::Legacy).is_err());
 
-		node.add_address_type_to_monitor(AddressType::Legacy, read_node_seed(&node)).unwrap();
+		node.add_address_type_to_monitor(
+			AddressType::Legacy,
+			api_seed_bytes(read_node_seed(&node)),
+		)
+		.unwrap();
 		node.sync_wallets().unwrap();
 		let balance_after = node.get_balance_for_address_type(AddressType::Legacy).unwrap();
 		assert!(balance_after.total_sats >= 49_000);
@@ -3023,7 +3077,8 @@ mod dynamic_address_type_changes {
 		let addr_before = node.onchain_payment().new_address().unwrap();
 		assert!(addr_before.script_pubkey().is_p2wpkh());
 
-		node.set_primary_address_type(AddressType::Legacy, read_node_seed(&node)).unwrap();
+		node.set_primary_address_type(AddressType::Legacy, api_seed_bytes(read_node_seed(&node)))
+			.unwrap();
 
 		let addr_after = node.onchain_payment().new_address().unwrap();
 		assert!(addr_after.script_pubkey().is_p2pkh());
@@ -3040,7 +3095,8 @@ mod dynamic_address_type_changes {
 		let node = setup_node(&chain_source, config, None);
 
 		// Taproot not loaded; set_primary should auto-load it
-		node.set_primary_address_type(AddressType::Taproot, read_node_seed(&node)).unwrap();
+		node.set_primary_address_type(AddressType::Taproot, api_seed_bytes(read_node_seed(&node)))
+			.unwrap();
 
 		let addr = node.onchain_payment().new_address().unwrap();
 		assert!(addr.script_pubkey().is_p2tr());
@@ -3061,7 +3117,11 @@ mod dynamic_address_type_changes {
 		let node = setup_node(&chain_source, config, None);
 
 		// Setting to current primary should succeed (no-op)
-		node.set_primary_address_type(AddressType::NativeSegwit, read_node_seed(&node)).unwrap();
+		node.set_primary_address_type(
+			AddressType::NativeSegwit,
+			api_seed_bytes(read_node_seed(&node)),
+		)
+		.unwrap();
 
 		let addr = node.onchain_payment().new_address().unwrap();
 		assert!(addr.script_pubkey().is_p2wpkh());
@@ -3082,11 +3142,16 @@ mod dynamic_address_type_changes {
 		assert!(node.list_monitored_address_types().contains(&AddressType::NativeSegwit));
 
 		// Swap to Legacy
-		node.set_primary_address_type(AddressType::Legacy, read_node_seed(&node)).unwrap();
+		node.set_primary_address_type(AddressType::Legacy, api_seed_bytes(read_node_seed(&node)))
+			.unwrap();
 		assert!(node.onchain_payment().new_address().unwrap().script_pubkey().is_p2pkh());
 
 		// Swap back to NativeSegwit
-		node.set_primary_address_type(AddressType::NativeSegwit, read_node_seed(&node)).unwrap();
+		node.set_primary_address_type(
+			AddressType::NativeSegwit,
+			api_seed_bytes(read_node_seed(&node)),
+		)
+		.unwrap();
 		assert!(node.onchain_payment().new_address().unwrap().script_pubkey().is_p2wpkh());
 
 		// Both types should still be loaded; Legacy should be in monitored again
@@ -3107,7 +3172,8 @@ mod dynamic_address_type_changes {
 		let node = setup_node(&chain_source, config, None);
 
 		// set_primary auto-loads Taproot
-		node.set_primary_address_type(AddressType::Taproot, read_node_seed(&node)).unwrap();
+		node.set_primary_address_type(AddressType::Taproot, api_seed_bytes(read_node_seed(&node)))
+			.unwrap();
 		let taproot_addr = node.onchain_payment().new_address().unwrap();
 		fund_and_sync(&bitcoind, &electrsd, &node, taproot_addr, 100_000).await;
 
@@ -3137,7 +3203,11 @@ mod dynamic_address_type_changes {
 
 		// Briefly load Taproot to obtain an address, then remove it so no sync timestamp is
 		// recorded for it.
-		node.add_address_type_to_monitor(AddressType::Taproot, read_node_seed(&node)).unwrap();
+		node.add_address_type_to_monitor(
+			AddressType::Taproot,
+			api_seed_bytes(read_node_seed(&node)),
+		)
+		.unwrap();
 		let taproot_addr =
 			node.onchain_payment().new_address_for_type(AddressType::Taproot).unwrap();
 		node.remove_address_type_from_monitor(AddressType::Taproot).unwrap();
@@ -3148,7 +3218,8 @@ mod dynamic_address_type_changes {
 
 		// Switching primary to an unsynced type clears the primary sync timestamp, forcing a
 		// full scan on the next cycle.
-		node.set_primary_address_type(AddressType::Taproot, read_node_seed(&node)).unwrap();
+		node.set_primary_address_type(AddressType::Taproot, api_seed_bytes(read_node_seed(&node)))
+			.unwrap();
 		node.sync_wallets().unwrap();
 
 		let taproot_balance = node.get_balance_for_address_type(AddressType::Taproot).unwrap();
@@ -3162,7 +3233,10 @@ mod dynamic_address_type_changes {
 // Event deduplication and payment direction
 // ---------------------------------------------------------------------------
 mod events {
+	use std::time::Duration;
+
 	use bitcoin::Txid;
+	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
 	use ldk_node::payment::{PaymentDirection, PaymentKind};
 	use ldk_node::{Event, Node};
@@ -3201,12 +3275,33 @@ mod events {
 		)
 	}
 
-	/// Returns the count of `OnchainTransactionReorged` events matching `expected`.
-	fn count_reorged(node: &Node, expected: Txid) -> usize {
-		count_events(
-			node,
-			|e| matches!(e, Event::OnchainTransactionReorged { txid, .. } if *txid == expected),
-		)
+	fn count_reorg_and_confirmation_events(node: &Node, expected: Txid) -> (usize, usize) {
+		let mut reorged = 0;
+		let mut confirmed = 0;
+		while let Some(event) = node.next_event() {
+			match event {
+				Event::OnchainTransactionReorged { txid } if txid == expected => reorged += 1,
+				Event::OnchainTransactionConfirmed { txid, .. } if txid == expected => {
+					confirmed += 1
+				},
+				_ => {},
+			}
+			node.event_handled().unwrap();
+		}
+		(reorged, confirmed)
+	}
+
+	async fn wait_for_unconfirmed_transaction(electrs: &impl ElectrumApi, expected: Txid) {
+		let script = test_recipient().script_pubkey();
+		for _ in 0..300 {
+			if let Ok(history) = electrs.script_get_history(&script) {
+				if history.iter().any(|entry| entry.tx_hash == expected && entry.height <= 0) {
+					return;
+				}
+			}
+			tokio::time::sleep(Duration::from_millis(100)).await;
+		}
+		panic!("transaction {expected} did not become unconfirmed");
 	}
 
 	/// Cross-wallet send must emit exactly one `OnchainTransactionReceived`, not one per wallet.
@@ -3326,9 +3421,9 @@ mod events {
 		node.stop().unwrap();
 	}
 
-	/// After a reorg, neither reorg nor re-confirm events must be duplicated across wallets.
+	/// Re-confirmation after a reorg must not be duplicated across wallets.
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-	async fn test_cross_wallet_reorg_deduplicates_events() {
+	async fn test_cross_wallet_reorg_reconfirmation_is_deduplicated() {
 		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 		let chain_source = TestChainSource::Esplora(&electrsd);
 
@@ -3360,20 +3455,28 @@ mod events {
 		let n_confirmed_first = count_confirmed(&node, txid);
 		assert_eq!(n_confirmed_first, 1, "expected 1 confirmed event before reorg");
 
-		// Reorg the block away; the tx re-confirms in the replacement block.
+		// Mine an empty replacement block so the transaction remains unconfirmed.
 		invalidate_blocks(&bitcoind.client, 1);
+		let block_address = bitcoind.client.new_address().unwrap();
+		bitcoind.client.generate_block(&block_address.to_string(), &[], true).unwrap();
+		wait_for_unconfirmed_transaction(&electrsd.client, txid).await;
+		node.sync_wallets().unwrap();
+
+		let (n_reorged, n_confirmed_during_reorg) =
+			count_reorg_and_confirmation_events(&node, txid);
+		assert_eq!(n_reorged, 1, "expected one OnchainTransactionReorged event");
+		assert_eq!(n_confirmed_during_reorg, 0, "transaction must be unconfirmed after reorg");
+
+		// Mine the transaction again and verify the confirmation is also deduplicated.
 		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
 		node.sync_wallets().unwrap();
 
-		let n_reorged = count_reorged(&node, txid);
-		let n_confirmed_2 = count_confirmed(&node, txid);
-		assert!(
-			n_reorged <= 1,
-			"OnchainTransactionReorged must not be duplicated, got {n_reorged}"
-		);
-		assert!(
-			n_confirmed_2 <= 1,
-			"OnchainTransactionConfirmed must not be duplicated after reorg, got {n_confirmed_2}"
+		let (n_reorged_after_confirmation, n_confirmed_2) =
+			count_reorg_and_confirmation_events(&node, txid);
+		assert_eq!(n_reorged_after_confirmation, 0);
+		assert_eq!(
+			n_confirmed_2, 1,
+			"expected one OnchainTransactionConfirmed after reorg, got {n_confirmed_2}"
 		);
 
 		node.stop().unwrap();
@@ -3449,12 +3552,14 @@ mod events {
 // Derived on-chain wallet accounts
 // ---------------------------------------------------------------------------
 mod derived_accounts {
+	#[cfg(feature = "uniffi")]
+	use std::sync::Arc;
 	use std::time::{Duration, SystemTime, UNIX_EPOCH};
 	use std::{env, str::FromStr};
 
 	use bitcoin::bip32::{ChildNumber, Xpub};
 	use bitcoin::secp256k1::Secp256k1;
-	use bitcoin::{Address, Amount, CompressedPublicKey, Network};
+	use bitcoin::{Address, Amount, CompressedPublicKey, FeeRate, Network};
 	use electrsd::corepc_node::{Conf as BitcoindConf, Node as BitcoinD};
 	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
@@ -3479,6 +3584,16 @@ mod derived_accounts {
 	#[cfg(feature = "uniffi")]
 	fn api_seed_bytes(seed: [u8; 64]) -> Vec<u8> {
 		seed.to_vec()
+	}
+
+	#[cfg(not(feature = "uniffi"))]
+	fn api_fee_rate(fee_rate: FeeRate) -> FeeRate {
+		fee_rate
+	}
+
+	#[cfg(feature = "uniffi")]
+	fn api_fee_rate(fee_rate: FeeRate) -> Arc<FeeRate> {
+		Arc::new(fee_rate)
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -3528,6 +3643,64 @@ mod derived_accounts {
 		let primary_after =
 			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 0).unwrap();
 		assert!(primary_after.total_sats > 0);
+
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_rbf_preserves_derived_recipient_and_uses_existing_funds() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+
+		let primary_address = node.onchain_payment().new_address().unwrap();
+		let derived_funding_address =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
+		let derived_recipient =
+			node.onchain_payment().new_address_for_account(AddressType::NativeSegwit, 1).unwrap();
+		fund_multiple_and_sync(
+			&bitcoind,
+			&electrsd,
+			&node,
+			vec![(primary_address, 55_000), (derived_funding_address, 60_000)],
+		)
+		.await;
+
+		let spendable = node.onchain_payment().list_spendable_outputs().unwrap();
+		let primary_utxo = spendable.iter().find(|utxo| utxo.value_sats == 55_000).unwrap().clone();
+		let derived_utxo = spendable.iter().find(|utxo| utxo.value_sats == 60_000).unwrap().clone();
+		let original_txid = node
+			.onchain_payment()
+			.send_to_address(
+				&derived_recipient,
+				50_000,
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(250))),
+				Some(vec![primary_utxo]),
+			)
+			.unwrap();
+		wait_for_tx(&electrsd.client, original_txid).await;
+		node.sync_wallets().unwrap();
+
+		let replacement_txid = node
+			.onchain_payment()
+			.bump_fee_by_rbf(&original_txid, api_fee_rate(FeeRate::from_sat_per_kwu(25_000)))
+			.unwrap();
+		wait_for_tx(&electrsd.client, replacement_txid).await;
+		let replacement = electrsd.client.transaction_get(&replacement_txid).unwrap();
+
+		assert!(replacement
+			.input
+			.iter()
+			.any(|input| input.previous_output == derived_utxo.outpoint));
+		assert!(replacement.input.iter().all(|input| input.previous_output.txid != original_txid));
+		assert!(replacement.output.iter().any(|output| {
+			output.script_pubkey == derived_recipient.script_pubkey()
+				&& output.value == Amount::from_sat(50_000)
+		}));
 
 		node.stop().unwrap();
 	}

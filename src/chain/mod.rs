@@ -119,6 +119,7 @@ fn check_evicted_transactions(
 ) -> Vec<Txid> {
 	let current_unconfirmed_txids: std::collections::HashSet<Txid> =
 		wallet.get_unconfirmed_txids().into_iter().collect();
+	let transaction_confirmations = wallet.transaction_confirmations();
 
 	let mut evicted_txids = Vec::new();
 	for txid in prev_unconfirmed_txids {
@@ -129,7 +130,7 @@ fn check_evicted_transactions(
 
 		// Check if transaction is confirmed in wallet
 		// If it's confirmed, it wasn't evicted - it was included in a block
-		if wallet.is_tx_confirmed(&txid) {
+		if transaction_confirmations.contains_key(&txid) {
 			continue;
 		}
 
@@ -174,11 +175,11 @@ fn get_transaction_details(
 pub(super) fn collect_additional_sync_requests(
 	additional_accounts: &[OnchainWalletAccount], onchain_wallet: &Wallet,
 	node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
-) -> Vec<(OnchainWalletAccount, WalletSyncRequest)> {
+) -> Result<Vec<(OnchainWalletAccount, WalletSyncRequest)>, Error> {
 	additional_accounts
 		.iter()
 		.copied()
-		.filter_map(|wallet_account| {
+		.map(|wallet_account| {
 			let do_incremental =
 				should_use_incremental_sync(wallet_account, onchain_wallet, node_metrics);
 			let request = if do_incremental {
@@ -190,13 +191,10 @@ pub(super) fn collect_additional_sync_requests(
 					.get_wallet_full_scan_request(wallet_account)
 					.map(WalletSyncRequest::FullScan)
 			};
-			match request {
-				Ok(req) => Some((wallet_account, req)),
-				Err(e) => {
-					log_info!(logger, "Skipping sync for wallet {:?}: {}", wallet_account, e);
-					None
-				},
-			}
+			request.map(|request| (wallet_account, request)).map_err(|e| {
+				log_warn!(logger, "Failed to build sync request for {:?}: {}", wallet_account, e);
+				Error::WalletOperationFailed
+			})
 		})
 		.collect()
 }
@@ -212,46 +210,183 @@ fn should_use_incremental_sync(
 	}
 }
 
-/// Returns `(events, any_applied)` where `any_applied` is true if at least one
-/// additional wallet update was successfully applied.
+pub(super) struct AdditionalSyncOutcome {
+	pub(super) events: Vec<BdkWalletEvent>,
+	pub(super) any_applied: bool,
+	pub(super) error: Option<Error>,
+}
+
+pub(super) struct WalletSyncOutcome {
+	pub(super) events: Vec<BdkWalletEvent>,
+	pub(super) error: Option<Error>,
+}
+
+impl WalletSyncOutcome {
+	pub(super) fn new(events: Vec<BdkWalletEvent>, error: Option<Error>) -> Self {
+		Self { events, error }
+	}
+
+	pub(super) fn failed(error: Error) -> Self {
+		Self { events: Vec::new(), error: Some(error) }
+	}
+
+	pub(super) fn result(&self) -> Result<(), Error> {
+		self.error.map_or(Ok(()), Err)
+	}
+}
+
+pub(super) struct AppliedWalletSyncOutcome {
+	pub(super) events: Vec<BdkWalletEvent>,
+	pub(super) any_applied: bool,
+	pub(super) primary_applied: bool,
+	pub(super) error: Option<Error>,
+}
+
 pub(super) fn apply_additional_sync_results(
-	results: Vec<(OnchainWalletAccount, Option<BdkUpdate>)>, onchain_wallet: &Wallet,
+	results: Vec<(OnchainWalletAccount, Result<BdkUpdate, Error>)>, onchain_wallet: &Wallet,
 	node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
-) -> (Vec<BdkWalletEvent>, bool) {
+) -> AdditionalSyncOutcome {
 	let mut events = Vec::new();
 	let mut any_applied = false;
-	for (wallet_account, update_opt) in results {
-		if let Some(update) = update_opt {
-			match onchain_wallet.apply_update_for_wallet_account(wallet_account, update) {
-				Ok(wallet_events) => {
-					any_applied = true;
-					if let Some(ts) =
-						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
-					{
-						node_metrics.write().unwrap().set_wallet_sync_timestamp(wallet_account, ts);
-					}
-					if wallet_account.account_index != 0 {
-						onchain_wallet.mark_derived_account_synced(wallet_account);
-					}
-					events.extend(wallet_events);
-				},
-				Err(e) => {
-					log_warn!(
-						logger,
-						"Failed to apply update to wallet {:?}: {}",
-						wallet_account,
-						e
-					);
-				},
-			}
+	let mut error = None;
+	for (wallet_account, result) in results {
+		let update = match result {
+			Ok(update) => update,
+			Err(e) => {
+				log_warn!(logger, "Failed to sync wallet {:?}: {}", wallet_account, e);
+				error.get_or_insert(e);
+				continue;
+			},
+		};
+
+		match onchain_wallet.apply_update_for_wallet_account(wallet_account, update) {
+			Ok(wallet_events) => {
+				any_applied = true;
+				if let Some(ts) =
+					SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+				{
+					node_metrics.write().unwrap().set_wallet_sync_timestamp(wallet_account, ts);
+				}
+				if wallet_account.account_index != 0 {
+					onchain_wallet.mark_derived_account_synced(wallet_account);
+				}
+				events.extend(wallet_events);
+			},
+			Err(e) => {
+				log_warn!(logger, "Failed to apply update to wallet {:?}: {}", wallet_account, e);
+				error.get_or_insert(e);
+			},
 		}
 	}
 
-	(events, any_applied)
+	AdditionalSyncOutcome { events, any_applied, error }
+}
+
+pub(super) fn apply_wallet_sync_results(
+	primary_update: Option<BdkUpdate>, primary_error: Option<Error>, task_error: Option<Error>,
+	additional_results: Vec<(OnchainWalletAccount, Result<BdkUpdate, Error>)>,
+	onchain_wallet: &Wallet, node_metrics: &Arc<RwLock<NodeMetrics>>, logger: &Arc<Logger>,
+) -> AppliedWalletSyncOutcome {
+	let mut events = Vec::new();
+	let mut primary_applied = false;
+	let mut error = primary_error;
+
+	if let Some(update) = primary_update {
+		match onchain_wallet.apply_update(update) {
+			Ok(wallet_events) => {
+				primary_applied = true;
+				node_metrics.write().unwrap().latest_onchain_wallet_sync_timestamp =
+					SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
+				events.extend(wallet_events);
+			},
+			Err(e) => {
+				log_warn!(logger, "Failed to apply primary wallet update: {}", e);
+				error.get_or_insert(e);
+			},
+		}
+	}
+
+	error = error.or(task_error);
+	let additional_outcome =
+		apply_additional_sync_results(additional_results, onchain_wallet, node_metrics, logger);
+	events.extend(additional_outcome.events);
+	error = error.or(additional_outcome.error);
+
+	AppliedWalletSyncOutcome {
+		events,
+		any_applied: primary_applied || additional_outcome.any_applied,
+		primary_applied,
+		error,
+	}
+}
+
+#[cfg(test)]
+mod sync_tests {
+	use std::sync::Arc;
+
+	use bdk_chain::{BlockId, CheckPoint};
+	use bitcoin::blockdata::constants::genesis_block;
+	use bitcoin::{hashes::Hash as _, Network};
+
+	use super::*;
+	use crate::builder::NodeBuilder;
+	use crate::config::{AddressType, Config};
+	use crate::io::test_utils::InMemoryStore;
+	use crate::types::DynStore;
+
+	#[test]
+	fn successful_primary_update_is_applied_when_a_secondary_fetch_fails() {
+		let mut config = Config::default();
+		config.network = Network::Regtest;
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes([42u8; 64]);
+		builder.set_log_facade_logger();
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = builder.build_with_store(store).unwrap();
+		let secondary =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let genesis = genesis_block(Network::Regtest);
+		let next_block = BlockId { height: 1, hash: bitcoin::BlockHash::from_byte_array([1; 32]) };
+		let checkpoint = CheckPoint::new(BlockId { height: 0, hash: genesis.block_hash() })
+			.push(next_block)
+			.unwrap();
+		let primary_update = BdkUpdate { chain: Some(checkpoint), ..Default::default() };
+
+		let outcome = apply_wallet_sync_results(
+			Some(primary_update),
+			None,
+			None,
+			vec![(secondary, Err(Error::WalletOperationTimeout))],
+			&node.wallet,
+			&node.node_metrics,
+			&node.logger,
+		);
+
+		assert!(outcome.primary_applied);
+		assert!(outcome.any_applied);
+		assert!(matches!(outcome.events.as_slice(), [BdkWalletEvent::ChainTipChanged { .. }]));
+		assert_eq!(outcome.error, Some(Error::WalletOperationTimeout));
+		assert_eq!(node.wallet.current_best_block().height, 1);
+		assert!(node.node_metrics.read().unwrap().latest_onchain_wallet_sync_timestamp.is_some());
+	}
+
+	#[test]
+	fn wallet_sync_outcome_preserves_events_on_failure() {
+		let block = bitcoin::BlockHash::all_zeros();
+		let event = BdkWalletEvent::ChainTipChanged {
+			old_tip: bdk_chain::BlockId { height: 0, hash: block },
+			new_tip: bdk_chain::BlockId { height: 1, hash: block },
+		};
+		let outcome = WalletSyncOutcome::new(vec![event], Some(Error::WalletOperationTimeout));
+
+		assert_eq!(outcome.events.len(), 1);
+		assert_eq!(outcome.result(), Err(Error::WalletOperationTimeout));
+	}
 }
 
 // Process BDK wallet events and emit corresponding ldk-node events via the event queue.
-// When a transaction touches multiple address-type wallets, each wallet emits its own
+// When a transaction touches multiple wallet accounts, each wallet emits its own
 // BdkWalletEvent, so we deduplicate by txid before forwarding to the event queue.
 async fn process_wallet_events<L2: Deref>(
 	wallet_events: Vec<BdkWalletEvent>, wallet: &crate::wallet::Wallet,
@@ -267,10 +402,19 @@ where
 	let mut seen_confirmed_txids = std::collections::HashSet::new();
 	let mut seen_reorged_txids = std::collections::HashSet::new();
 	let mut seen_replaced_txids = std::collections::HashSet::new();
+	let transaction_confirmations = wallet.transaction_confirmations();
 
 	for wallet_event in wallet_events {
 		match wallet_event {
-			BdkWalletEvent::TxConfirmed { txid, block_time, .. } => {
+			BdkWalletEvent::TxConfirmed { txid, .. } => {
+				let Some(block_time) = transaction_confirmations.get(&txid).copied() else {
+					log_trace!(
+						logger,
+						"Deferring confirmation event for {} until tracked wallets agree",
+						txid
+					);
+					continue;
+				};
 				if !seen_confirmed_txids.insert(txid) {
 					continue;
 				}
@@ -673,12 +817,10 @@ impl ChainSource {
 			// Simple sync without events (event_queue not set)
 			match &self.kind {
 				ChainSourceKind::Esplora(esplora_chain_source) => {
-					let _ = esplora_chain_source.sync_onchain_wallet(wallet).await?;
-					Ok(())
+					esplora_chain_source.sync_onchain_wallet(wallet).await.result()
 				},
 				ChainSourceKind::Electrum(electrum_chain_source) => {
-					let _ = electrum_chain_source.sync_onchain_wallet(wallet).await?;
-					Ok(())
+					electrum_chain_source.sync_onchain_wallet(wallet).await.result()
 				},
 				ChainSourceKind::Bitcoind(_) => {
 					// Bitcoind sync is handled differently
@@ -838,8 +980,8 @@ impl ChainSource {
 				// Track unconfirmed transactions before sync to detect evictions
 				let prev_unconfirmed_txids = wallet.get_unconfirmed_txids();
 
-				let wallet_events =
-					esplora_chain_source.sync_onchain_wallet(Arc::clone(&wallet)).await?;
+				let WalletSyncOutcome { events: wallet_events, error: sync_error } =
+					esplora_chain_source.sync_onchain_wallet(Arc::clone(&wallet)).await;
 
 				// Process wallet events if event queue is provided
 				if let Some(event_queue) = event_queue {
@@ -852,7 +994,13 @@ impl ChainSource {
 						chain_monitor,
 					)
 					.await?;
+				}
 
+				if let Some(error) = sync_error {
+					return Err(error);
+				}
+
+				if let Some(event_queue) = event_queue {
 					// Check for evicted transactions
 					check_and_emit_evicted_transactions(
 						prev_unconfirmed_txids,
@@ -928,8 +1076,8 @@ impl ChainSource {
 				// Track unconfirmed transactions before sync to detect evictions
 				let prev_unconfirmed_txids = wallet.get_unconfirmed_txids();
 
-				let wallet_events =
-					electrum_chain_source.sync_onchain_wallet(Arc::clone(&wallet)).await?;
+				let WalletSyncOutcome { events: wallet_events, error: sync_error } =
+					electrum_chain_source.sync_onchain_wallet(Arc::clone(&wallet)).await;
 
 				// Process wallet events if event queue is provided
 				if let Some(event_queue) = event_queue {
@@ -942,7 +1090,13 @@ impl ChainSource {
 						chain_monitor,
 					)
 					.await?;
+				}
 
+				if let Some(error) = sync_error {
+					return Err(error);
+				}
+
+				if let Some(event_queue) = event_queue {
 					// Check for evicted transactions
 					check_and_emit_evicted_transactions(
 						prev_unconfirmed_txids,
@@ -1218,7 +1372,8 @@ mod tests {
 			&node.wallet,
 			&node.node_metrics,
 			&node.logger,
-		);
+		)
+		.unwrap();
 		assert!(matches!(requests[0].1, WalletSyncRequest::FullScan(_)));
 
 		node.wallet.mark_derived_account_synced(account);
@@ -1227,7 +1382,8 @@ mod tests {
 			&node.wallet,
 			&node.node_metrics,
 			&node.logger,
-		);
+		)
+		.unwrap();
 		assert!(matches!(requests[0].1, WalletSyncRequest::Incremental(_)));
 	}
 }

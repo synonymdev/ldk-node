@@ -8,9 +8,9 @@ use proptest::prelude::prop;
 use proptest::proptest;
 
 use crate::common::{
-	expect_event, generate_blocks_and_wait, invalidate_blocks, open_channel,
-	premine_and_distribute_funds, random_config, setup_bitcoind_and_electrsd, setup_node,
-	wait_for_outpoint_spend, TestChainSource,
+	expect_event, generate_blocks_and_wait, invalidate_blocks, is_informational_event,
+	open_channel, premine_and_distribute_funds, random_config, setup_bitcoind_and_electrsd,
+	setup_node, wait_for_outpoint_spend, TestChainSource,
 };
 
 proptest! {
@@ -85,11 +85,14 @@ proptest! {
 			macro_rules! collect_channel_ready_events {
 				($node:expr, $expected:expr) => {{
 					let mut user_channels = HashMap::new();
-					for _ in 0..$expected {
+					while user_channels.len() < $expected {
 						match $node.next_event_async().await {
 							Event::ChannelReady { user_channel_id, counterparty_node_id, .. } => {
 								$node.event_handled().unwrap();
 								user_channels.insert(counterparty_node_id, user_channel_id);
+							},
+							ref event if is_informational_event(event) => {
+								$node.event_handled().unwrap();
 							},
 							other => panic!("Unexpected event: {:?}", other),
 						}
@@ -196,8 +199,11 @@ proptest! {
 				assert_eq!(node.list_balances().total_anchor_channels_reserve_sats, 0);
 				assert!(node.list_balances().lightning_balances.is_empty());
 
-				assert_eq!(node.next_event(), None);
-			});
+				while let Some(event) = node.next_event() {
+					assert!(is_informational_event(&event), "Unexpected event: {:?}", event);
+					node.event_handled().unwrap();
+				}
+				});
 		})
 	}
 }

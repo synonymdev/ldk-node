@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bdk_esplora::EsploraAsyncExt;
-use bdk_wallet::event::WalletEvent;
 use bitcoin::{FeeRate, Network, Script, Transaction, Txid};
 use esplora_client::AsyncClient as EsploraAsyncClient;
 use lightning::chain::{Confirm, Filter, WatchedOutput};
@@ -84,7 +83,7 @@ impl EsploraChainSource {
 
 	pub(super) async fn sync_onchain_wallet(
 		&self, onchain_wallet: Arc<Wallet>,
-	) -> Result<Vec<WalletEvent>, Error> {
+	) -> super::WalletSyncOutcome {
 		let receiver_res = {
 			let mut status_lock = self.onchain_wallet_sync_status.lock().unwrap();
 			status_lock.register_or_subscribe_pending_sync()
@@ -92,29 +91,32 @@ impl EsploraChainSource {
 		if let Some(mut sync_receiver) = receiver_res {
 			log_info!(self.logger, "Sync in progress, skipping.");
 			match sync_receiver.recv().await {
-				Ok(Ok(())) => return Ok(Vec::new()),
-				Ok(Err(e)) => return Err(e),
+				Ok(Ok(())) => return super::WalletSyncOutcome::new(Vec::new(), None),
+				Ok(Err(e)) => return super::WalletSyncOutcome::failed(e),
 				Err(e) => {
 					debug_assert!(false, "Failed to receive wallet sync result: {:?}", e);
 					log_error!(self.logger, "Failed to receive wallet sync result: {:?}", e);
-					return Err(Error::WalletOperationFailed);
+					return super::WalletSyncOutcome::failed(Error::WalletOperationFailed);
 				},
 			}
 		}
 
-		let res = self.sync_onchain_wallet_inner(onchain_wallet).await;
+		let outcome = self
+			.sync_onchain_wallet_inner(onchain_wallet)
+			.await
+			.unwrap_or_else(super::WalletSyncOutcome::failed);
 
 		self.onchain_wallet_sync_status
 			.lock()
 			.unwrap()
-			.propagate_result_to_subscribers(res.as_ref().map(|_| ()).map_err(|e| e.clone()));
+			.propagate_result_to_subscribers(outcome.result());
 
-		res
+		outcome
 	}
 
 	async fn sync_onchain_wallet_inner(
 		&self, onchain_wallet: Arc<Wallet>,
-	) -> Result<Vec<WalletEvent>, Error> {
+	) -> Result<super::WalletSyncOutcome, Error> {
 		let primary_incremental =
 			self.node_metrics.read().unwrap().latest_onchain_wallet_sync_timestamp.is_some();
 
@@ -125,7 +127,7 @@ impl EsploraChainSource {
 			&onchain_wallet,
 			&self.node_metrics,
 			&self.logger,
-		);
+		)?;
 
 		let primary_request: super::WalletSyncRequest = if primary_incremental {
 			super::WalletSyncRequest::Incremental(onchain_wallet.get_incremental_sync_request())
@@ -201,6 +203,7 @@ impl EsploraChainSource {
 		let mut primary_update: Option<bdk_wallet::Update> = None;
 		let mut primary_error: Option<Error> = None;
 		let mut additional_results = Vec::new();
+		let mut task_error = None;
 
 		while let Some(join_result) = join_set.join_next().await {
 			match join_result {
@@ -256,63 +259,49 @@ impl EsploraChainSource {
 					primary_error = Some(Error::WalletOperationTimeout);
 				},
 				Ok((Some(wallet_account), Ok(Ok(update)))) => {
-					additional_results.push((wallet_account, Some(update)));
+					additional_results.push((wallet_account, Ok(update)));
 				},
 				Ok((Some(wallet_account), Ok(Err(e)))) => {
 					log_warn!(self.logger, "Failed to sync wallet {:?}: {}", wallet_account, e);
-					additional_results.push((wallet_account, None));
+					additional_results.push((wallet_account, Err(Error::WalletOperationFailed)));
 				},
 				Ok((Some(wallet_account), Err(_))) => {
 					log_warn!(self.logger, "Sync timeout for wallet {:?}", wallet_account);
-					additional_results.push((wallet_account, None));
+					additional_results.push((wallet_account, Err(Error::WalletOperationTimeout)));
 				},
 				Err(e) => {
 					log_warn!(self.logger, "Wallet sync task panicked: {}", e);
+					task_error = Some(Error::WalletOperationFailed);
 				},
 			};
 		}
-
-		let mut all_events = Vec::new();
 
 		if primary_update.is_none() && primary_error.is_none() {
 			log_error!(self.logger, "Primary wallet sync task failed unexpectedly");
 			primary_error = Some(Error::WalletOperationFailed);
 		}
-
-		if let Some(update) = primary_update {
-			match onchain_wallet.apply_update(update) {
-				Ok(wallet_events) => {
-					log_info!(
-						self.logger,
-						"{} of primary on-chain wallet finished in {}ms.",
-						if primary_incremental { "Incremental sync" } else { "Full sync" },
-						now.elapsed().as_millis()
-					);
-					let unix_time_secs_opt =
-						SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
-					self.node_metrics.write().unwrap().latest_onchain_wallet_sync_timestamp =
-						unix_time_secs_opt;
-					all_events.extend(wallet_events);
-				},
-				Err(e) => {
-					primary_error = Some(e);
-				},
-			}
-		}
-
-		let (additional_events, any_additional_applied) = super::apply_additional_sync_results(
+		let mut outcome = super::apply_wallet_sync_results(
+			primary_update,
+			primary_error,
+			task_error,
 			additional_results,
 			&onchain_wallet,
 			&self.node_metrics,
 			&self.logger,
 		);
-		all_events.extend(additional_events);
+		if outcome.primary_applied {
+			log_info!(
+				self.logger,
+				"{} of primary on-chain wallet finished in {}ms.",
+				if primary_incremental { "Incremental sync" } else { "Full sync" },
+				now.elapsed().as_millis()
+			);
+		}
 
-		let any_updates_applied = primary_error.is_none() || any_additional_applied;
-
-		if any_updates_applied {
+		if outcome.any_applied {
 			if let Err(e) = onchain_wallet.update_payment_store_for_all_transactions() {
 				log_error!(self.logger, "Failed to update payment store after wallet syncs: {}", e);
+				outcome.error.get_or_insert(e);
 			}
 
 			let locked_node_metrics = self.node_metrics.read().unwrap();
@@ -325,11 +314,7 @@ impl EsploraChainSource {
 			}
 		}
 
-		if let Some(e) = primary_error {
-			return Err(e);
-		}
-
-		Ok(all_events)
+		Ok(super::WalletSyncOutcome::new(outcome.events, outcome.error))
 	}
 
 	pub(super) async fn sync_lightning_wallet(

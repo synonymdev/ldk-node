@@ -12,11 +12,138 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use bdk_wallet::{KeychainKind, PersistedWallet, WalletPersister};
-use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Transaction, TxIn, TxOut};
+use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Weight};
 
 use crate::signing;
 use crate::types::{Error, UtxoPsbtInfo};
 use crate::utxo::DUST_LIMIT_SATS;
+
+struct ReplacementRequirements {
+	change_idx: Option<usize>,
+	recipient_value: u64,
+	required_fee: u64,
+}
+
+/// Return the minimum fee rate accepted for a replacement transaction.
+///
+/// This mirrors BDK's fee-bump policy by requiring at least a 1 sat/vB increase.
+pub(crate) fn minimum_replacement_fee_rate(
+	original_fee: Amount, original_weight: Weight,
+) -> Result<FeeRate, Error> {
+	let original_fee_rate = original_fee / original_weight;
+	let minimum_sat_per_kwu = original_fee_rate
+		.to_sat_per_kwu()
+		.checked_add(FeeRate::BROADCAST_MIN.to_sat_per_kwu())
+		.ok_or(Error::InvalidFeeRate)?;
+	Ok(FeeRate::from_sat_per_kwu(minimum_sat_per_kwu))
+}
+
+fn original_input_value<K, P>(
+	original_tx: &Transaction, wallets: &HashMap<K, PersistedWallet<P>>,
+) -> Result<u64, Error>
+where
+	K: Eq + Hash + Copy + Debug,
+	P: WalletPersister,
+{
+	original_tx.input.iter().try_fold(0u64, |total, input| {
+		total
+			.checked_add(get_input_value(&input.previous_output, wallets)?)
+			.ok_or(Error::OnchainTxCreationFailed)
+	})
+}
+
+fn replacement_inputs(original_tx: &Transaction, extra_utxos: &[UtxoPsbtInfo]) -> Vec<TxIn> {
+	let mut inputs: Vec<TxIn> = original_tx
+		.input
+		.iter()
+		.map(|txin| TxIn {
+			previous_output: txin.previous_output,
+			script_sig: ScriptBuf::new(),
+			sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+			witness: bitcoin::Witness::default(),
+		})
+		.collect();
+	inputs.extend(extra_utxos.iter().map(|info| TxIn {
+		previous_output: info.outpoint,
+		script_sig: ScriptBuf::new(),
+		sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+		witness: bitcoin::Witness::default(),
+	}));
+	inputs
+}
+
+fn replacement_requirements<K, P>(
+	wallets: &HashMap<K, PersistedWallet<P>>, primary_key: &K, original_tx: &Transaction,
+	original_input_value: u64, replacement_inputs: &[TxIn], new_fee_rate: FeeRate,
+) -> Result<ReplacementRequirements, Error>
+where
+	K: Eq + Hash + Copy + Debug,
+	P: WalletPersister,
+{
+	let original_output_value = original_tx.output.iter().try_fold(0u64, |total, output| {
+		total.checked_add(output.value.to_sat()).ok_or(Error::OnchainTxCreationFailed)
+	})?;
+	let original_fee = original_input_value
+		.checked_sub(original_output_value)
+		.ok_or(Error::OnchainTxCreationFailed)?;
+	let minimum_fee_rate =
+		minimum_replacement_fee_rate(Amount::from_sat(original_fee), original_tx.weight())?;
+	if new_fee_rate < minimum_fee_rate {
+		return Err(Error::InvalidFeeRate);
+	}
+
+	let estimated_weight = estimate_tx_weight(wallets, replacement_inputs, &original_tx.output);
+	let target_fee = new_fee_rate.fee_wu(estimated_weight).ok_or(Error::InvalidFeeRate)?.to_sat();
+	let incremental_fee =
+		FeeRate::BROADCAST_MIN.fee_wu(estimated_weight).ok_or(Error::InvalidFeeRate)?.to_sat();
+	let minimum_replacement_fee =
+		original_fee.checked_add(incremental_fee).ok_or(Error::OnchainTxCreationFailed)?;
+	let required_fee = std::cmp::max(target_fee, minimum_replacement_fee);
+
+	let change_idx =
+		find_internal_change_output(wallets, primary_key, original_tx).map(|(index, _)| index);
+	let recipient_value = original_tx
+		.output
+		.iter()
+		.enumerate()
+		.filter(|(index, _)| Some(*index) != change_idx)
+		.try_fold(0u64, |total, (_, output)| {
+			total.checked_add(output.value.to_sat()).ok_or(Error::OnchainTxCreationFailed)
+		})?;
+
+	Ok(ReplacementRequirements { change_idx, recipient_value, required_fee })
+}
+
+/// Return the effective value that additional inputs must contribute.
+pub(crate) fn additional_input_value_needed<K, P>(
+	wallets: &HashMap<K, PersistedWallet<P>>, primary_key: &K, original_tx: &Transaction,
+	new_fee_rate: FeeRate,
+) -> Result<Amount, Error>
+where
+	K: Eq + Hash + Copy + Debug,
+	P: WalletPersister,
+{
+	let original_input_value = original_input_value(original_tx, wallets)?;
+	let replacement_inputs = replacement_inputs(original_tx, &[]);
+	let requirements = replacement_requirements(
+		wallets,
+		primary_key,
+		original_tx,
+		original_input_value,
+		&replacement_inputs,
+		new_fee_rate,
+	)?;
+	if requirements.change_idx.is_none() {
+		return Err(Error::InsufficientFunds);
+	}
+	let required_value = requirements
+		.required_fee
+		.checked_add(requirements.recipient_value)
+		.and_then(|value| value.checked_add(DUST_LIMIT_SATS))
+		.ok_or(Error::OnchainTxCreationFailed)?;
+
+	Ok(Amount::from_sat(required_value.saturating_sub(original_input_value)))
+}
 
 /// Get the value of an input by looking up the referenced UTXO across all
 /// wallets.
@@ -51,85 +178,52 @@ where
 /// Pass an empty slice for `extra_utxos` to attempt a change-only bump.
 /// If that is insufficient the caller can select additional UTXOs and retry.
 pub fn build_cross_wallet_rbf<K, P>(
-	wallets: &mut HashMap<K, PersistedWallet<P>>, original_tx: &Transaction, new_fee_rate: FeeRate,
-	extra_utxos: &[UtxoPsbtInfo],
+	wallets: &mut HashMap<K, PersistedWallet<P>>, primary_key: &K, original_tx: &Transaction,
+	new_fee_rate: FeeRate, extra_utxos: &[UtxoPsbtInfo],
 ) -> Result<Transaction, Error>
 where
 	K: Eq + Hash + Copy + Debug,
 	P: WalletPersister,
 {
-	// Total input value: original inputs + extra inputs.
-	let mut total_input_value: u64 = 0;
-	for input in &original_tx.input {
-		total_input_value += get_input_value(&input.previous_output, wallets)?;
-	}
+	let original_input_value = original_input_value(original_tx, wallets)?;
+
+	let mut total_input_value = original_input_value;
 	for info in extra_utxos {
-		total_input_value +=
-			info.psbt_input.witness_utxo.as_ref().map(|u| u.value.to_sat()).unwrap_or(0);
+		let value = info
+			.psbt_input
+			.witness_utxo
+			.as_ref()
+			.map(|utxo| utxo.value.to_sat())
+			.ok_or(Error::OnchainTxCreationFailed)?;
+		total_input_value =
+			total_input_value.checked_add(value).ok_or(Error::OnchainTxCreationFailed)?;
 	}
 
-	// Original fee (for BIP 125 rule 4: replacement fee must be higher).
-	let original_output_value: u64 = original_tx.output.iter().map(|o| o.value.to_sat()).sum();
-	let original_input_only: u64 = original_tx
-		.input
-		.iter()
-		.map(|i| get_input_value(&i.previous_output, wallets).unwrap_or(0))
-		.sum();
-	let original_fee = original_input_only.saturating_sub(original_output_value);
+	let new_inputs = replacement_inputs(original_tx, extra_utxos);
+	let requirements = replacement_requirements(
+		wallets,
+		primary_key,
+		original_tx,
+		original_input_value,
+		&new_inputs,
+		new_fee_rate,
+	)?;
 
-	// Build all inputs with RBF signalling.
-	let mut new_inputs: Vec<TxIn> = original_tx
-		.input
-		.iter()
-		.map(|txin| TxIn {
-			previous_output: txin.previous_output,
-			script_sig: ScriptBuf::new(),
-			sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
-			witness: bitcoin::Witness::default(),
-		})
-		.collect();
-	for info in extra_utxos {
-		new_inputs.push(TxIn {
-			previous_output: info.outpoint,
-			script_sig: ScriptBuf::new(),
-			sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
-			witness: bitcoin::Witness::default(),
-		});
-	}
-
-	// Estimate weight with all inputs and calculate required fee.
-	let estimated_weight = estimate_tx_weight(wallets, &new_inputs, &original_tx.output);
-	let required_fee = new_fee_rate.to_sat_per_kwu() * estimated_weight.to_wu() / 1000;
-	let required_fee = std::cmp::max(required_fee, original_fee + 1); // BIP 125 rule 4
-
-	// Find the change output: only adjust an Internal (change) keychain output.
 	let mut new_outputs = original_tx.output.clone();
-	let change_idx = new_outputs.iter().position(|out| {
-		wallets.values().any(|w| {
-			w.list_unspent().any(|u| {
-				u.keychain == KeychainKind::Internal && u.txout.script_pubkey == out.script_pubkey
-			})
-		})
-	});
+	let required_value = requirements
+		.required_fee
+		.checked_add(requirements.recipient_value)
+		.ok_or(Error::OnchainTxCreationFailed)?;
+	let available_for_change =
+		total_input_value.checked_sub(required_value).ok_or(Error::InsufficientFunds)?;
 
-	// Recipient value = sum of all non-change outputs.
-	let recipient_value: u64 = new_outputs
-		.iter()
-		.enumerate()
-		.filter(|(i, _)| Some(*i) != change_idx)
-		.map(|(_, out)| out.value.to_sat())
-		.sum();
-
-	// Calculate the new change value from scratch.
-	let available_for_change = total_input_value.saturating_sub(required_fee + recipient_value);
-
-	match change_idx {
+	match requirements.change_idx {
 		Some(idx) => {
 			if available_for_change < DUST_LIMIT_SATS {
 				log::error!(
 					"Insufficient funds for cross-wallet RBF: available_for_change={}, required_fee={}, total_input={}",
 					available_for_change,
-					required_fee,
+					requirements.required_fee,
 					total_input_value
 				);
 				return Err(Error::InsufficientFunds);
@@ -137,12 +231,8 @@ where
 			new_outputs[idx].value = Amount::from_sat(available_for_change);
 		},
 		None => {
-			// No change output (drain tx) — cannot absorb fee increase.
-			if total_input_value < required_fee + recipient_value {
-				return Err(Error::InsufficientFunds);
-			}
-			// All surplus goes to fees (no change output to create).
-			return Err(Error::OnchainTxCreationFailed);
+			// A replacement cannot increase its fee without reducing a recipient output.
+			return Err(Error::InsufficientFunds);
 		},
 	}
 
@@ -156,6 +246,31 @@ where
 	signing::sign_owned_inputs(unsigned_tx, wallets)
 }
 
+/// Find the primary wallet's internal output that the manual RBF builder will reduce.
+pub(crate) fn find_internal_change_output<'a, K, P>(
+	wallets: &HashMap<K, PersistedWallet<P>>, primary_key: &K, transaction: &'a Transaction,
+) -> Option<(usize, &'a TxOut)>
+where
+	K: Eq + Hash + Copy + Debug,
+	P: WalletPersister,
+{
+	if transaction.output.len() <= 1 {
+		return None;
+	}
+
+	let primary_wallet = wallets.get(primary_key)?;
+	transaction
+		.output
+		.iter()
+		.enumerate()
+		.filter(|(_, output)| {
+			primary_wallet
+				.derivation_of_spk(output.script_pubkey.clone())
+				.is_some_and(|(keychain, _)| keychain == KeychainKind::Internal)
+		})
+		.last()
+}
+
 /// Estimate the weight of a transaction for fee calculation purposes.
 fn estimate_tx_weight<K, P>(
 	wallets: &HashMap<K, PersistedWallet<P>>, inputs: &[TxIn], outputs: &[TxOut],
@@ -164,56 +279,18 @@ where
 	K: Eq + Hash + Copy + Debug,
 	P: WalletPersister,
 {
-	use bitcoin::Weight;
+	let unsigned_tx = Transaction {
+		version: bitcoin::transaction::Version::TWO,
+		lock_time: bitcoin::absolute::LockTime::ZERO,
+		input: inputs.to_vec(),
+		output: outputs.to_vec(),
+	};
+	let witness_overhead = Weight::from_wu(2 + inputs.len() as u64);
+	let satisfaction_weight = inputs.iter().fold(Weight::ZERO, |weight, input| {
+		weight
+			+ crate::utxo::satisfaction_weight_for_outpoint(input.previous_output, wallets)
+				.unwrap_or_else(|| Weight::from_wu(428))
+	});
 
-	// Base transaction overhead (conservative estimate):
-	// version (4 bytes) + locktime (4 bytes) = 8 non-witness bytes = 32 WU
-	// + witness marker & flag (2 bytes) = 2 WU = 34 WU actual.
-	// We use 40 WU as a conservative buffer for fee estimation safety.
-	let base_weight = Weight::from_wu(40);
-
-	// Input count varint
-	let input_count_weight = Weight::from_wu(4); // 1 byte * 4 WU
-
-	// Per-input weight
-	let mut input_weight = Weight::ZERO;
-	for txin in inputs {
-		// 32 bytes txid + 4 bytes vout + 4 bytes sequence + 1 byte script_sig
-		// length = 41 bytes * 4 WU
-		let base_input = Weight::from_wu(164);
-
-		let satisfaction =
-			wallets
-				.values()
-				.find_map(|w| {
-					w.get_utxo(txin.previous_output)
-						.map(|utxo| crate::utxo::calculate_utxo_weight(&utxo.txout.script_pubkey))
-				})
-				.or_else(|| {
-					// Fallback for spent UTXOs: look up via the transaction.
-					wallets.values().find_map(|w| {
-						w.get_tx(txin.previous_output.txid).and_then(|tx_node| {
-							tx_node.tx_node.tx.output.get(txin.previous_output.vout as usize).map(
-								|txout| crate::utxo::calculate_utxo_weight(&txout.script_pubkey),
-							)
-						})
-					})
-				})
-				.unwrap_or(Weight::from_wu(272)); // default P2WPKH
-
-		input_weight = input_weight + base_input + satisfaction;
-	}
-
-	// Output count varint
-	let output_count_weight = Weight::from_wu(4);
-
-	// Per-output weight
-	let mut output_weight = Weight::ZERO;
-	for txout in outputs {
-		// 8 bytes value + 1 byte script length + script_pubkey length, all *4
-		let script_len = txout.script_pubkey.len() as u64;
-		output_weight += Weight::from_wu((8 + 1 + script_len) * 4);
-	}
-
-	base_weight + input_count_weight + input_weight + output_count_weight + output_weight
+	unsigned_tx.weight() + witness_overhead + satisfaction_weight
 }

@@ -5,7 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -14,11 +14,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
+use bdk_chain::ConfirmationBlockTime;
 use bdk_wallet::event::WalletEvent;
 use bdk_wallet::{
 	AddressInfo, Balance, KeychainKind as BdkKeychainKind, LocalOutput, PersistedWallet, Update,
 };
-use bdk_wallet_aggregate::AggregateWallet;
+use bdk_wallet_aggregate::{AggregateWallet, UtxoPsbtInfo};
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::bip32::Xpriv;
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
@@ -30,8 +31,8 @@ use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{All, PublicKey, Scalar, Secp256k1, SecretKey};
 use bitcoin::{
-	Address, Amount, FeeRate, Network, OutPoint, PubkeyHash, Script, ScriptBuf, Transaction, TxOut,
-	Txid, WPubkeyHash, Weight, WitnessProgram, WitnessVersion,
+	Address, Amount, FeeRate, Network, OutPoint, PubkeyHash, Script, ScriptBuf, Transaction, TxIn,
+	TxOut, Txid, WPubkeyHash, Weight, WitnessProgram, WitnessVersion,
 };
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::channelmonitor::ANTI_REORG_DELAY;
@@ -85,6 +86,17 @@ fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> 
 
 	let last_index = start_index.checked_add(count - 1).ok_or(Error::InvalidQuantity)?;
 	validate_derivation_index(last_index)
+}
+
+fn additional_input_weight(utxos: &[UtxoPsbtInfo]) -> Result<Weight, Error> {
+	let base_weight = TxIn::default().segwit_weight().to_wu();
+	let total = utxos.iter().try_fold(0u64, |total, utxo| {
+		total
+			.checked_add(base_weight)
+			.and_then(|weight| weight.checked_add(utxo.weight.to_wu()))
+			.ok_or(Error::InvalidFeeRate)
+	})?;
+	Ok(Weight::from_wu(total))
 }
 
 #[derive(Clone, Copy)]
@@ -222,8 +234,8 @@ impl Wallet {
 		self.inner.lock().unwrap().unconfirmed_txids_with_last_seen()
 	}
 
-	pub(crate) fn is_tx_confirmed(&self, txid: &Txid) -> bool {
-		self.inner.lock().unwrap().is_tx_confirmed(txid)
+	pub(crate) fn transaction_confirmations(&self) -> HashMap<Txid, ConfirmationBlockTime> {
+		self.inner.lock().unwrap().transaction_confirmations()
 	}
 
 	pub(crate) fn current_best_block(&self) -> BestBlock {
@@ -687,7 +699,11 @@ impl Wallet {
 			Ok((events, _txids)) => Ok(events),
 			Err(e) => {
 				log_error!(self.logger, "Sync failed due to chain connection error: {}", e);
-				Err(Error::WalletOperationFailed)
+				Err(match e {
+					bdk_wallet_aggregate::Error::PersistenceFailed
+					| bdk_wallet_aggregate::Error::PersisterNotFound => Error::PersistenceFailed,
+					_ => Error::WalletOperationFailed,
+				})
 			},
 		}
 	}
@@ -707,7 +723,11 @@ impl Wallet {
 					wallet_account,
 					e
 				);
-				Err(Error::WalletOperationFailed)
+				Err(match e {
+					bdk_wallet_aggregate::Error::PersistenceFailed
+					| bdk_wallet_aggregate::Error::PersisterNotFound => Error::PersistenceFailed,
+					_ => Error::WalletOperationFailed,
+				})
 			},
 		}
 	}
@@ -915,7 +935,8 @@ impl Wallet {
 		&self, locked_wallet: &AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>,
 	) -> Result<(), Error> {
 		let mut seen_txids = std::collections::HashSet::new();
-		let cur_height = locked_wallet.latest_checkpoint().height();
+		let cur_height = locked_wallet.current_best_block().1;
+		let transaction_confirmations = locked_wallet.transaction_confirmations();
 
 		for wallet in locked_wallet.wallets().values() {
 			for wtx in wallet.transactions() {
@@ -925,8 +946,8 @@ impl Wallet {
 				}
 
 				let id = PaymentId(txid.to_byte_array());
-				let (payment_status, confirmation_status) = match wtx.chain_position {
-					bdk_chain::ChainPosition::Confirmed { anchor, .. } => {
+				let (payment_status, confirmation_status) =
+					if let Some(anchor) = transaction_confirmations.get(&txid).copied() {
 						let confirmation_height = anchor.block_id.height;
 						let payment_status =
 							if cur_height >= confirmation_height + ANTI_REORG_DELAY - 1 {
@@ -940,11 +961,9 @@ impl Wallet {
 							timestamp: anchor.confirmation_time,
 						};
 						(payment_status, confirmation_status)
-					},
-					bdk_chain::ChainPosition::Unconfirmed { .. } => {
+					} else {
 						(PaymentStatus::Pending, ConfirmationStatus::Unconfirmed)
-					},
-				};
+					};
 				// TODO: It would be great to introduce additional variants for
 				// `ChannelFunding` and `ChannelClosing`. For the former, we could just
 				// take a reference to `ChannelManager` here and check against
@@ -1458,10 +1477,14 @@ impl Wallet {
 			match (&utxos_to_spend, send_amount) {
 				(Some(_), _) => None,
 				(None, OnchainSendAmount::AllDrainingReserve)
-				| (None, OnchainSendAmount::AllRetainingReserve { .. }) => locked_wallet
-					.non_primary_foreign_utxos(&funding_txids)
-					.ok()
-					.filter(|v| !v.is_empty()),
+				| (None, OnchainSendAmount::AllRetainingReserve { .. }) => {
+					let infos =
+						locked_wallet.non_primary_foreign_utxos(&funding_txids).map_err(|e| {
+							log_error!(self.logger, "Failed to prepare non-primary UTXOs: {}", e);
+							Error::WalletOperationFailed
+						})?;
+					(!infos.is_empty()).then_some(infos)
+				},
 				(None, OnchainSendAmount::ExactRetainingReserve { .. }) => None,
 			};
 
@@ -1476,11 +1499,11 @@ impl Wallet {
 			};
 
 		let aggregate_balance = locked_wallet.balance();
-		let primary = locked_wallet.primary_wallet_mut();
 
 		// Prepare the tx_builder. We properly check the reserve requirements (again) further down.
 		let mut tx_builder = match send_amount {
 			OnchainSendAmount::ExactRetainingReserve { amount_sats, .. } => {
+				let primary = locked_wallet.primary_wallet_mut();
 				let mut tx_builder = primary.build_tx();
 				let amount = Amount::from_sat(amount_sats);
 				tx_builder.add_recipient(address.script_pubkey(), amount).fee_rate(fee_rate);
@@ -1489,12 +1512,14 @@ impl Wallet {
 			OnchainSendAmount::AllRetainingReserve { cur_anchor_reserve_sats }
 				if cur_anchor_reserve_sats > DUST_LIMIT_SATS =>
 			{
-				let change_address_info = primary.peek_address(BdkKeychainKind::Internal, 0);
+				let change_address_info =
+					locked_wallet.primary_wallet().peek_address(BdkKeychainKind::Internal, 0);
 				let spendable_amount_sats = self
 					.get_balances_inner(&aggregate_balance, cur_anchor_reserve_sats)
 					.map(|(_, s)| s)
 					.unwrap_or(0);
-				let tmp_tx = {
+				let tmp_psbt = {
+					let primary = locked_wallet.primary_wallet_mut();
 					let mut tmp_tx_builder = primary.build_tx();
 					tmp_tx_builder
 						.drain_wallet()
@@ -1505,24 +1530,20 @@ impl Wallet {
 						)
 						.fee_rate(fee_rate);
 
-					// Add manual UTXOs to temporary transaction if specified
-					if let Some(ref outpoints) = utxos_to_spend {
-						for outpoint in outpoints {
-							tmp_tx_builder.add_utxo(*outpoint).map_err(|e| {
-								log_error!(
-									self.logger,
-									"Failed to add UTXO {:?} to temp tx: {}",
-									outpoint,
-									e
-								);
-								Error::OnchainTxCreationFailed
-							})?;
-						}
+					if let Some(ref infos) = manual_utxo_infos {
+						bdk_wallet_aggregate::utxo::add_utxos_to_tx_builder(
+							&mut tmp_tx_builder,
+							infos,
+						)
+						.map_err(|e| {
+							log_error!(self.logger, "Failed to add UTXOs to temp tx: {}", e);
+							Error::OnchainTxCreationFailed
+						})?;
 						tmp_tx_builder.manually_selected_only();
 					}
 
 					match tmp_tx_builder.finish() {
-						Ok(psbt) => psbt.unsigned_tx,
+						Ok(psbt) => psbt,
 						Err(err) => {
 							log_error!(
 								self.logger,
@@ -1534,30 +1555,30 @@ impl Wallet {
 					}
 				};
 
-				let fee_result = primary.calculate_fee(&tmp_tx);
-
 				// Cancel the temp tx to free up the change address.
-				primary.cancel_tx(&tmp_tx);
+				locked_wallet.cancel_dry_run_tx(&tmp_psbt.unsigned_tx);
 
-				let base_fee = fee_result.map_err(|e| {
+				let base_fee = locked_wallet.calculate_fee_from_psbt(&tmp_psbt).map_err(|e| {
 					log_error!(
 						self.logger,
 						"Failed to calculate fee of temporary transaction: {}",
 						e
 					);
-					e
+					Error::WalletOperationFailed
 				})?;
+				let base_fee = Amount::from_sat(base_fee);
 
 				// Adjust the fee estimate for non-primary inputs that will be
 				// added to the actual tx (the temp tx only used primary UTXOs).
-				let extra_input_weight: u64 = non_primary_utxo_infos
-					.as_ref()
-					.map(|infos| infos.iter().map(|i| i.weight.to_wu()).sum::<u64>())
-					.unwrap_or(0);
-				let extra_input_fee = fee_rate
-					.fee_wu(bitcoin::Weight::from_wu(extra_input_weight))
-					.unwrap_or(Amount::ZERO);
-				let estimated_tx_fee = base_fee + extra_input_fee;
+				let extra_input_weight = non_primary_utxo_infos
+					.as_deref()
+					.map(additional_input_weight)
+					.transpose()?
+					.unwrap_or(Weight::ZERO);
+				let extra_input_fee =
+					fee_rate.fee_wu(extra_input_weight).ok_or(Error::InvalidFeeRate)?;
+				let estimated_tx_fee =
+					base_fee.checked_add(extra_input_fee).ok_or(Error::InvalidFeeRate)?;
 
 				let estimated_spendable_amount = Amount::from_sat(
 					spendable_amount_sats.saturating_sub(estimated_tx_fee.to_sat()),
@@ -1572,6 +1593,7 @@ impl Wallet {
 					return Err(Error::InsufficientFunds);
 				}
 
+				let primary = locked_wallet.primary_wallet_mut();
 				let mut tx_builder = primary.build_tx();
 				tx_builder
 					.add_recipient(address.script_pubkey(), estimated_spendable_amount)
@@ -1580,6 +1602,7 @@ impl Wallet {
 			},
 			OnchainSendAmount::AllDrainingReserve
 			| OnchainSendAmount::AllRetainingReserve { cur_anchor_reserve_sats: _ } => {
+				let primary = locked_wallet.primary_wallet_mut();
 				let mut tx_builder = primary.build_tx();
 				tx_builder.drain_wallet().drain_to(address.script_pubkey()).fee_rate(fee_rate);
 				tx_builder
@@ -2287,10 +2310,12 @@ impl ChangeDestinationSource for WalletKeysManager {
 #[cfg(test)]
 mod tests {
 	use super::{
-		validate_derivation_index, validate_derivation_range, BIP32_MAX_NORMAL_INDEX,
-		MAX_ADDRESS_INFO_BATCH_COUNT,
+		additional_input_weight, validate_derivation_index, validate_derivation_range,
+		BIP32_MAX_NORMAL_INDEX, MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
 	use crate::Error;
+	use bdk_wallet_aggregate::UtxoPsbtInfo;
+	use bitcoin::{psbt, OutPoint, TxIn, Weight};
 
 	#[test]
 	fn derivation_index_validation_rejects_hardened_range() {
@@ -2323,5 +2348,21 @@ mod tests {
 	#[test]
 	fn derivation_range_validation_allows_empty_ranges_at_valid_start() {
 		assert_eq!(validate_derivation_range(BIP32_MAX_NORMAL_INDEX, 0), Ok(()));
+	}
+
+	#[test]
+	fn additional_input_weight_includes_the_base_input_weight() {
+		let satisfaction_weight = Weight::from_wu(107);
+		let utxo = UtxoPsbtInfo {
+			outpoint: OutPoint::null(),
+			psbt_input: psbt::Input::default(),
+			weight: satisfaction_weight,
+			is_primary: false,
+		};
+
+		assert_eq!(
+			additional_input_weight(&[utxo]).unwrap(),
+			TxIn::default().segwit_weight() + satisfaction_weight
+		);
 	}
 }
