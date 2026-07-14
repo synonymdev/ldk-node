@@ -122,10 +122,10 @@ pub use builder::{BuildError, ChannelDataMigration};
 use chain::ChainSource;
 pub use config::{battery_saving_sync_intervals, RuntimeSyncIntervals};
 use config::{
-	default_user_config, may_announce_channel, AddressType, AsyncPaymentsRole,
-	BackgroundSyncConfig, ChannelConfig, Config, NODE_ANN_BCAST_INTERVAL,
-	PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
+	default_user_config, may_announce_channel, AsyncPaymentsRole, BackgroundSyncConfig,
+	ChannelConfig, Config, NODE_ANN_BCAST_INTERVAL, PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
 };
+pub use config::{AddressType, OnchainWalletAccount};
 use connection::ConnectionManager;
 pub use error::Error as NodeError;
 use error::Error;
@@ -2046,6 +2046,10 @@ impl Node {
 	}
 
 	/// Retrieves an overview of all known balances.
+	///
+	/// On-chain totals include derived accounts currently registered via
+	/// [`Node::add_onchain_wallet_account`]. Derived funds are omitted until the app re-registers the
+	/// account after a restart.
 	pub fn list_balances(&self) -> BalanceDetails {
 		let cur_anchor_reserve_sats =
 			total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
@@ -2093,7 +2097,9 @@ impl Node {
 		}
 	}
 
-	/// Retrieves the on-chain balance for a specific address type.
+	/// Retrieves the on-chain balance for a specific address type on account `0`.
+	///
+	/// See [`Node::get_balance_for_onchain_wallet_account`] for derived accounts.
 	pub fn get_balance_for_address_type(
 		&self, address_type: AddressType,
 	) -> Result<AddressTypeBalance, Error> {
@@ -2102,7 +2108,7 @@ impl Node {
 		Ok(AddressTypeBalance { total_sats, spendable_sats })
 	}
 
-	/// Returns all address types currently loaded and monitored by the wallet.
+	/// Returns all address types currently loaded on account `0`.
 	pub fn list_monitored_address_types(&self) -> Vec<AddressType> {
 		self.wallet.get_loaded_address_types()
 	}
@@ -2151,7 +2157,7 @@ impl Node {
 		self.wallet.remove_monitored_address_type(address_type)
 	}
 
-	/// Changes the primary address type used for new addresses and change outputs.
+	/// Changes the primary address type used for new addresses and change outputs on account `0`.
 	///
 	/// Creates the wallet from `seed_bytes` if not already loaded. The previous primary is
 	/// demoted to the monitored set. If the new primary has never been synced, a full scan
@@ -2165,7 +2171,7 @@ impl Node {
 		self.wallet.set_primary_address_type(address_type, &seed_bytes)
 	}
 
-	/// Changes the primary address type used for new addresses and change outputs.
+	/// Changes the primary address type used for new addresses and change outputs on account `0`.
 	///
 	/// Creates the wallet from `seed_bytes` if not already loaded. The previous primary is
 	/// demoted to the monitored set. If the new primary has never been synced, a full scan
@@ -2209,6 +2215,60 @@ impl Node {
 	) -> Result<(), Error> {
 		let seed = mnemonic.to_seed(passphrase.as_deref().unwrap_or(""));
 		self.wallet.set_primary_address_type(address_type, &seed)
+	}
+
+	/// Exports the account-level xpub for a derived (or main) on-chain wallet account.
+	///
+	/// Persist `{ address_type, account_index, xpub }` externally and re-register derived
+	/// accounts via [`Node::add_onchain_wallet_account`] after every node build.
+	pub fn export_onchain_wallet_account_xpub(
+		&self, address_type: AddressType, account_index: u32,
+	) -> Result<String, Error> {
+		self.wallet.export_onchain_wallet_account_xpub(address_type, account_index)
+	}
+
+	/// Registers a derived on-chain wallet account (`account_index >= 1`).
+	///
+	/// Validates `xpub` against the node's master seed. Idempotent for the same xpub.
+	/// Account `0` and indexes above [`crate::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`] are
+	/// rejected with [`Error::InvalidQuantity`]. A mismatched xpub returns
+	/// [`Error::InvalidSeedBytes`].
+	///
+	/// Not persisted across restarts; re-add after each build. BDK data remains persisted.
+	///
+	/// Registered funds participate in normal wallet coin selection and signing. Change remains on
+	/// the configured primary account-`0` wallet.
+	///
+	/// Esplora/Electrum perform a full scan after registration. When issuing more addresses from the
+	/// exported xpub, call [`OnchainPayment::reveal_receive_addresses_to_account`] with the highest
+	/// issued index. Bitcoind replays the current mempool but cannot scan confirmed history from before
+	/// a brand-new account's first registration.
+	pub fn add_onchain_wallet_account(
+		&self, address_type: AddressType, account_index: u32, xpub: String,
+	) -> Result<(), Error> {
+		self.wallet.add_onchain_wallet_account(address_type, account_index, &xpub)
+	}
+
+	/// Retrieves the on-chain balance for a specific wallet account.
+	///
+	/// Funds in a registered account are available to normal wallet payments, whose change is sent to
+	/// the configured primary account-`0` wallet.
+	pub fn get_balance_for_onchain_wallet_account(
+		&self, address_type: AddressType, account_index: u32,
+	) -> Result<AddressTypeBalance, Error> {
+		let wallet_account = OnchainWalletAccount { address_type, account_index };
+		let (total_sats, spendable_sats) =
+			self.wallet.get_balance_for_onchain_wallet_account(wallet_account)?;
+		Ok(AddressTypeBalance { total_sats, spendable_sats })
+	}
+
+	/// Returns all currently loaded on-chain wallet accounts, including derived accounts.
+	///
+	/// Derived accounts must be re-registered after restart via
+	/// [`Node::add_onchain_wallet_account`]. Until then, they are absent from this list and from
+	/// aggregate balances.
+	pub fn list_onchain_wallet_accounts(&self) -> Vec<OnchainWalletAccount> {
+		self.wallet.get_loaded_onchain_wallet_accounts()
 	}
 
 	/// Retrieves all payments that match the given predicate.
@@ -2396,6 +2456,7 @@ pub(crate) struct NodeMetrics {
 	last_known_spendable_onchain_balance_sats: Option<u64>,
 	last_known_total_onchain_balance_sats: Option<u64>,
 	last_known_total_lightning_balance_sats: Option<u64>,
+	/// Sync timestamps for account-0 monitored address types (TLV type 18).
 	monitored_wallet_sync_timestamps: Vec<(AddressType, u64)>,
 }
 
@@ -2418,20 +2479,33 @@ impl Default for NodeMetrics {
 }
 
 impl NodeMetrics {
-	pub(crate) fn get_wallet_sync_timestamp(&self, address_type: AddressType) -> Option<u64> {
+	pub(crate) fn get_wallet_sync_timestamp(
+		&self, wallet_account: OnchainWalletAccount,
+	) -> Option<u64> {
+		// Derived-account scan completion is runtime-only, so each registration after restart full-scans.
+		if wallet_account.account_index != 0 {
+			return None;
+		}
 		self.monitored_wallet_sync_timestamps
 			.iter()
-			.find(|(at, _)| *at == address_type)
+			.find(|(at, _)| *at == wallet_account.address_type)
 			.map(|(_, ts)| *ts)
 	}
 
-	pub(crate) fn set_wallet_sync_timestamp(&mut self, address_type: AddressType, timestamp: u64) {
-		if let Some(entry) =
-			self.monitored_wallet_sync_timestamps.iter_mut().find(|(at, _)| *at == address_type)
+	pub(crate) fn set_wallet_sync_timestamp(
+		&mut self, wallet_account: OnchainWalletAccount, timestamp: u64,
+	) {
+		if wallet_account.account_index != 0 {
+			return;
+		}
+		if let Some(entry) = self
+			.monitored_wallet_sync_timestamps
+			.iter_mut()
+			.find(|(at, _)| *at == wallet_account.address_type)
 		{
 			entry.1 = timestamp;
 		} else {
-			self.monitored_wallet_sync_timestamps.push((address_type, timestamp));
+			self.monitored_wallet_sync_timestamps.push((wallet_account.address_type, timestamp));
 		}
 	}
 }

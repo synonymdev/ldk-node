@@ -145,10 +145,10 @@ impl ElectrumChainSource {
 		let primary_incremental =
 			self.node_metrics.read().unwrap().latest_onchain_wallet_sync_timestamp.is_some();
 
-		let additional_types =
-			self.address_type_runtime_config.read().unwrap().additional_address_types();
+		let additional_accounts =
+			self.address_type_runtime_config.read().unwrap().additional_wallet_accounts();
 		let additional_sync_requests = super::collect_additional_sync_requests(
-			&additional_types,
+			&additional_accounts,
 			&onchain_wallet,
 			&self.node_metrics,
 			&self.logger,
@@ -167,7 +167,7 @@ impl ElectrumChainSource {
 		// Primary wallet is identified by address_type = None in the JoinSet results.
 		let now = Instant::now();
 		let mut join_set: tokio::task::JoinSet<(
-			Option<crate::config::AddressType>,
+			Option<crate::config::OnchainWalletAccount>,
 			Result<BdkUpdate, Error>,
 		)> = tokio::task::JoinSet::new();
 
@@ -196,7 +196,7 @@ impl ElectrumChainSource {
 			}
 		}
 
-		for (address_type, sync_req) in additional_sync_requests {
+		for (wallet_account, sync_req) in additional_sync_requests {
 			let client = Arc::clone(&electrum_client);
 			let txs = Arc::clone(&cached_txs);
 			match sync_req {
@@ -206,7 +206,7 @@ impl ElectrumChainSource {
 							.get_incremental_sync_wallet_update(req, txs.iter().cloned())
 							.await
 							.map(|u| u.into());
-						(Some(address_type), result)
+						(Some(wallet_account), result)
 					});
 				},
 				super::WalletSyncRequest::FullScan(req) => {
@@ -215,7 +215,7 @@ impl ElectrumChainSource {
 							.get_full_scan_wallet_update(req, txs.iter().cloned())
 							.await
 							.map(|u| u.into());
-						(Some(address_type), result)
+						(Some(wallet_account), result)
 					});
 				},
 			}
@@ -233,12 +233,12 @@ impl ElectrumChainSource {
 				Ok((None, Err(e))) => {
 					primary_error = Some(e);
 				},
-				Ok((Some(address_type), Ok(update))) => {
-					additional_results.push((address_type, Some(update)));
+				Ok((Some(wallet_account), Ok(update))) => {
+					additional_results.push((wallet_account, Some(update)));
 				},
-				Ok((Some(address_type), Err(e))) => {
-					log_warn!(self.logger, "Failed to sync wallet {:?}: {}", address_type, e);
-					additional_results.push((address_type, None));
+				Ok((Some(wallet_account), Err(e))) => {
+					log_warn!(self.logger, "Failed to sync wallet {:?}: {}", wallet_account, e);
+					additional_results.push((wallet_account, None));
 				},
 				Err(e) => {
 					log_warn!(self.logger, "Wallet sync task panicked: {}", e);

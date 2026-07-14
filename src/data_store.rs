@@ -77,16 +77,18 @@ where
 
 		let updated;
 		match locked_objects.entry(object.id()) {
-			hash_map::Entry::Occupied(mut e) => {
+			hash_map::Entry::Occupied(mut entry) => {
 				let update = object.to_update();
-				updated = e.get_mut().update(&update);
+				let mut updated_object = entry.get().clone();
+				updated = updated_object.update(&update);
 				if updated {
-					self.persist(&e.get())?;
+					self.persist(&updated_object)?;
+					entry.insert(updated_object);
 				}
 			},
-			hash_map::Entry::Vacant(e) => {
-				e.insert(object.clone());
+			hash_map::Entry::Vacant(entry) => {
 				self.persist(&object)?;
+				entry.insert(object);
 				updated = true;
 			},
 		}
@@ -172,7 +174,7 @@ where
 #[cfg(test)]
 mod tests {
 	use lightning::impl_writeable_tlv_based;
-	use lightning::util::test_utils::TestLogger;
+	use lightning::util::test_utils::{TestLogger, TestStore};
 
 	use super::*;
 	use crate::hex_utils;
@@ -295,5 +297,31 @@ mod tests {
 		let mut new_iou_object = iou_object;
 		new_iou_object.data[0] += 1;
 		assert_eq!(Ok(true), data_store.insert_or_update(new_iou_object));
+	}
+
+	#[test]
+	fn insert_or_update_remains_retryable_after_write_failure() {
+		let store: Arc<DynStore> = Arc::new(TestStore::new(true));
+		let logger = Arc::new(TestLogger::new());
+		let id = TestObjectId { id: [42u8; 4] };
+		let original = TestObject { id, data: [1u8; 3] };
+		let data_store = DataStore::new(
+			vec![original],
+			"datastore_retry_primary".to_string(),
+			"datastore_retry_secondary".to_string(),
+			store,
+			logger,
+		);
+
+		let updated = TestObject { id, data: [2u8; 3] };
+		assert_eq!(Err(Error::PersistenceFailed), data_store.insert_or_update(updated));
+		assert_eq!(Some(original), data_store.get(&id));
+		assert_eq!(Err(Error::PersistenceFailed), data_store.insert_or_update(updated));
+
+		let new_id = TestObjectId { id: [84u8; 4] };
+		let new_object = TestObject { id: new_id, data: [3u8; 3] };
+		assert_eq!(Err(Error::PersistenceFailed), data_store.insert_or_update(new_object));
+		assert_eq!(None, data_store.get(&new_id));
+		assert_eq!(Err(Error::PersistenceFailed), data_store.insert_or_update(new_object));
 	}
 }

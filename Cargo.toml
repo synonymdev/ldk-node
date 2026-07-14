@@ -4,7 +4,7 @@ exclude = ["bindings/uniffi-bindgen"]
 
 [package]
 name = "ldk-node"
-version = "0.7.0-rc.53"
+version = "0.7.0-rc.54"
 authors = ["Elias Rohrer <dev@tnull.de>"]
 homepage = "https://lightningdevkit.org/"
 license = "MIT OR Apache-2.0"
@@ -69,6 +69,7 @@ uniffi = { version = "0.28.3", features = ["build"], optional = true }
 serde = { version = "1.0.210", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.128", default-features = false, features = ["std"] }
 log = { version = "0.4.22", default-features = false, features = ["std"]}
+zeroize = "1.8"
 
 vss-client = { package = "vss-client-ng", version = "0.4" }
 prost = { version = "0.11.6", default-features = false}

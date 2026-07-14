@@ -19,18 +19,18 @@ use lightning::util::ser::Writeable;
 use lightning_block_sync::gossip::UtxoSource;
 use lightning_block_sync::http::{HttpEndpoint, JsonResponse};
 use lightning_block_sync::init::{synchronize_listeners, validate_best_block_header};
-use lightning_block_sync::poll::{ChainPoller, ChainTip, ValidatedBlockHeader};
+use lightning_block_sync::poll::ValidatedBlockHeader;
 use lightning_block_sync::rest::RestClient;
 use lightning_block_sync::rpc::{RpcClient, RpcError};
 use lightning_block_sync::{
-	AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource, BlockSourceErrorKind, Cache,
-	SpvClient,
+	AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource, Cache,
 };
 use serde::Serialize;
 
 use super::{periodically_archive_fully_resolved_monitors, WalletSyncStatus};
 use crate::config::{
-	BitcoindRestClientConfig, Config, FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS, TX_BROADCAST_TIMEOUT_SECS,
+	BitcoindRestClientConfig, Config, OnchainWalletAccount, FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS,
+	TX_BROADCAST_TIMEOUT_SECS,
 };
 use crate::fee_estimator::{
 	apply_post_estimation_adjustments, get_all_conf_targets, get_num_block_defaults_for_target,
@@ -43,12 +43,19 @@ use crate::{Error, NodeMetrics};
 
 const CHAIN_POLLING_INTERVAL_SECS: u64 = 2;
 const CHAIN_POLLING_TIMEOUT_SECS: u64 = 10;
+const MAX_ACCOUNT_SET_CHANGE_RETRIES: u8 = 3;
+const ACCOUNT_SET_CHANGE_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+enum ListenerSyncOutcome {
+	Complete(u64),
+	AccountSetChanged,
+}
 
 pub(super) struct BitcoindChainSource {
 	api_client: Arc<BitcoindClient>,
 	header_cache: tokio::sync::Mutex<BoundedHeaderCache>,
-	latest_chain_tip: RwLock<Option<ValidatedBlockHeader>>,
 	wallet_polling_status: Mutex<WalletSyncStatus>,
+	last_mempool_account_generation: AtomicU64,
 	fee_estimator: Arc<OnchainFeeEstimator>,
 	pub(super) kv_store: Arc<DynStore>,
 	pub(super) config: Arc<Config>,
@@ -70,13 +77,12 @@ impl BitcoindChainSource {
 		));
 
 		let header_cache = tokio::sync::Mutex::new(BoundedHeaderCache::new());
-		let latest_chain_tip = RwLock::new(None);
 		let wallet_polling_status = Mutex::new(WalletSyncStatus::Completed);
 		Self {
 			api_client,
 			header_cache,
-			latest_chain_tip,
 			wallet_polling_status,
+			last_mempool_account_generation: AtomicU64::new(u64::MAX),
 			fee_estimator,
 			kv_store,
 			config,
@@ -101,14 +107,13 @@ impl BitcoindChainSource {
 		));
 
 		let header_cache = tokio::sync::Mutex::new(BoundedHeaderCache::new());
-		let latest_chain_tip = RwLock::new(None);
 		let wallet_polling_status = Mutex::new(WalletSyncStatus::Completed);
 
 		Self {
 			api_client,
 			header_cache,
-			latest_chain_tip,
 			wallet_polling_status,
+			last_mempool_account_generation: AtomicU64::new(u64::MAX),
 			fee_estimator,
 			kv_store,
 			config,
@@ -143,130 +148,66 @@ impl BitcoindChainSource {
 		let mut backoff = CHAIN_POLLING_INTERVAL_SECS;
 		const MAX_BACKOFF_SECS: u64 = 300;
 
+		// Use the same chain+mempool path as periodic polling. `sync_wallets` waits on this
+		// initial sync, so returning after headers alone would leave persisted unconfirmed
+		// transactions in place when Bitcoind's mempool is empty after restart.
 		loop {
-			// if the stop_sync_sender has been dropped, we should just exit
 			if stop_sync_receiver.has_changed().unwrap_or(true) {
 				log_trace!(self.logger, "Stopping initial chain sync.");
 				return;
 			}
 
-			let channel_manager_best_block_hash = channel_manager.current_best_block().block_hash;
-			let sweeper_best_block_hash = output_sweeper.current_best_block().block_hash;
-			let onchain_wallet_best_block_hash = onchain_wallet.current_best_block().block_hash;
-
-			let mut chain_listeners = vec![
-				(onchain_wallet_best_block_hash, &*onchain_wallet as &(dyn Listen + Send + Sync)),
-				(channel_manager_best_block_hash, &*channel_manager as &(dyn Listen + Send + Sync)),
-				(sweeper_best_block_hash, &*output_sweeper as &(dyn Listen + Send + Sync)),
-			];
-
-			// TODO: Eventually we might want to see if we can synchronize `ChannelMonitor`s
-			// before giving them to `ChainMonitor` it the first place. However, this isn't
-			// trivial as we load them on initialization (in the `Builder`) and only gain
-			// network access during `start`. For now, we just make sure we get the worst known
-			// block hash and sychronize them via `ChainMonitor`.
-			if let Some(worst_channel_monitor_block_hash) = chain_monitor
-				.list_monitors()
-				.iter()
-				.flat_map(|channel_id| chain_monitor.get_monitor(*channel_id))
-				.map(|m| m.current_best_block())
-				.min_by_key(|b| b.height)
-				.map(|b| b.block_hash)
+			match self
+				.poll_and_update_listeners_inner(
+					Arc::clone(&onchain_wallet),
+					Arc::clone(&channel_manager),
+					Arc::clone(&chain_monitor),
+					Arc::clone(&output_sweeper),
+				)
+				.await
 			{
-				chain_listeners.push((
-					worst_channel_monitor_block_hash,
-					&*chain_monitor as &(dyn Listen + Send + Sync),
-				));
-			}
-
-			let mut locked_header_cache = self.header_cache.lock().await;
-			let now = SystemTime::now();
-			match synchronize_listeners(
-				self.api_client.as_ref(),
-				self.config.network,
-				&mut *locked_header_cache,
-				chain_listeners.clone(),
-			)
-			.await
-			{
-				Ok(chain_tip) => {
-					{
+				Ok(ListenerSyncOutcome::AccountSetChanged) => continue,
+				Ok(ListenerSyncOutcome::Complete(account_generation)) => {
+					let account_operation = onchain_wallet.lock_account_operations();
+					if onchain_wallet.account_generation() != account_generation {
 						log_info!(
 							self.logger,
-							"Finished synchronizing listeners in {}ms",
-							now.elapsed().unwrap().as_millis()
+							"On-chain account set changed during initial sync; retrying."
 						);
-						*self.latest_chain_tip.write().unwrap() = Some(chain_tip);
-						let unix_time_secs_opt =
-							SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
-						let mut locked_node_metrics = self.node_metrics.write().unwrap();
-						locked_node_metrics.latest_lightning_wallet_sync_timestamp =
-							unix_time_secs_opt;
-						locked_node_metrics.latest_onchain_wallet_sync_timestamp =
-							unix_time_secs_opt;
-						write_node_metrics(
-							&*locked_node_metrics,
-							Arc::clone(&self.kv_store),
-							Arc::clone(&self.logger),
-						)
-						.unwrap_or_else(|e| {
-							log_error!(self.logger, "Failed to persist node metrics: {}", e);
-						});
+						drop(account_operation);
+						continue;
 					}
+					self.wallet_polling_status
+						.lock()
+						.unwrap()
+						.propagate_result_to_subscribers(Ok(()));
+					drop(account_operation);
 					break;
 				},
-
 				Err(e) => {
-					log_error!(self.logger, "Failed to synchronize chain listeners: {:?}", e);
-					if e.kind() == BlockSourceErrorKind::Transient {
-						log_info!(
-									self.logger,
-									"Transient error syncing chain listeners: {:?}. Retrying in {} seconds.",
-									e,
-									backoff
-								);
-						// Sleep with stop signal check to allow immediate shutdown
-						tokio::select! {
-							biased;
-							_ = stop_sync_receiver.changed() => {
-								log_trace!(
-									self.logger,
-									"Stopping initial chain sync.",
-								);
-								return;
-							}
-							_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+					log_error!(
+						self.logger,
+						"Failed initial chain/mempool sync: {:?}. Retrying in {} seconds.",
+						e,
+						backoff
+					);
+					tokio::select! {
+						biased;
+						_ = stop_sync_receiver.changed() => {
+							log_trace!(self.logger, "Stopping initial chain sync.");
+							return;
 						}
-						backoff = std::cmp::min(backoff * 2, MAX_BACKOFF_SECS);
-					} else {
-						log_error!(
-									self.logger,
-									"Persistent error syncing chain listeners: {:?}. Retrying in {} seconds.",
-									e,
-									MAX_BACKOFF_SECS
-								);
-						// Sleep with stop signal check to allow immediate shutdown
-						tokio::select! {
-							biased;
-							_ = stop_sync_receiver.changed() => {
-								log_trace!(
-									self.logger,
-									"Stopping initial chain sync during backoff.",
-								);
-								return;
-							}
-							_ = tokio::time::sleep(Duration::from_secs(MAX_BACKOFF_SECS)) => {}
-						}
+						_ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
 					}
+					backoff = (backoff * 2).min(MAX_BACKOFF_SECS);
 				},
 			}
 		}
 
-		// Now propagate the initial result to unblock waiting subscribers.
-		self.wallet_polling_status.lock().unwrap().propagate_result_to_subscribers(Ok(()));
-
 		let mut chain_polling_interval =
 			tokio::time::interval(Duration::from_secs(CHAIN_POLLING_INTERVAL_SECS));
+		// Initial sync already ran chain+mempool; skip the immediate first tick.
+		chain_polling_interval.reset();
 		chain_polling_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
 		let mut fee_rate_update_interval =
@@ -346,10 +287,7 @@ impl BitcoindChainSource {
 		})?;
 
 		match validate_res {
-			Ok(tip) => {
-				*self.latest_chain_tip.write().unwrap() = Some(tip);
-				Ok(tip)
-			},
+			Ok(tip) => Ok(tip),
 			Err(e) => {
 				log_error!(self.logger, "Failed to poll for chain data: {:?}", e);
 				return Err(Error::TxSyncFailed);
@@ -375,106 +313,216 @@ impl BitcoindChainSource {
 			})?;
 		}
 
-		let res = self
-			.poll_and_update_listeners_inner(
-				onchain_wallet,
-				channel_manager,
-				chain_monitor,
-				output_sweeper,
-			)
-			.await;
+		let mut account_set_change_retries = 0;
+		loop {
+			match self
+				.poll_and_update_listeners_inner(
+					Arc::clone(&onchain_wallet),
+					Arc::clone(&channel_manager),
+					Arc::clone(&chain_monitor),
+					Arc::clone(&output_sweeper),
+				)
+				.await
+			{
+				Ok(ListenerSyncOutcome::AccountSetChanged) => {},
+				Ok(ListenerSyncOutcome::Complete(account_generation)) => {
+					let _account_operation = onchain_wallet.lock_account_operations();
+					if onchain_wallet.account_generation() != account_generation {
+						log_info!(
+							self.logger,
+							"On-chain account set changed during sync; retrying."
+						);
+					} else {
+						self.wallet_polling_status
+							.lock()
+							.unwrap()
+							.propagate_result_to_subscribers(Ok(()));
+						return Ok(());
+					}
+				},
+				Err(e) => {
+					self.wallet_polling_status
+						.lock()
+						.unwrap()
+						.propagate_result_to_subscribers(Err(e));
+					return Err(e);
+				},
+			}
 
-		self.wallet_polling_status.lock().unwrap().propagate_result_to_subscribers(res);
-
-		res
+			if account_set_change_retries == MAX_ACCOUNT_SET_CHANGE_RETRIES {
+				log_error!(
+					self.logger,
+					"On-chain account set kept changing during wallet sync; giving up."
+				);
+				let error = Error::WalletOperationFailed;
+				self.wallet_polling_status
+					.lock()
+					.unwrap()
+					.propagate_result_to_subscribers(Err(error.clone()));
+				return Err(error);
+			}
+			account_set_change_retries += 1;
+			tokio::time::sleep(ACCOUNT_SET_CHANGE_RETRY_DELAY).await;
+		}
 	}
 
 	async fn poll_and_update_listeners_inner(
 		&self, onchain_wallet: Arc<Wallet>, channel_manager: Arc<ChannelManager>,
 		chain_monitor: Arc<ChainMonitor>, output_sweeper: Arc<Sweeper>,
-	) -> Result<(), Error> {
-		let latest_chain_tip_opt = self.latest_chain_tip.read().unwrap().clone();
-		let chain_tip =
-			if let Some(tip) = latest_chain_tip_opt { tip } else { self.poll_chain_tip().await? };
+	) -> Result<ListenerSyncOutcome, Error> {
+		onchain_wallet.finish_pending_sync(false)?;
+
+		let previous_lightning_tip = channel_manager.current_best_block();
+		let (account_generation, account_tips) = onchain_wallet.account_sync_snapshot();
+		let account_listeners: Vec<AccountChainListener> = account_tips
+			.iter()
+			.map(|(account, _)| AccountChainListener::new(Arc::clone(&onchain_wallet), *account))
+			.collect();
+		let mut chain_listeners: Vec<(BlockHash, &(dyn Listen + Send + Sync))> = account_tips
+			.iter()
+			.zip(account_listeners.iter())
+			.map(|((_, tip), listener)| (tip.block_hash, listener as &(dyn Listen + Send + Sync)))
+			.collect();
+		chain_listeners.push((
+			previous_lightning_tip.block_hash,
+			&*channel_manager as &(dyn Listen + Send + Sync),
+		));
+		chain_listeners.push((
+			output_sweeper.current_best_block().block_hash,
+			&*output_sweeper as &(dyn Listen + Send + Sync),
+		));
+		if let Some(worst_channel_monitor_block_hash) = chain_monitor
+			.list_monitors()
+			.iter()
+			.flat_map(|channel_id| chain_monitor.get_monitor(*channel_id))
+			.map(|monitor| monitor.current_best_block())
+			.min_by_key(|block| block.height)
+			.map(|block| block.block_hash)
+		{
+			chain_listeners.push((
+				worst_channel_monitor_block_hash,
+				&*chain_monitor as &(dyn Listen + Send + Sync),
+			));
+		}
 
 		let mut locked_header_cache = self.header_cache.lock().await;
-		let chain_poller = ChainPoller::new(Arc::clone(&self.api_client), self.config.network);
-		let chain_listener = ChainListener {
-			onchain_wallet: Arc::clone(&onchain_wallet),
-			channel_manager: Arc::clone(&channel_manager),
-			chain_monitor: Arc::clone(&chain_monitor),
-			output_sweeper,
-		};
-		let mut spv_client =
-			SpvClient::new(chain_tip, chain_poller, &mut *locked_header_cache, &chain_listener);
-
 		let now = SystemTime::now();
-		match spv_client.poll_best_tip().await {
-			Ok((ChainTip::Better(tip), true)) => {
-				log_trace!(
-					self.logger,
-					"Finished polling best tip in {}ms",
-					now.elapsed().unwrap().as_millis()
-				);
-				*self.latest_chain_tip.write().unwrap() = Some(tip);
+		synchronize_listeners(
+			self.api_client.as_ref(),
+			self.config.network,
+			&mut *locked_header_cache,
+			chain_listeners,
+		)
+		.await
+		.map_err(|e| {
+			log_error!(self.logger, "Failed to synchronize chain listeners: {:?}", e);
+			Error::TxSyncFailed
+		})?;
+		drop(locked_header_cache);
 
-				periodically_archive_fully_resolved_monitors(
-					Arc::clone(&channel_manager),
-					chain_monitor,
-					Arc::clone(&self.kv_store),
-					Arc::clone(&self.logger),
-					Arc::clone(&self.node_metrics),
-				)?;
-			},
-			Ok(_) => {},
-			Err(e) => {
-				log_error!(self.logger, "Failed to poll for chain data: {:?}", e);
-				return Err(Error::TxSyncFailed);
-			},
+		for listener in &account_listeners {
+			match listener.finish(account_generation) {
+				Ok(AccountChainListenerOutcome::Complete) => {},
+				Ok(AccountChainListenerOutcome::AccountSetChanged) => {
+					log_info!(self.logger, "On-chain account set changed during sync; retrying.");
+					return Ok(ListenerSyncOutcome::AccountSetChanged);
+				},
+				Err(err) => {
+					log_error!(
+						self.logger,
+						"Per-account wallet sync apply failed for {:?}: {}",
+						listener.account(),
+						err
+					);
+					return Err(err);
+				},
+			}
+		}
+		onchain_wallet.finish_pending_sync(false)?;
+
+		log_trace!(
+			self.logger,
+			"Finished synchronizing chain listeners in {}ms",
+			now.elapsed().unwrap().as_millis()
+		);
+		// Archival and metrics persistence are best-effort: chain/mempool sync already
+		// succeeded, and failing these must not block `sync_wallets` (especially during
+		// initial sync, which subscribers wait on).
+		if let Err(e) = periodically_archive_fully_resolved_monitors(
+			Arc::clone(&channel_manager),
+			Arc::clone(&chain_monitor),
+			Arc::clone(&self.kv_store),
+			Arc::clone(&self.logger),
+			Arc::clone(&self.node_metrics),
+		) {
+			log_error!(
+				self.logger,
+				"Failed to archive fully resolved channel monitors after sync: {}",
+				e
+			);
 		}
 
 		let cur_height = channel_manager.current_best_block().height;
 
 		let now = SystemTime::now();
-		let bdk_unconfirmed_txids = onchain_wallet.get_unconfirmed_txids();
-		match self
+		let bdk_unconfirmed_txids = onchain_wallet.get_unconfirmed_txids_with_last_seen();
+		// A newly loaded account must see transactions emitted before it joined the aggregate.
+		let replay_mempool =
+			self.last_mempool_account_generation.load(Ordering::Acquire) != account_generation;
+		let mempool_update = match self
 			.api_client
-			.get_updated_mempool_transactions(cur_height, bdk_unconfirmed_txids)
+			.get_updated_mempool_transactions(cur_height, bdk_unconfirmed_txids, replay_mempool)
 			.await
 		{
-			Ok((unconfirmed_txs, evicted_txids)) => {
+			Ok(update) => {
 				log_trace!(
 					self.logger,
 					"Finished polling mempool of size {} and {} evicted transactions in {}ms",
-					unconfirmed_txs.len(),
-					evicted_txids.len(),
+					update.transactions.len(),
+					update.evicted_txids.len(),
 					now.elapsed().unwrap().as_millis()
 				);
-				onchain_wallet.apply_mempool_txs(unconfirmed_txs, evicted_txids).unwrap_or_else(
-					|e| {
-						log_error!(self.logger, "Failed to apply mempool transactions: {:?}", e);
-					},
-				);
+				update
 			},
 			Err(e) => {
 				log_error!(self.logger, "Failed to poll for mempool transactions: {:?}", e);
 				return Err(Error::TxSyncFailed);
 			},
+		};
+
+		{
+			let _account_operation = onchain_wallet.lock_account_operations();
+			if onchain_wallet.account_generation() != account_generation {
+				log_info!(self.logger, "On-chain account set changed during sync; retrying.");
+				return Ok(ListenerSyncOutcome::AccountSetChanged);
+			}
+			onchain_wallet
+				.apply_mempool_txs(mempool_update.transactions, mempool_update.evicted_txids)
+				.map_err(|e| {
+					log_error!(self.logger, "Failed to apply mempool transactions: {:?}", e);
+					e
+				})?;
+			self.api_client.commit_mempool_timestamp(mempool_update.next_timestamp);
+			self.last_mempool_account_generation.store(account_generation, Ordering::Release);
 		}
 
 		let unix_time_secs_opt =
 			SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
-		let mut locked_node_metrics = self.node_metrics.write().unwrap();
-		locked_node_metrics.latest_lightning_wallet_sync_timestamp = unix_time_secs_opt;
-		locked_node_metrics.latest_onchain_wallet_sync_timestamp = unix_time_secs_opt;
+		{
+			let mut locked_node_metrics = self.node_metrics.write().unwrap();
+			locked_node_metrics.latest_lightning_wallet_sync_timestamp = unix_time_secs_opt;
+			locked_node_metrics.latest_onchain_wallet_sync_timestamp = unix_time_secs_opt;
 
-		write_node_metrics(
-			&*locked_node_metrics,
-			Arc::clone(&self.kv_store),
-			Arc::clone(&self.logger),
-		)?;
+			if let Err(e) = write_node_metrics(
+				&*locked_node_metrics,
+				Arc::clone(&self.kv_store),
+				Arc::clone(&self.logger),
+			) {
+				log_error!(self.logger, "Failed to persist node metrics after sync: {}", e);
+			}
+		}
 
-		Ok(())
+		Ok(ListenerSyncOutcome::Complete(account_generation))
 	}
 
 	pub(super) async fn update_fee_rate_estimates(&self) -> Result<(), Error> {
@@ -637,6 +685,19 @@ impl BitcoindChainSource {
 			}
 		}
 	}
+}
+
+struct MempoolUpdate {
+	transactions: Vec<(Transaction, u64)>,
+	evicted_txids: Vec<(Txid, u64)>,
+	next_timestamp: Option<u64>,
+}
+
+fn should_emit_mempool_entry(
+	entry_time: u64, entry_height: u32, best_processed_height: u32, watermark: u64,
+	replay_all: bool,
+) -> bool {
+	replay_all || entry_height > best_processed_height || entry_time >= watermark
 }
 
 pub enum BitcoindClient {
@@ -1029,17 +1090,24 @@ impl BitcoindClient {
 		Ok(())
 	}
 
-	/// Returns two `Vec`s:
-	/// - mempool transactions, alongside their first-seen unix timestamps.
-	/// - transactions that have been evicted from the mempool, alongside the last time they were seen absent.
-	pub(crate) async fn get_updated_mempool_transactions(
-		&self, best_processed_height: u32, bdk_unconfirmed_txids: Vec<Txid>,
-	) -> std::io::Result<(Vec<(Transaction, u64)>, Vec<(Txid, u64)>)> {
-		let mempool_txs =
-			self.get_mempool_transactions_and_timestamp_at_height(best_processed_height).await?;
-		let evicted_txids =
-			self.get_evicted_mempool_txids_and_timestamp(bdk_unconfirmed_txids).await?;
-		Ok((mempool_txs, evicted_txids))
+	/// Collects mempool changes without advancing the committed emission timestamp.
+	async fn get_updated_mempool_transactions(
+		&self, best_processed_height: u32, bdk_unconfirmed_txids: Vec<(Txid, u64)>,
+		replay_all: bool,
+	) -> std::io::Result<MempoolUpdate> {
+		let (transactions, next_timestamp) = self
+			.get_mempool_transactions_and_timestamp_at_height(best_processed_height, replay_all)
+			.await?;
+		let sync_timestamp = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.map(|duration| duration.as_secs())
+			.unwrap_or_else(|_| self.mempool_timestamp());
+		let eviction_timestamp =
+			next_timestamp.unwrap_or_else(|| self.mempool_timestamp()).max(sync_timestamp);
+		let evicted_txids = self
+			.get_evicted_mempool_txids_and_timestamp(bdk_unconfirmed_txids, eviction_timestamp)
+			.await?;
+		Ok(MempoolUpdate { transactions, evicted_txids, next_timestamp })
 	}
 
 	/// Get mempool transactions, alongside their first-seen unix timestamps.
@@ -1047,9 +1115,9 @@ impl BitcoindClient {
 	/// This method is an adapted version of `bdk_bitcoind_rpc::Emitter::mempool`. It emits each
 	/// transaction only once, unless we cannot assume the transaction's ancestors are already
 	/// emitted.
-	pub(crate) async fn get_mempool_transactions_and_timestamp_at_height(
-		&self, best_processed_height: u32,
-	) -> std::io::Result<Vec<(Transaction, u64)>> {
+	async fn get_mempool_transactions_and_timestamp_at_height(
+		&self, best_processed_height: u32, replay_all: bool,
+	) -> std::io::Result<(Vec<(Transaction, u64)>, Option<u64>)> {
 		match self {
 			BitcoindClient::Rpc {
 				latest_mempool_timestamp,
@@ -1062,6 +1130,7 @@ impl BitcoindClient {
 					mempool_entries_cache,
 					mempool_txs_cache,
 					best_processed_height,
+					replay_all,
 				)
 				.await
 			},
@@ -1076,6 +1145,7 @@ impl BitcoindClient {
 					mempool_entries_cache,
 					mempool_txs_cache,
 					best_processed_height,
+					replay_all,
 				)
 				.await
 			},
@@ -1086,8 +1156,8 @@ impl BitcoindClient {
 		&self, latest_mempool_timestamp: &AtomicU64,
 		mempool_entries_cache: &tokio::sync::Mutex<HashMap<Txid, MempoolEntry>>,
 		mempool_txs_cache: &tokio::sync::Mutex<HashMap<Txid, (Transaction, u64)>>,
-		best_processed_height: u32,
-	) -> std::io::Result<Vec<(Transaction, u64)>> {
+		best_processed_height: u32, replay_all: bool,
+	) -> std::io::Result<(Vec<(Transaction, u64)>, Option<u64>)> {
 		let prev_mempool_time = latest_mempool_timestamp.load(Ordering::Relaxed);
 		let mut latest_time = prev_mempool_time;
 
@@ -1114,9 +1184,14 @@ impl BitcoindClient {
 			// provides us with the block height that the tx is introduced to the mempool.
 			// If we have already emitted the block of height, we can assume that all
 			// ancestor txs have been processed by the receiver.
-			let ancestor_within_height = entry.height <= best_processed_height;
-			let is_already_emitted = entry.time <= prev_mempool_time;
-			if is_already_emitted && ancestor_within_height {
+			// Re-emit the watermark boundary because Bitcoin Core timestamps entries to the second.
+			if !should_emit_mempool_entry(
+				entry.time,
+				entry.height,
+				best_processed_height,
+				prev_mempool_time,
+				replay_all,
+			) {
 				continue;
 			}
 
@@ -1137,10 +1212,8 @@ impl BitcoindClient {
 			};
 		}
 
-		if !txs_to_emit.is_empty() {
-			latest_mempool_timestamp.store(latest_time, Ordering::Release);
-		}
-		Ok(txs_to_emit)
+		let next_timestamp = (!txs_to_emit.is_empty()).then_some(latest_time);
+		Ok((txs_to_emit, next_timestamp))
 	}
 
 	// Retrieve a list of Txids that have been evicted from the mempool.
@@ -1148,22 +1221,22 @@ impl BitcoindClient {
 	// To this end, we first update our local mempool_entries_cache and then return all unconfirmed
 	// wallet `Txid`s that don't appear in the mempool still.
 	async fn get_evicted_mempool_txids_and_timestamp(
-		&self, bdk_unconfirmed_txids: Vec<Txid>,
+		&self, bdk_unconfirmed_txids: Vec<(Txid, u64)>, timestamp: u64,
 	) -> std::io::Result<Vec<(Txid, u64)>> {
 		match self {
-			BitcoindClient::Rpc { latest_mempool_timestamp, mempool_entries_cache, .. } => {
+			BitcoindClient::Rpc { mempool_entries_cache, .. } => {
 				Self::get_evicted_mempool_txids_and_timestamp_inner(
-					latest_mempool_timestamp,
 					mempool_entries_cache,
 					bdk_unconfirmed_txids,
+					timestamp,
 				)
 				.await
 			},
-			BitcoindClient::Rest { latest_mempool_timestamp, mempool_entries_cache, .. } => {
+			BitcoindClient::Rest { mempool_entries_cache, .. } => {
 				Self::get_evicted_mempool_txids_and_timestamp_inner(
-					latest_mempool_timestamp,
 					mempool_entries_cache,
 					bdk_unconfirmed_txids,
+					timestamp,
 				)
 				.await
 			},
@@ -1171,18 +1244,37 @@ impl BitcoindClient {
 	}
 
 	async fn get_evicted_mempool_txids_and_timestamp_inner(
-		latest_mempool_timestamp: &AtomicU64,
 		mempool_entries_cache: &tokio::sync::Mutex<HashMap<Txid, MempoolEntry>>,
-		bdk_unconfirmed_txids: Vec<Txid>,
+		bdk_unconfirmed_txids: Vec<(Txid, u64)>, timestamp: u64,
 	) -> std::io::Result<Vec<(Txid, u64)>> {
-		let latest_mempool_timestamp = latest_mempool_timestamp.load(Ordering::Relaxed);
 		let mempool_entries_cache = mempool_entries_cache.lock().await;
 		let evicted_txids = bdk_unconfirmed_txids
 			.into_iter()
-			.filter(|txid| !mempool_entries_cache.contains_key(txid))
-			.map(|txid| (txid, latest_mempool_timestamp))
+			.filter(|(txid, _)| !mempool_entries_cache.contains_key(txid))
+			.map(|(txid, last_seen)| (txid, timestamp.max(last_seen)))
 			.collect();
 		Ok(evicted_txids)
+	}
+
+	fn mempool_timestamp(&self) -> u64 {
+		match self {
+			Self::Rpc { latest_mempool_timestamp, .. }
+			| Self::Rest { latest_mempool_timestamp, .. } => {
+				latest_mempool_timestamp.load(Ordering::Acquire)
+			},
+		}
+	}
+
+	fn commit_mempool_timestamp(&self, timestamp: Option<u64>) {
+		let Some(timestamp) = timestamp else {
+			return;
+		};
+		match self {
+			Self::Rpc { latest_mempool_timestamp, .. }
+			| Self::Rest { latest_mempool_timestamp, .. } => {
+				latest_mempool_timestamp.fetch_max(timestamp, Ordering::AcqRel);
+			},
+		}
 	}
 }
 
@@ -1423,35 +1515,70 @@ impl Cache for BoundedHeaderCache {
 	}
 }
 
-pub(crate) struct ChainListener {
-	pub(crate) onchain_wallet: Arc<Wallet>,
-	pub(crate) channel_manager: Arc<ChannelManager>,
-	pub(crate) chain_monitor: Arc<ChainMonitor>,
-	pub(crate) output_sweeper: Arc<Sweeper>,
+/// Listen adapter that synchronizes one aggregate account from its own checkpoint.
+struct AccountChainListener {
+	wallet: Arc<Wallet>,
+	account: OnchainWalletAccount,
+	apply_error: Mutex<Option<Error>>,
 }
 
-impl Listen for ChainListener {
-	fn filtered_block_connected(
-		&self, header: &bitcoin::block::Header,
-		txdata: &lightning::chain::transaction::TransactionData, height: u32,
-	) {
-		self.onchain_wallet.filtered_block_connected(header, txdata, height);
-		self.channel_manager.filtered_block_connected(header, txdata, height);
-		self.chain_monitor.filtered_block_connected(header, txdata, height);
-		self.output_sweeper.filtered_block_connected(header, txdata, height);
-	}
-	fn block_connected(&self, block: &bitcoin::Block, height: u32) {
-		self.onchain_wallet.block_connected(block, height);
-		self.channel_manager.block_connected(block, height);
-		self.chain_monitor.block_connected(block, height);
-		self.output_sweeper.block_connected(block, height);
+#[derive(Debug, PartialEq, Eq)]
+enum AccountChainListenerOutcome {
+	Complete,
+	AccountSetChanged,
+}
+
+impl AccountChainListener {
+	fn new(wallet: Arc<Wallet>, account: OnchainWalletAccount) -> Self {
+		Self { wallet, account, apply_error: Mutex::new(None) }
 	}
 
-	fn blocks_disconnected(&self, fork_point_block: lightning::chain::BestBlock) {
-		self.onchain_wallet.blocks_disconnected(fork_point_block);
-		self.channel_manager.blocks_disconnected(fork_point_block);
-		self.chain_monitor.blocks_disconnected(fork_point_block);
-		self.output_sweeper.blocks_disconnected(fork_point_block);
+	fn account(&self) -> OnchainWalletAccount {
+		self.account
+	}
+
+	fn finish(&self, account_generation: u64) -> Result<AccountChainListenerOutcome, Error> {
+		if let Some(error) = self.apply_error.lock().unwrap().take() {
+			let account_was_removed = self.wallet.account_generation() != account_generation
+				&& !self.wallet.has_onchain_wallet_account(self.account);
+			if account_was_removed {
+				return Ok(AccountChainListenerOutcome::AccountSetChanged);
+			}
+			return Err(error);
+		}
+		Ok(AccountChainListenerOutcome::Complete)
+	}
+
+	fn record_apply_result(&self, result: Result<(), Error>) {
+		if let Err(error) = result {
+			let mut apply_error = self.apply_error.lock().unwrap();
+			if apply_error.is_none() {
+				*apply_error = Some(error);
+			}
+		}
+	}
+}
+
+impl Listen for AccountChainListener {
+	fn filtered_block_connected(
+		&self, _header: &bitcoin::block::Header,
+		_txdata: &lightning::chain::transaction::TransactionData, _height: u32,
+	) {
+		self.record_apply_result(Err(Error::WalletOperationFailed));
+	}
+
+	fn block_connected(&self, block: &bitcoin::Block, height: u32) {
+		if self.apply_error.lock().unwrap().is_some() {
+			return;
+		}
+		self.record_apply_result(self.wallet.apply_block_to_account(self.account, block, height));
+	}
+
+	fn blocks_disconnected(&self, fork_point: BestBlock) {
+		if self.apply_error.lock().unwrap().is_some() {
+			return;
+		}
+		self.record_apply_result(self.wallet.rewind_wallet_account(self.account, fork_point));
 	}
 }
 
@@ -1480,18 +1607,165 @@ impl std::fmt::Display for HttpError {
 
 #[cfg(test)]
 mod tests {
+	use std::sync::Arc;
+
+	use bitcoin::blockdata::constants::genesis_block;
 	use bitcoin::hashes::Hash;
-	use bitcoin::{FeeRate, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
+	use bitcoin::{FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
+	use lightning::chain::{BestBlock, Listen};
 	use lightning_block_sync::http::JsonResponse;
 	use proptest::arbitrary::any;
 	use proptest::collection::vec;
 	use proptest::{prop_assert_eq, prop_compose, proptest};
 	use serde_json::json;
 
+	use crate::builder::NodeBuilder;
 	use crate::chain::bitcoind::{
-		FeeResponse, GetMempoolEntryResponse, GetRawMempoolResponse, GetRawTransactionResponse,
-		MempoolMinFeeResponse,
+		should_emit_mempool_entry, AccountChainListener, AccountChainListenerOutcome,
+		BitcoindClient, FeeResponse, GetMempoolEntryResponse, GetRawMempoolResponse,
+		GetRawTransactionResponse, MempoolMinFeeResponse, MempoolUpdate,
 	};
+	use crate::config::{AddressType, Config, OnchainWalletAccount};
+	use crate::io::test_utils::InMemoryStore;
+	use crate::types::DynStore;
+	use crate::Error;
+
+	fn test_node() -> (crate::Node, [u8; 64]) {
+		let seed = [42u8; 64];
+		let mut config = Config::default();
+		config.network = Network::Regtest;
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes(seed);
+		builder.set_log_facade_logger();
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		(builder.build_with_store(store).unwrap(), seed)
+	}
+
+	fn child_block(parent: &bitcoin::Block, nonce: u32) -> bitcoin::Block {
+		let mut header = parent.header;
+		header.prev_blockhash = parent.block_hash();
+		header.time = header.time.saturating_add(1);
+		header.nonce = nonce;
+		bitcoin::Block { header, txdata: Vec::new() }
+	}
+
+	#[test]
+	fn account_listener_retries_stale_membership_but_preserves_apply_errors() {
+		let (node, seed) = test_node();
+
+		node.wallet.add_monitored_address_type(AddressType::Legacy, &seed).unwrap();
+		let generation = node.wallet.account_generation();
+		let account = OnchainWalletAccount::account_zero(AddressType::Legacy);
+		let stale_listener = AccountChainListener::new(Arc::clone(&node.wallet), account);
+		node.wallet.remove_monitored_address_type(AddressType::Legacy).unwrap();
+		stale_listener.block_connected(&genesis_block(Network::Regtest), 0);
+		assert_eq!(
+			stale_listener.finish(generation),
+			Ok(AccountChainListenerOutcome::AccountSetChanged)
+		);
+
+		let listener_generation = node.wallet.account_generation();
+		let primary = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+		let failed_listener = AccountChainListener::new(Arc::clone(&node.wallet), primary);
+		*failed_listener.apply_error.lock().unwrap() = Some(Error::PersistenceFailed);
+		node.wallet.add_monitored_address_type(AddressType::Legacy, &seed).unwrap();
+		assert!(matches!(
+			failed_listener.finish(listener_generation),
+			Err(Error::PersistenceFailed)
+		));
+	}
+
+	#[test]
+	fn account_listener_streams_replacement_blocks_after_rewind() {
+		let (node, _) = test_node();
+		let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+		let generation = node.wallet.account_generation();
+		let listener = AccountChainListener::new(Arc::clone(&node.wallet), account);
+		let genesis = genesis_block(Network::Regtest);
+		listener.blocks_disconnected(BestBlock::new(genesis.block_hash(), 0));
+
+		let block1 = child_block(&genesis, 1);
+		listener.block_connected(&block1, 1);
+		let tip_after_first = node
+			.wallet
+			.account_sync_snapshot()
+			.1
+			.into_iter()
+			.find(|(candidate, _)| *candidate == account)
+			.unwrap()
+			.1;
+		assert_eq!(tip_after_first.block_hash, block1.block_hash());
+
+		let block2 = child_block(&block1, 2);
+		listener.block_connected(&block2, 2);
+		assert_eq!(listener.finish(generation), Ok(AccountChainListenerOutcome::Complete));
+		let tip_after_second = node
+			.wallet
+			.account_sync_snapshot()
+			.1
+			.into_iter()
+			.find(|(candidate, _)| *candidate == account)
+			.unwrap()
+			.1;
+		assert_eq!(tip_after_second.block_hash, block2.block_hash());
+	}
+
+	#[test]
+	fn account_listener_rejects_filtered_blocks() {
+		let (node, _) = test_node();
+		let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+		let generation = node.wallet.account_generation();
+		let listener = AccountChainListener::new(Arc::clone(&node.wallet), account);
+		let genesis = genesis_block(Network::Regtest);
+
+		listener.filtered_block_connected(&genesis.header, &[], 0);
+		assert!(matches!(listener.finish(generation), Err(Error::WalletOperationFailed)));
+	}
+
+	#[test]
+	fn mempool_timestamp_advances_only_after_commit() {
+		let client = BitcoindClient::new_rpc(
+			"127.0.0.1".to_string(),
+			18443,
+			"user".to_string(),
+			"password".to_string(),
+		);
+		let update = MempoolUpdate {
+			transactions: Vec::new(),
+			evicted_txids: Vec::new(),
+			next_timestamp: Some(42),
+		};
+
+		assert_eq!(client.mempool_timestamp(), 0);
+		client.commit_mempool_timestamp(update.next_timestamp);
+		assert_eq!(client.mempool_timestamp(), 42);
+		client.commit_mempool_timestamp(Some(21));
+		assert_eq!(client.mempool_timestamp(), 42);
+	}
+
+	#[test]
+	fn mempool_watermark_replays_same_second_entries() {
+		assert!(should_emit_mempool_entry(42, 100, 100, 42, false));
+		assert!(!should_emit_mempool_entry(41, 100, 100, 42, false));
+		assert!(should_emit_mempool_entry(41, 101, 100, 42, false));
+		assert!(should_emit_mempool_entry(41, 100, 100, 42, true));
+	}
+
+	#[tokio::test]
+	async fn mempool_eviction_never_predates_last_seen() {
+		let txid = Txid::from_byte_array([42; 32]);
+		let entries = tokio::sync::Mutex::new(std::collections::HashMap::new());
+		let evicted = BitcoindClient::get_evicted_mempool_txids_and_timestamp_inner(
+			&entries,
+			vec![(txid, 42)],
+			0,
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(evicted, vec![(txid, 42)]);
+	}
 
 	prop_compose! {
 		fn arbitrary_witness()(

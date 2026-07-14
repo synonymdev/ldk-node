@@ -7,10 +7,11 @@
 
 use std::sync::Arc;
 
+use bdk_chain::BlockId;
 use bdk_chain::Merge;
 use bdk_wallet::{ChangeSet, WalletPersister};
 
-use crate::config::AddressType;
+use crate::config::OnchainWalletAccount;
 use crate::io::utils::{
 	read_bdk_wallet_change_set, write_bdk_wallet_change_descriptor, write_bdk_wallet_descriptor,
 	write_bdk_wallet_indexer, write_bdk_wallet_local_chain, write_bdk_wallet_network,
@@ -22,14 +23,42 @@ pub(crate) struct KVStoreWalletPersister {
 	latest_change_set: Option<ChangeSet>,
 	kv_store: Arc<DynStore>,
 	logger: Arc<Logger>,
-	address_type: AddressType,
+	wallet_account: OnchainWalletAccount,
 }
 
 impl KVStoreWalletPersister {
 	pub(crate) fn new(
-		kv_store: Arc<DynStore>, logger: Arc<Logger>, address_type: AddressType,
+		kv_store: Arc<DynStore>, logger: Arc<Logger>, wallet_account: OnchainWalletAccount,
 	) -> Self {
-		Self { latest_change_set: None, kv_store, logger, address_type }
+		Self { latest_change_set: None, kv_store, logger, wallet_account }
+	}
+
+	/// Replaces the stored local-chain tip while retaining descriptors, transactions, and indexes.
+	pub(crate) fn rewind_to_checkpoint(
+		&mut self, checkpoint: BlockId,
+	) -> Result<(), std::io::Error> {
+		let persisted = <Self as WalletPersister>::initialize(self)?;
+		if checkpoint.height == 0
+			&& persisted.local_chain.blocks.get(&0).copied().flatten() != Some(checkpoint.hash)
+		{
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				"Wallet genesis does not match the requested checkpoint",
+			));
+		}
+
+		let mut rewind = ChangeSet::default();
+		for height in persisted
+			.local_chain
+			.blocks
+			.keys()
+			.copied()
+			.filter(|height| *height > checkpoint.height)
+		{
+			rewind.local_chain.blocks.insert(height, None);
+		}
+		rewind.local_chain.blocks.insert(checkpoint.height, Some(checkpoint.hash));
+		<Self as WalletPersister>::persist(self, &rewind)
 	}
 }
 
@@ -45,7 +74,7 @@ impl WalletPersister for KVStoreWalletPersister {
 		let change_set_opt = read_bdk_wallet_change_set(
 			Arc::clone(&persister.kv_store),
 			Arc::clone(&persister.logger),
-			persister.address_type,
+			persister.wallet_account,
 		)?;
 
 		let change_set = match change_set_opt {
@@ -96,7 +125,7 @@ impl WalletPersister for KVStoreWalletPersister {
 					&descriptor,
 					Arc::clone(&persister.kv_store),
 					Arc::clone(&persister.logger),
-					persister.address_type,
+					persister.wallet_account,
 				)?;
 			}
 		}
@@ -120,7 +149,7 @@ impl WalletPersister for KVStoreWalletPersister {
 					&change_descriptor,
 					Arc::clone(&persister.kv_store),
 					Arc::clone(&persister.logger),
-					persister.address_type,
+					persister.wallet_account,
 				)?;
 			}
 		}
@@ -142,7 +171,7 @@ impl WalletPersister for KVStoreWalletPersister {
 					&network,
 					Arc::clone(&persister.kv_store),
 					Arc::clone(&persister.logger),
-					persister.address_type,
+					persister.wallet_account,
 				)?;
 			}
 		}
@@ -157,17 +186,14 @@ impl WalletPersister for KVStoreWalletPersister {
 		// Merge and persist the sub-changesets individually if necessary.
 		//
 		// According to the BDK team the individual sub-changesets can be persisted
-		// individually/non-atomically, "(h)owever, the localchain tip is used by block-by-block
-		// chain sources as a reference as to where to sync from, so I would persist that last", "I
-		// would write in this order: indexer, tx_graph, local_chain", which is why we follow this
-		// particular order.
+		// independently as long as we ensure the above fields are persisted first.
 		if !change_set.indexer.is_empty() {
 			latest_change_set.indexer.merge(change_set.indexer.clone());
 			write_bdk_wallet_indexer(
 				&latest_change_set.indexer,
 				Arc::clone(&persister.kv_store),
 				Arc::clone(&persister.logger),
-				persister.address_type,
+				persister.wallet_account,
 			)?;
 		}
 
@@ -177,7 +203,7 @@ impl WalletPersister for KVStoreWalletPersister {
 				&latest_change_set.tx_graph,
 				Arc::clone(&persister.kv_store),
 				Arc::clone(&persister.logger),
-				persister.address_type,
+				persister.wallet_account,
 			)?;
 		}
 
@@ -187,7 +213,7 @@ impl WalletPersister for KVStoreWalletPersister {
 				&latest_change_set.local_chain,
 				Arc::clone(&persister.kv_store),
 				Arc::clone(&persister.logger),
-				persister.address_type,
+				persister.wallet_account,
 			)?;
 		}
 

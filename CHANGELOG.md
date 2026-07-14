@@ -1,4 +1,4 @@
-# 0.7.0-rc.52 (Synonym Fork)
+# 0.7.0-rc.54 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -65,6 +65,26 @@
 
 ## Synonym Fork Additions
 
+- Added derived on-chain wallet account support (`account_index >= 1`) from the node's master
+  seed:
+  - `export_onchain_wallet_account_xpub` / `add_onchain_wallet_account` (idempotent; validates
+    xpub; rejects account `0` and indexes above `MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`);
+    `get_balance_for_onchain_wallet_account` / `list_onchain_wallet_accounts`;
+    `OnchainPayment::new_address_for_account` / `new_address_info_for_account` /
+    `reveal_receive_addresses_to_account`;
+    `OnchainWalletAccount`
+  - Registration is not persisted and not auto-loaded; re-add after each build. BDK data
+    remains persisted per account
+  - Derived accounts full-scan after registration, then use incremental sync. Apps issuing addresses
+    from an exported xpub reveal their highest issued index before syncing; descriptor origins use
+    the real account path; channel preflight requires an account-`0` SegWit builder before counting
+    non-Legacy (including derived) funds
+  - Bitcoind Listen synchronizes every wallet from its own checkpoint alongside the Lightning
+    listeners, handles shorter and equal-height forked tips, and replays the mempool when the
+    loaded account set changes
+  - Funds combine for balances, coin selection, and signing; primary receive/change stay on
+    account `0`; Legacy-primary funding builds/changes only on account-0 non-Legacy wallets
+    while derived UTXOs remain selectable as foreign inputs
 - Added configurable routing scorer parameters `scoring_fee_params` and `scoring_decay_params`
 - Added `AddressInfo` (`index`, `address`, `keychain`) and `KeychainKind`.
 - Added `OnchainPayment` methods `new_address_info`, `new_address_info_for_type`,

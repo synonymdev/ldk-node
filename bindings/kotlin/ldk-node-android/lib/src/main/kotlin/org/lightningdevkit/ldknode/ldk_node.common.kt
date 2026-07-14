@@ -426,6 +426,9 @@ interface NodeInterface {
     @Throws(NodeException::class)
     fun `addAddressTypeToMonitorWithMnemonic`(`addressType`: AddressType, `mnemonic`: Mnemonic, `passphrase`: kotlin.String?)
 
+    @Throws(NodeException::class)
+    fun `addOnchainWalletAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `xpub`: kotlin.String)
+
     fun `announcementAddresses`(): List<SocketAddress>?
 
     fun `bolt11Payment`(): Bolt11Payment
@@ -449,6 +452,9 @@ interface NodeInterface {
     fun `eventHandled`()
 
     @Throws(NodeException::class)
+    fun `exportOnchainWalletAccountXpub`(`addressType`: AddressType, `accountIndex`: kotlin.UInt): kotlin.String
+
+    @Throws(NodeException::class)
     fun `exportPathfindingScores`(): kotlin.ByteArray
 
     @Throws(NodeException::class)
@@ -460,6 +466,9 @@ interface NodeInterface {
     @Throws(NodeException::class)
     fun `getBalanceForAddressType`(`addressType`: AddressType): AddressTypeBalance
 
+    @Throws(NodeException::class)
+    fun `getBalanceForOnchainWalletAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt): AddressTypeBalance
+
     fun `getTransactionDetails`(`txid`: Txid): TransactionDetails?
 
     fun `listBalances`(): BalanceDetails
@@ -467,6 +476,8 @@ interface NodeInterface {
     fun `listChannels`(): List<ChannelDetails>
 
     fun `listMonitoredAddressTypes`(): List<AddressType>
+
+    fun `listOnchainWalletAccounts`(): List<OnchainWalletAccount>
 
     fun `listPayments`(): List<PaymentDetails>
 
@@ -609,16 +620,25 @@ interface OnchainPaymentInterface {
     fun `newAddress`(): Address
 
     @Throws(NodeException::class)
+    fun `newAddressForAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt): Address
+
+    @Throws(NodeException::class)
     fun `newAddressForType`(`addressType`: AddressType): Address
 
     @Throws(NodeException::class)
     fun `newAddressInfo`(): AddressInfo
 
     @Throws(NodeException::class)
+    fun `newAddressInfoForAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt): AddressInfo
+
+    @Throws(NodeException::class)
     fun `newAddressInfoForType`(`addressType`: AddressType): AddressInfo
 
     @Throws(NodeException::class)
     fun `revealReceiveAddressesTo`(`addressType`: AddressType, `index`: kotlin.UInt)
+
+    @Throws(NodeException::class)
+    fun `revealReceiveAddressesToAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `index`: kotlin.UInt)
 
     @Throws(NodeException::class)
     fun `selectUtxosWithAlgorithm`(`targetAmountSats`: kotlin.ULong, `feeRate`: FeeRate?, `algorithm`: CoinSelectionAlgorithm, `utxos`: List<SpendableUtxo>?): List<SpendableUtxo>
@@ -1103,6 +1123,16 @@ data class NodeStatus (
     val `latestPathfindingScoresSyncTimestamp`: kotlin.ULong?,
     val `latestNodeAnnouncementBroadcastTimestamp`: kotlin.ULong?,
     val `latestChannelMonitorArchivalHeight`: kotlin.UInt?
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class OnchainWalletAccount (
+    val `addressType`: AddressType,
+    val `accountIndex`: kotlin.UInt
 ) {
     companion object
 }
@@ -2210,6 +2240,8 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
 
 
 

@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 
 use bitcoin::{Address, Txid};
 
-use crate::config::{AddressType, Config};
+use crate::config::{AddressType, Config, OnchainWalletAccount};
 use crate::error::Error;
 use crate::fee_estimator::ConfirmationTarget;
 use crate::logger::{log_info, LdkLogger, Logger};
@@ -166,7 +166,46 @@ impl OnchainPayment {
 		Ok(funding_address_info)
 	}
 
-	/// Derive address metadata for `address_type`, `keychain`, and `index`.
+	/// Retrieve a new on-chain address for a specific wallet account.
+	pub fn new_address_for_account(
+		&self, address_type: AddressType, account_index: u32,
+	) -> Result<Address, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+
+		let wallet_account = OnchainWalletAccount { address_type, account_index };
+		let funding_address = self.wallet.get_new_address_for_account(wallet_account)?;
+		log_info!(
+			self.logger,
+			"Generated new funding address for {:?}: {}",
+			wallet_account,
+			funding_address
+		);
+		Ok(funding_address)
+	}
+
+	/// Retrieve a new on-chain address with derivation metadata for a specific wallet account.
+	pub fn new_address_info_for_account(
+		&self, address_type: AddressType, account_index: u32,
+	) -> Result<AddressInfo, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+
+		let wallet_account = OnchainWalletAccount { address_type, account_index };
+		let funding_address_info =
+			AddressInfo::from(self.wallet.get_new_address_info_for_account(wallet_account)?);
+		log_info!(
+			self.logger,
+			"Generated new funding address for {:?}: {}",
+			wallet_account,
+			funding_address_info.address
+		);
+		Ok(funding_address_info)
+	}
+
+	/// Derive address metadata for `address_type`, `keychain`, and `index` on account `0`.
 	///
 	/// This does not reveal, reserve, or advance any wallet cursor.
 	pub fn address_info_for_type_at_index(
@@ -181,7 +220,8 @@ impl OnchainPayment {
 			.map(Into::into)
 	}
 
-	/// Derive address metadata for a contiguous range without advancing any wallet cursor.
+	/// Derive address metadata for a contiguous account-`0` range without advancing any wallet
+	/// cursor.
 	///
 	/// The returned vector contains `count` addresses starting at `start_index`. Batch requests are
 	/// capped at 10,000 addresses per call.
@@ -197,7 +237,8 @@ impl OnchainPayment {
 			.map(|infos| infos.into_iter().map(Into::into).collect())
 	}
 
-	/// Reveal external receive addresses for `address_type` up to and including `index`.
+	/// Reveal external receive addresses for account-`0` `address_type` up to and including
+	/// `index`.
 	///
 	/// After this returns successfully, normal address generation for `address_type` will not return
 	/// any receive address with an index at or below `index`.
@@ -209,6 +250,21 @@ impl OnchainPayment {
 		}
 
 		self.wallet.reveal_receive_addresses_to(address_type, index)
+	}
+
+	/// Reveal external receive addresses through `index` for a specific wallet account.
+	///
+	/// Apps issuing addresses from an exported account xpub should call this with the highest issued
+	/// index so wallet sync includes the corresponding scripts.
+	pub fn reveal_receive_addresses_to_account(
+		&self, address_type: AddressType, account_index: u32, index: u32,
+	) -> Result<(), Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+
+		let wallet_account = OnchainWalletAccount { address_type, account_index };
+		self.wallet.reveal_receive_addresses_to_account(wallet_account, index)
 	}
 
 	/// Returns a list of all UTXOs that are safe to spend.

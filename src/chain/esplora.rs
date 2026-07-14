@@ -118,10 +118,10 @@ impl EsploraChainSource {
 		let primary_incremental =
 			self.node_metrics.read().unwrap().latest_onchain_wallet_sync_timestamp.is_some();
 
-		let additional_types =
-			self.address_type_runtime_config.read().unwrap().additional_address_types();
+		let additional_accounts =
+			self.address_type_runtime_config.read().unwrap().additional_wallet_accounts();
 		let additional_sync_requests = super::collect_additional_sync_requests(
-			&additional_types,
+			&additional_accounts,
 			&onchain_wallet,
 			&self.node_metrics,
 			&self.logger,
@@ -136,7 +136,7 @@ impl EsploraChainSource {
 		// Primary wallet is identified by address_type = None in the JoinSet results.
 		let now = Instant::now();
 		type EsploraSyncResult = (
-			Option<crate::config::AddressType>,
+			Option<crate::config::OnchainWalletAccount>,
 			Result<
 				Result<bdk_wallet::Update, Box<esplora_client::Error>>,
 				tokio::time::error::Elapsed,
@@ -170,7 +170,7 @@ impl EsploraChainSource {
 			},
 		}
 
-		for (address_type, sync_req) in additional_sync_requests {
+		for (wallet_account, sync_req) in additional_sync_requests {
 			let client = self.esplora_client.clone();
 			match sync_req {
 				super::WalletSyncRequest::Incremental(req) => {
@@ -181,7 +181,7 @@ impl EsploraChainSource {
 						)
 						.await
 						.map(|r| r.map(|u| bdk_wallet::Update::from(u)));
-						(Some(address_type), result)
+						(Some(wallet_account), result)
 					});
 				},
 				super::WalletSyncRequest::FullScan(req) => {
@@ -192,7 +192,7 @@ impl EsploraChainSource {
 						)
 						.await
 						.map(|r| r.map(|u| bdk_wallet::Update::from(u)));
-						(Some(address_type), result)
+						(Some(wallet_account), result)
 					});
 				},
 			}
@@ -255,16 +255,16 @@ impl EsploraChainSource {
 					);
 					primary_error = Some(Error::WalletOperationTimeout);
 				},
-				Ok((Some(address_type), Ok(Ok(update)))) => {
-					additional_results.push((address_type, Some(update)));
+				Ok((Some(wallet_account), Ok(Ok(update)))) => {
+					additional_results.push((wallet_account, Some(update)));
 				},
-				Ok((Some(address_type), Ok(Err(e)))) => {
-					log_warn!(self.logger, "Failed to sync wallet {:?}: {}", address_type, e);
-					additional_results.push((address_type, None));
+				Ok((Some(wallet_account), Ok(Err(e)))) => {
+					log_warn!(self.logger, "Failed to sync wallet {:?}: {}", wallet_account, e);
+					additional_results.push((wallet_account, None));
 				},
-				Ok((Some(address_type), Err(_))) => {
-					log_warn!(self.logger, "Sync timeout for wallet {:?}", address_type);
-					additional_results.push((address_type, None));
+				Ok((Some(wallet_account), Err(_))) => {
+					log_warn!(self.logger, "Sync timeout for wallet {:?}", wallet_account);
+					additional_results.push((wallet_account, None));
 				},
 				Err(e) => {
 					log_warn!(self.logger, "Wallet sync task panicked: {}", e);
