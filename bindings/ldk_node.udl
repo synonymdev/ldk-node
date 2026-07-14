@@ -66,6 +66,8 @@ dictionary EsploraSyncConfig {
 dictionary ElectrumSyncConfig {
 	BackgroundSyncConfig? background_sync_config;
 	u64 connection_timeout_secs;
+	u32 additional_wallet_full_scan_batch_size;
+	u32 additional_wallet_full_scan_stop_gap;
 };
 
 dictionary LSPS2ServiceConfig {

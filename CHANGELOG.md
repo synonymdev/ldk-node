@@ -65,6 +65,8 @@
 
 ## Synonym Fork Additions
 
+- Added configurable Electrum batch size and stop gap for full scans of non-primary on-chain
+  wallets, while preserving the existing primary-wallet behavior and defaults.
 - Added derived-account lifecycle parity with account-`0` wallets: configured accounts load on
   build, registered accounts can be unloaded at runtime without deleting persisted BDK state, and
   account-specific address metadata can be derived by index or range.

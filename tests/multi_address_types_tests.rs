@@ -3562,9 +3562,9 @@ mod derived_accounts {
 	use bitcoin::{Address, Amount, CompressedPublicKey, FeeRate, Network};
 	use electrsd::corepc_node::{Conf as BitcoindConf, Node as BitcoinD};
 	use electrum_client::ElectrumApi;
-	use ldk_node::config::{AddressType, OnchainWalletAccountConfig};
+	use ldk_node::config::{AddressType, ElectrumSyncConfig, OnchainWalletAccountConfig};
 	use ldk_node::payment::KeychainKind;
-	use ldk_node::NodeError;
+	use ldk_node::{Builder, NodeError};
 
 	use crate::common::{
 		distribute_funds_unconfirmed, generate_blocks_and_wait, invalidate_blocks, open_channel,
@@ -3874,6 +3874,45 @@ mod derived_accounts {
 			.unwrap();
 		assert_eq!(next.index, 0);
 		assert_eq!(next.keychain, KeychainKind::External);
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_electrum_additional_full_scan_uses_configured_gap_and_batch_size() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let config = node_config(AddressType::NativeSegwit, vec![]).node_config;
+		crate::common::setup_builder!(builder, config);
+		let electrum_url = format!("tcp://{}", electrsd.electrum_url);
+		let sync_config = ElectrumSyncConfig {
+			background_sync_config: None,
+			additional_wallet_full_scan_batch_size: 100,
+			additional_wallet_full_scan_stop_gap: 1_000,
+			..Default::default()
+		};
+		builder.set_chain_source_electrum(electrum_url, Some(sync_config));
+		builder.set_log_facade_logger();
+		let node = builder.build().unwrap();
+		node.start().unwrap();
+
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		let address = native_segwit_receive_address_from_xpub(&xpub, 30);
+		premine_and_distribute_funds(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![address],
+			Amount::from_sat(100_000),
+		)
+		.await;
+
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub).unwrap();
+		node.sync_wallets().unwrap();
+		assert_eq!(
+			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+				.unwrap()
+				.total_sats,
+			100_000
+		);
+
 		node.stop().unwrap();
 	}
 

@@ -1499,7 +1499,9 @@ fn build_wallet_for_account(
 				e
 			})?;
 
-	// Re-loaded wallets keep their persisted tip so chain backends can catch up.
+	// Re-loaded wallets keep their persisted tip so chain backends can catch up. New wallets start
+	// at the known tip; Esplora and Electrum recover history independently with a full scan, while
+	// Bitcoind cannot recover confirmed pre-registration history.
 	if !loaded_from_store {
 		if let Some(best_block) = chain_tip_opt {
 			let mut checkpoint = wallet.latest_checkpoint();

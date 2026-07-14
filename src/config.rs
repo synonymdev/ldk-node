@@ -50,6 +50,9 @@ pub(crate) const DEFAULT_ESPLORA_CLIENT_TIMEOUT_SECS: u64 = 10;
 // The default Electrum connection/read timeout we're using.
 pub(crate) const DEFAULT_ELECTRUM_CONNECTION_TIMEOUT_SECS: u64 = 10;
 
+// The default number of scripts queried in each Electrum batch.
+pub(crate) const BDK_ELECTRUM_CLIENT_BATCH_SIZE: usize = 5;
+
 // The 'stop gap' parameter used by BDK's wallet sync. This seems to configure the threshold
 // number of derivation indexes after which BDK stops looking for new scripts belonging to the wallet.
 pub(crate) const BDK_CLIENT_STOP_GAP: usize = 20;
@@ -194,6 +197,8 @@ impl OnchainWalletAccount {
 ///
 /// The xpub must match the account derived from the node's seed. Account `0` is reserved for
 /// [`Config::address_type`] and [`Config::address_types_to_monitor`].
+/// Esplora and Electrum recover confirmed history with a full scan. Bitcoind cannot recover
+/// confirmed transactions from before a brand-new account's first load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnchainWalletAccountConfig {
 	/// The script/address type of this wallet account.
@@ -841,6 +846,16 @@ pub struct ElectrumSyncConfig {
 	/// warning. Note that two TCP connections are opened at node start (on-chain and Lightning
 	/// sync), so budget accordingly when tuning this value. Defaults to 10 seconds.
 	pub connection_timeout_secs: u64,
+	/// Batch size for Electrum full scans of non-primary wallets.
+	///
+	/// This applies to monitored account-`0` address types and derived accounts. It does not affect
+	/// the primary wallet or incremental sync. Values below `1` are treated as `1`. Defaults to `5`.
+	pub additional_wallet_full_scan_batch_size: u32,
+	/// Stop gap for Electrum full scans of non-primary wallets.
+	///
+	/// This applies to monitored account-`0` address types and derived accounts. It does not affect
+	/// the primary wallet. Values below `1` are treated as `1`. Defaults to `20`.
+	pub additional_wallet_full_scan_stop_gap: u32,
 }
 
 impl Default for ElectrumSyncConfig {
@@ -848,6 +863,8 @@ impl Default for ElectrumSyncConfig {
 		Self {
 			background_sync_config: Some(BackgroundSyncConfig::default()),
 			connection_timeout_secs: DEFAULT_ELECTRUM_CONNECTION_TIMEOUT_SECS,
+			additional_wallet_full_scan_batch_size: BDK_ELECTRUM_CLIENT_BATCH_SIZE as u32,
+			additional_wallet_full_scan_stop_gap: BDK_CLIENT_STOP_GAP as u32,
 		}
 	}
 }
