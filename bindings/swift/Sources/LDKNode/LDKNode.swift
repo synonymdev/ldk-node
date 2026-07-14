@@ -2605,6 +2605,8 @@ public protocol NodeProtocol: AnyObject {
 
     func removeAddressTypeFromMonitor(addressType: AddressType) throws
 
+    func removeOnchainWalletAccount(addressType: AddressType, accountIndex: UInt32) throws
+
     func removePayment(paymentId: PaymentId) throws
 
     func setPrimaryAddressType(addressType: AddressType, seedBytes: [UInt8]) throws
@@ -2952,6 +2954,14 @@ open class Node:
         try rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_node_remove_address_type_from_monitor(self.uniffiClonePointer(),
                                                                             FfiConverterTypeAddressType.lower(addressType), $0)
+        }
+    }
+
+    open func removeOnchainWalletAccount(addressType: AddressType, accountIndex: UInt32) throws {
+        try rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_node_remove_onchain_wallet_account(self.uniffiClonePointer(),
+                                                                         FfiConverterTypeAddressType.lower(addressType),
+                                                                         FfiConverterUInt32.lower(accountIndex), $0)
         }
     }
 
@@ -3356,7 +3366,11 @@ public func FfiConverterTypeOffer_lower(_ value: Offer) -> UnsafeMutableRawPoint
 public protocol OnchainPaymentProtocol: AnyObject {
     func accelerateByCpfp(txid: Txid, feeRate: FeeRate?, destinationAddress: Address?) throws -> Txid
 
+    func addressInfoForAccountAtIndex(addressType: AddressType, accountIndex: UInt32, keychain: KeychainKind, index: UInt32) throws -> AddressInfo
+
     func addressInfoForTypeAtIndex(addressType: AddressType, keychain: KeychainKind, index: UInt32) throws -> AddressInfo
+
+    func addressInfosForAccount(addressType: AddressType, accountIndex: UInt32, keychain: KeychainKind, startIndex: UInt32, count: UInt32) throws -> [AddressInfo]
 
     func addressInfosForType(addressType: AddressType, keychain: KeychainKind, startIndex: UInt32, count: UInt32) throws -> [AddressInfo]
 
@@ -3451,12 +3465,33 @@ open class OnchainPayment:
         })
     }
 
+    open func addressInfoForAccountAtIndex(addressType: AddressType, accountIndex: UInt32, keychain: KeychainKind, index: UInt32) throws -> AddressInfo {
+        return try FfiConverterTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_address_info_for_account_at_index(self.uniffiClonePointer(),
+                                                                                       FfiConverterTypeAddressType.lower(addressType),
+                                                                                       FfiConverterUInt32.lower(accountIndex),
+                                                                                       FfiConverterTypeKeychainKind.lower(keychain),
+                                                                                       FfiConverterUInt32.lower(index), $0)
+        })
+    }
+
     open func addressInfoForTypeAtIndex(addressType: AddressType, keychain: KeychainKind, index: UInt32) throws -> AddressInfo {
         return try FfiConverterTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_address_info_for_type_at_index(self.uniffiClonePointer(),
                                                                                     FfiConverterTypeAddressType.lower(addressType),
                                                                                     FfiConverterTypeKeychainKind.lower(keychain),
                                                                                     FfiConverterUInt32.lower(index), $0)
+        })
+    }
+
+    open func addressInfosForAccount(addressType: AddressType, accountIndex: UInt32, keychain: KeychainKind, startIndex: UInt32, count: UInt32) throws -> [AddressInfo] {
+        return try FfiConverterSequenceTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_account(self.uniffiClonePointer(),
+                                                                               FfiConverterTypeAddressType.lower(addressType),
+                                                                               FfiConverterUInt32.lower(accountIndex),
+                                                                               FfiConverterTypeKeychainKind.lower(keychain),
+                                                                               FfiConverterUInt32.lower(startIndex),
+                                                                               FfiConverterUInt32.lower(count), $0)
         })
     }
 
@@ -5319,10 +5354,11 @@ public struct Config {
     public var includeUntrustedPendingInSpendable: Bool
     public var addressType: AddressType
     public var addressTypesToMonitor: [AddressType]
+    public var onchainWalletAccounts: [OnchainWalletAccountConfig]
 
     /// Default memberwise initializers are never public by default, so we
     /// declare one manually.
-    public init(storageDirPath: String, network: Network, listeningAddresses: [SocketAddress]?, announcementAddresses: [SocketAddress]?, nodeAlias: NodeAlias?, trustedPeers0conf: [PublicKey], probingLiquidityLimitMultiplier: UInt64, anchorChannelsConfig: AnchorChannelsConfig?, routeParameters: RouteParametersConfig?, scoringFeeParams: ScoringFeeParameters?, scoringDecayParams: ScoringDecayParameters?, includeUntrustedPendingInSpendable: Bool, addressType: AddressType, addressTypesToMonitor: [AddressType]) {
+    public init(storageDirPath: String, network: Network, listeningAddresses: [SocketAddress]?, announcementAddresses: [SocketAddress]?, nodeAlias: NodeAlias?, trustedPeers0conf: [PublicKey], probingLiquidityLimitMultiplier: UInt64, anchorChannelsConfig: AnchorChannelsConfig?, routeParameters: RouteParametersConfig?, scoringFeeParams: ScoringFeeParameters?, scoringDecayParams: ScoringDecayParameters?, includeUntrustedPendingInSpendable: Bool, addressType: AddressType, addressTypesToMonitor: [AddressType], onchainWalletAccounts: [OnchainWalletAccountConfig]) {
         self.storageDirPath = storageDirPath
         self.network = network
         self.listeningAddresses = listeningAddresses
@@ -5337,6 +5373,7 @@ public struct Config {
         self.includeUntrustedPendingInSpendable = includeUntrustedPendingInSpendable
         self.addressType = addressType
         self.addressTypesToMonitor = addressTypesToMonitor
+        self.onchainWalletAccounts = onchainWalletAccounts
     }
 }
 
@@ -5384,6 +5421,9 @@ extension Config: Equatable, Hashable {
         if lhs.addressTypesToMonitor != rhs.addressTypesToMonitor {
             return false
         }
+        if lhs.onchainWalletAccounts != rhs.onchainWalletAccounts {
+            return false
+        }
         return true
     }
 
@@ -5402,6 +5442,7 @@ extension Config: Equatable, Hashable {
         hasher.combine(includeUntrustedPendingInSpendable)
         hasher.combine(addressType)
         hasher.combine(addressTypesToMonitor)
+        hasher.combine(onchainWalletAccounts)
     }
 }
 
@@ -5425,7 +5466,8 @@ public struct FfiConverterTypeConfig: FfiConverterRustBuffer {
                 scoringDecayParams: FfiConverterOptionTypeScoringDecayParameters.read(from: &buf),
                 includeUntrustedPendingInSpendable: FfiConverterBool.read(from: &buf),
                 addressType: FfiConverterTypeAddressType.read(from: &buf),
-                addressTypesToMonitor: FfiConverterSequenceTypeAddressType.read(from: &buf)
+                addressTypesToMonitor: FfiConverterSequenceTypeAddressType.read(from: &buf),
+                onchainWalletAccounts: FfiConverterSequenceTypeOnchainWalletAccountConfig.read(from: &buf)
             )
     }
 
@@ -5444,6 +5486,7 @@ public struct FfiConverterTypeConfig: FfiConverterRustBuffer {
         FfiConverterBool.write(value.includeUntrustedPendingInSpendable, into: &buf)
         FfiConverterTypeAddressType.write(value.addressType, into: &buf)
         FfiConverterSequenceTypeAddressType.write(value.addressTypesToMonitor, into: &buf)
+        FfiConverterSequenceTypeOnchainWalletAccountConfig.write(value.onchainWalletAccounts, into: &buf)
     }
 }
 
@@ -6595,6 +6638,75 @@ public func FfiConverterTypeOnchainWalletAccount_lift(_ buf: RustBuffer) throws 
 #endif
 public func FfiConverterTypeOnchainWalletAccount_lower(_ value: OnchainWalletAccount) -> RustBuffer {
     return FfiConverterTypeOnchainWalletAccount.lower(value)
+}
+
+public struct OnchainWalletAccountConfig {
+    public var addressType: AddressType
+    public var accountIndex: UInt32
+    public var xpub: String
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(addressType: AddressType, accountIndex: UInt32, xpub: String) {
+        self.addressType = addressType
+        self.accountIndex = accountIndex
+        self.xpub = xpub
+    }
+}
+
+extension OnchainWalletAccountConfig: Equatable, Hashable {
+    public static func == (lhs: OnchainWalletAccountConfig, rhs: OnchainWalletAccountConfig) -> Bool {
+        if lhs.addressType != rhs.addressType {
+            return false
+        }
+        if lhs.accountIndex != rhs.accountIndex {
+            return false
+        }
+        if lhs.xpub != rhs.xpub {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(addressType)
+        hasher.combine(accountIndex)
+        hasher.combine(xpub)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOnchainWalletAccountConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OnchainWalletAccountConfig {
+        return
+            try OnchainWalletAccountConfig(
+                addressType: FfiConverterTypeAddressType.read(from: &buf),
+                accountIndex: FfiConverterUInt32.read(from: &buf),
+                xpub: FfiConverterString.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: OnchainWalletAccountConfig, into buf: inout [UInt8]) {
+        FfiConverterTypeAddressType.write(value.addressType, into: &buf)
+        FfiConverterUInt32.write(value.accountIndex, into: &buf)
+        FfiConverterString.write(value.xpub, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainWalletAccountConfig_lift(_ buf: RustBuffer) throws -> OnchainWalletAccountConfig {
+    return try FfiConverterTypeOnchainWalletAccountConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainWalletAccountConfig_lower(_ value: OnchainWalletAccountConfig) -> RustBuffer {
+    return FfiConverterTypeOnchainWalletAccountConfig.lower(value)
 }
 
 public struct OutPoint {
@@ -9191,6 +9303,8 @@ public enum NodeError {
 
     case AddressTypeNotMonitored(message: String)
 
+    case OnchainWalletAccountNotRegistered(message: String)
+
     case InvalidSeedBytes(message: String)
 }
 
@@ -9467,7 +9581,11 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 67: return try .InvalidSeedBytes(
+        case 67: return try .OnchainWalletAccountNotRegistered(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 68: return try .InvalidSeedBytes(
                 message: FfiConverterString.read(from: &buf)
             )
 
@@ -9609,8 +9727,10 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(65))
         case .AddressTypeNotMonitored(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(66))
-        case .InvalidSeedBytes(_ /* message is ignored*/ ):
+        case .OnchainWalletAccountNotRegistered(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(67))
+        case .InvalidSeedBytes(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(68))
         }
     }
 }
@@ -11592,6 +11712,31 @@ private struct FfiConverterSequenceTypeOnchainWalletAccount: FfiConverterRustBuf
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterSequenceTypeOnchainWalletAccountConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [OnchainWalletAccountConfig]
+
+    static func write(_ value: [OnchainWalletAccountConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOnchainWalletAccountConfig.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OnchainWalletAccountConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OnchainWalletAccountConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeOnchainWalletAccountConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceTypePaymentDetails: FfiConverterRustBuffer {
     typealias SwiftType = [PaymentDetails]
 
@@ -13327,6 +13472,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor() != 37081 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_node_remove_onchain_wallet_account() != 21186 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_node_remove_payment() != 47952 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13414,7 +13562,13 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index() != 63246 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_type_at_index() != 42692 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_account() != 39321 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type() != 3701 {
