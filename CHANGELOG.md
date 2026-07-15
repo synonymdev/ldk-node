@@ -1,4 +1,4 @@
-# 0.7.0-rc.55 (Synonym Fork)
+# 0.7.0-rc.57 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -68,6 +68,7 @@
 
 ## Synonym Fork Additions
 
+- Added rolling lookahead for derived on-chain accounts after their initial full scan.
 - Added configurable Electrum batch size and stop gap for full scans of non-primary on-chain
   wallets, while preserving the existing primary-wallet behavior and defaults.
 - Added derived-account lifecycle parity with account-`0` wallets: configured accounts load on
@@ -86,9 +87,9 @@
     `Config::onchain_wallet_accounts` to load them on each build. BDK data remains persisted per
     account after unload
   - Derived accounts full-scan after registration, then use incremental sync. Apps issuing addresses
-    from an exported xpub reveal their highest issued index before syncing; descriptor origins use
-    the real account path; channel preflight requires an account-`0` SegWit builder before counting
-    non-Legacy (including derived) funds
+    from an exported xpub can reveal their highest issued index to cover gaps beyond the rolling
+    lookahead; descriptor origins use the real account path; channel preflight requires an account-`0`
+    SegWit builder before counting non-Legacy (including derived) funds
   - Bitcoind Listen synchronizes every wallet from its own checkpoint alongside the Lightning
     listeners, handles shorter and equal-height forked tips, and replays the mempool when the
     loaded account set changes
