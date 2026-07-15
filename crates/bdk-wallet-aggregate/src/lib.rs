@@ -746,6 +746,39 @@ where
 		Ok(wallet.start_sync_with_revealed_spks().build())
 	}
 
+	/// Build an incremental sync request including external lookahead scripts.
+	///
+	/// The wallet's configured lookahead determines how many unrevealed scripts are included.
+	pub fn wallet_incremental_sync_request_with_lookahead(
+		&self, key: &K,
+	) -> Result<SyncRequest<(KeychainKind, u32)>, Error> {
+		let wallet = self.wallets.get(key).ok_or(Error::WalletNotFound)?;
+		let mut request = wallet.start_sync_with_revealed_spks();
+		let external_lookahead = wallet.spk_index().lookahead();
+		if external_lookahead == 0 {
+			return Ok(request.build());
+		}
+
+		let start_index = match wallet.derivation_index(KeychainKind::External) {
+			Some(BIP32_MAX_NORMAL_INDEX) => return Ok(request.build()),
+			Some(index) => index + 1,
+			None => 0,
+		};
+		let end_index =
+			start_index.saturating_add(external_lookahead - 1).min(BIP32_MAX_NORMAL_INDEX);
+		let lookahead_spks = (start_index..=end_index)
+			.map(|index| {
+				wallet
+					.spk_index()
+					.spk_at_index(KeychainKind::External, index)
+					.map(|spk| ((KeychainKind::External, index), spk))
+					.ok_or(Error::WalletOperationFailed)
+			})
+			.collect::<Result<Vec<_>, _>>()?;
+		request = request.spks_with_indexes(lookahead_spks);
+		Ok(request.build())
+	}
+
 	/// Apply a chain update to the primary wallet.
 	///
 	/// Returns the wallet events and a list of all transaction IDs in the
@@ -1698,15 +1731,25 @@ mod tests {
 		P: WalletPersister,
 		P::Error: std::fmt::Debug,
 	{
-		PersistedWallet::create(
-			persister,
-			Wallet::create(
-				Bip84(xprv, KeychainKind::External),
-				Bip84(xprv, KeychainKind::Internal),
-			)
-			.network(Network::Regtest),
+		create_empty_wallet_from_xprv_with_lookahead(persister, xprv, None)
+	}
+
+	fn create_empty_wallet_from_xprv_with_lookahead<P>(
+		persister: &mut P, xprv: Xpriv, lookahead: Option<u32>,
+	) -> PersistedWallet<P>
+	where
+		P: WalletPersister,
+		P::Error: std::fmt::Debug,
+	{
+		let mut params = Wallet::create(
+			Bip84(xprv, KeychainKind::External),
+			Bip84(xprv, KeychainKind::Internal),
 		)
-		.unwrap()
+		.network(Network::Regtest);
+		if let Some(lookahead) = lookahead {
+			params = params.lookahead(lookahead);
+		}
+		PersistedWallet::create(persister, params).unwrap()
 	}
 
 	fn load_empty_wallet<P>(persister: &mut P) -> PersistedWallet<P>
@@ -1714,15 +1757,26 @@ mod tests {
 		P: WalletPersister,
 		P::Error: std::fmt::Debug,
 	{
+		load_empty_wallet_with_lookahead(persister, None)
+	}
+
+	fn load_empty_wallet_with_lookahead<P>(
+		persister: &mut P, lookahead: Option<u32>,
+	) -> PersistedWallet<P>
+	where
+		P: WalletPersister,
+		P::Error: std::fmt::Debug,
+	{
 		let xprv = test_xprv();
-		Wallet::load()
+		let mut params = Wallet::load()
 			.descriptor(KeychainKind::External, Some(Bip84(xprv, KeychainKind::External)))
 			.descriptor(KeychainKind::Internal, Some(Bip84(xprv, KeychainKind::Internal)))
 			.extract_keys()
-			.check_network(Network::Regtest)
-			.load_wallet(persister)
-			.unwrap()
-			.expect("wallet should have been persisted")
+			.check_network(Network::Regtest);
+		if let Some(lookahead) = lookahead {
+			params = params.lookahead(lookahead);
+		}
+		params.load_wallet(persister).unwrap().expect("wallet should have been persisted")
 	}
 
 	#[test]
@@ -2281,6 +2335,80 @@ mod tests {
 		let next = agg.new_address_info_for(&0).unwrap();
 		assert_eq!(next.index, 0);
 		assert_ne!(next.address, peeked.address);
+	}
+
+	#[test]
+	fn incremental_lookahead_does_not_advance_receive_index() {
+		let mut persister = NoopPersister;
+		let wallet =
+			create_empty_wallet_from_xprv_with_lookahead(&mut persister, test_xprv(), Some(3));
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let request = aggregate.wallet_incremental_sync_request_with_lookahead(&0).unwrap();
+		assert_eq!(request.progress().spks_remaining, 3);
+		assert_eq!(aggregate.new_address_info_for(&0).unwrap().index, 0);
+	}
+
+	#[test]
+	fn incremental_lookahead_rolls_forward_after_activity() {
+		let mut persister = NoopPersister;
+		let wallet =
+			create_empty_wallet_from_xprv_with_lookahead(&mut persister, test_xprv(), Some(3));
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		let address = aggregate.address_info_for(&0, KeychainKind::External, 2).unwrap().address;
+		let transaction = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: LockTime::ZERO,
+			input: vec![TxIn {
+				previous_output: OutPoint { txid: Txid::from_byte_array([0x18; 32]), vout: 0 },
+				..Default::default()
+			}],
+			output: vec![TxOut {
+				value: Amount::from_sat(50_000),
+				script_pubkey: address.script_pubkey(),
+			}],
+		};
+
+		aggregate.apply_mempool_txs(vec![(transaction, 0)], vec![]).unwrap();
+
+		let request = aggregate.wallet_incremental_sync_request_with_lookahead(&0).unwrap();
+		assert_eq!(request.progress().spks_remaining, 6);
+		assert_eq!(aggregate.new_address_info_for(&0).unwrap().index, 3);
+	}
+
+	#[test]
+	fn incremental_lookahead_activity_persists_the_active_index() {
+		let mut create_persister = MemoryPersister::default();
+		let wallet = create_empty_wallet_from_xprv_with_lookahead(
+			&mut create_persister,
+			test_xprv(),
+			Some(3),
+		);
+		let aggregate_persister = create_persister.clone();
+		{
+			let mut aggregate =
+				AggregateWallet::<u8, _>::new(wallet, aggregate_persister, 0, vec![]);
+			let address =
+				aggregate.address_info_for(&0, KeychainKind::External, 2).unwrap().address;
+			let transaction = Transaction {
+				version: bitcoin::transaction::Version::TWO,
+				lock_time: LockTime::ZERO,
+				input: vec![TxIn {
+					previous_output: OutPoint { txid: Txid::from_byte_array([0x19; 32]), vout: 0 },
+					..Default::default()
+				}],
+				output: vec![TxOut {
+					value: Amount::from_sat(50_000),
+					script_pubkey: address.script_pubkey(),
+				}],
+			};
+			aggregate.apply_mempool_txs(vec![(transaction, 0)], vec![]).unwrap();
+		}
+
+		let mut reload_persister = create_persister.clone();
+		let wallet = load_empty_wallet_with_lookahead(&mut reload_persister, Some(3));
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, reload_persister, 0, vec![]);
+		assert_eq!(aggregate.new_address_info_for(&0).unwrap().index, 3);
 	}
 
 	#[test]

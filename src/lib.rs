@@ -2239,10 +2239,11 @@ impl Node {
 	/// Registered funds participate in normal wallet coin selection and signing. Change remains on
 	/// the configured primary account-`0` wallet.
 	///
-	/// Esplora/Electrum perform a full scan after registration. When issuing more addresses from the
-	/// exported xpub, call [`OnchainPayment::reveal_receive_addresses_to_account`] with the highest
-	/// issued index. Bitcoind replays the current mempool but cannot scan confirmed history from before
-	/// a brand-new account's first registration.
+	/// Esplora/Electrum perform a full scan after registration, then maintain a rolling lookahead for
+	/// derived accounts. Activity inside the lookahead advances and replenishes it. Use
+	/// [`OnchainPayment::reveal_receive_addresses_to_account`] when an external address issuer may
+	/// skip beyond the current lookahead. Bitcoind replays the current mempool but cannot scan
+	/// confirmed history from before a brand-new account's first registration.
 	pub fn add_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32, xpub: String,
 	) -> Result<(), Error> {
