@@ -138,6 +138,7 @@ pub(crate) struct Wallet {
 	address_type_runtime_config: Arc<RwLock<AddressTypeRuntimeConfig>>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
 	logger: Arc<Logger>,
+	derived_account_lookahead: u32,
 }
 
 impl Wallet {
@@ -154,6 +155,7 @@ impl Wallet {
 		config: Arc<Config>, kv_store: Arc<DynStore>,
 		address_type_runtime_config: Arc<RwLock<AddressTypeRuntimeConfig>>,
 		node_metrics: Arc<RwLock<NodeMetrics>>, logger: Arc<Logger>,
+		derived_account_lookahead: u32,
 	) -> Self {
 		let primary_account = OnchainWalletAccount::account_zero(config.address_type);
 		let aggregate =
@@ -175,6 +177,7 @@ impl Wallet {
 			address_type_runtime_config,
 			node_metrics,
 			logger,
+			derived_account_lookahead,
 		}
 	}
 
@@ -219,7 +222,12 @@ impl Wallet {
 	pub(crate) fn get_wallet_incremental_sync_request(
 		&self, wallet_account: OnchainWalletAccount,
 	) -> Result<SyncRequest<(BdkKeychainKind, u32)>, bdk_wallet_aggregate::Error> {
-		self.inner.lock().unwrap().wallet_incremental_sync_request(&wallet_account)
+		let aggregate = self.inner.lock().unwrap();
+		if wallet_account.account_index == 0 {
+			aggregate.wallet_incremental_sync_request(&wallet_account)
+		} else {
+			aggregate.wallet_incremental_sync_request_with_lookahead(&wallet_account)
+		}
 	}
 
 	pub(crate) fn get_cached_txs(&self) -> Vec<Arc<Transaction>> {
@@ -304,6 +312,7 @@ impl Wallet {
 			xprv,
 			self.config.network,
 			&mut persister,
+			(account.account_index != 0).then_some(self.derived_account_lookahead),
 		)
 		.map_err(|e| {
 			log_error!(self.logger, "Failed to reload wallet {:?} after rewind: {}", account, e);
@@ -430,6 +439,7 @@ impl Wallet {
 			self.current_best_block(),
 			Arc::clone(&self.kv_store),
 			Arc::clone(&self.logger),
+			None,
 		)?;
 
 		{
@@ -521,6 +531,7 @@ impl Wallet {
 				self.current_best_block(),
 				Arc::clone(&self.kv_store),
 				Arc::clone(&self.logger),
+				None,
 			)?)
 		} else {
 			None
@@ -662,6 +673,7 @@ impl Wallet {
 			self.current_best_block(),
 			Arc::clone(&self.kv_store),
 			Arc::clone(&self.logger),
+			Some(self.derived_account_lookahead),
 		)?;
 
 		{
@@ -2163,7 +2175,7 @@ impl Listen for Wallet {
 fn create_wallet_for_account(
 	seed_bytes: &[u8; WALLET_KEYS_SEED_LEN], network: Network,
 	wallet_account: OnchainWalletAccount, chain_tip: BestBlock, kv_store: Arc<DynStore>,
-	logger: Arc<Logger>,
+	logger: Arc<Logger>, lookahead: Option<u32>,
 ) -> Result<(PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister), Error> {
 	let xprv = Xpriv::new_master(network, seed_bytes).map_err(|e| {
 		log_error!(logger, "Failed to derive master secret: {}", e);
@@ -2178,6 +2190,7 @@ fn create_wallet_for_account(
 		xprv,
 		network,
 		&mut persister,
+		lookahead,
 	)
 	.map_err(|e| {
 		log_error!(logger, "Failed to setup wallet for {:?}: {}", wallet_account, e);

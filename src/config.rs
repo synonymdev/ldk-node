@@ -848,13 +848,16 @@ pub struct ElectrumSyncConfig {
 	pub connection_timeout_secs: u64,
 	/// Batch size for Electrum full scans of non-primary wallets.
 	///
-	/// This applies to monitored account-`0` address types and derived accounts. It does not affect
-	/// the primary wallet or incremental sync. Values below `1` are treated as `1`. Defaults to `5`.
+	/// This applies to full scans of monitored account-`0` address types and derived accounts, and to
+	/// rolling incremental scans of derived accounts. It does not affect primary or account-`0`
+	/// incremental sync. Values below `1` are treated as `1`. Defaults to `5`.
 	pub additional_wallet_full_scan_batch_size: u32,
 	/// Stop gap for Electrum full scans of non-primary wallets.
 	///
 	/// This applies to monitored account-`0` address types and derived accounts. It does not affect
-	/// the primary wallet. Values below `1` are treated as `1`. Defaults to `20`.
+	/// the primary wallet. For derived accounts, it also sets the incremental lookahead beyond the
+	/// highest revealed index. Activity within that window advances and replenishes it. Values below
+	/// `1` are treated as `1`. Defaults to `20`.
 	pub additional_wallet_full_scan_stop_gap: u32,
 }
 
