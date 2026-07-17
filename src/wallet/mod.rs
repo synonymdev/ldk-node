@@ -88,6 +88,17 @@ fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> 
 	validate_derivation_index(last_index)
 }
 
+fn map_wallet_account_error(
+	wallet_account: OnchainWalletAccount, error: bdk_wallet_aggregate::Error,
+) -> Error {
+	match error {
+		bdk_wallet_aggregate::Error::WalletNotFound if wallet_account.is_derived() => {
+			Error::OnchainWalletAccountNotRegistered
+		},
+		_ => Error::WalletOperationFailed,
+	}
+}
+
 fn additional_input_weight(utxos: &[UtxoPsbtInfo]) -> Result<Weight, Error> {
 	let base_weight = TxIn::default().segwit_weight().to_wu();
 	let total = utxos.iter().try_fold(0u64, |total, utxo| {
@@ -1141,7 +1152,7 @@ impl Wallet {
 				wallet_account,
 				e
 			);
-			Error::WalletOperationFailed
+			map_wallet_account_error(wallet_account, e)
 		})
 	}
 
@@ -1177,7 +1188,7 @@ impl Wallet {
 				index,
 				e
 			);
-			Error::WalletOperationFailed
+			map_wallet_account_error(wallet_account, e)
 		})
 	}
 
@@ -1211,7 +1222,7 @@ impl Wallet {
 					start_index.saturating_add(count),
 					e
 				);
-				Error::WalletOperationFailed
+				map_wallet_account_error(wallet_account, e)
 			})
 	}
 
@@ -1237,7 +1248,7 @@ impl Wallet {
 				wallet_account,
 				e
 			);
-			Error::WalletOperationFailed
+			map_wallet_account_error(wallet_account, e)
 		})
 	}
 
@@ -1315,7 +1326,7 @@ impl Wallet {
 		let locked_wallet = self.inner.lock().unwrap();
 		let balance = locked_wallet.balance_for(&wallet_account).map_err(|e| {
 			log_error!(self.logger, "Failed to get balance for {:?}: {}", wallet_account, e);
-			Error::WalletOperationFailed
+			map_wallet_account_error(wallet_account, e)
 		})?;
 
 		self.get_balances_inner(&balance, 0)
@@ -2385,9 +2396,10 @@ impl ChangeDestinationSource for WalletKeysManager {
 #[cfg(test)]
 mod tests {
 	use super::{
-		additional_input_weight, validate_derivation_index, validate_derivation_range,
-		BIP32_MAX_NORMAL_INDEX, MAX_ADDRESS_INFO_BATCH_COUNT,
+		additional_input_weight, map_wallet_account_error, validate_derivation_index,
+		validate_derivation_range, BIP32_MAX_NORMAL_INDEX, MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
+	use crate::config::{AddressType, OnchainWalletAccount};
 	use crate::Error;
 	use bdk_wallet_aggregate::UtxoPsbtInfo;
 	use bitcoin::{psbt, OutPoint, TxIn, Weight};
@@ -2423,6 +2435,26 @@ mod tests {
 	#[test]
 	fn derivation_range_validation_allows_empty_ranges_at_valid_start() {
 		assert_eq!(validate_derivation_range(BIP32_MAX_NORMAL_INDEX, 0), Ok(()));
+	}
+
+	#[test]
+	fn missing_derived_wallet_maps_to_not_registered() {
+		let derived =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let account_zero = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+
+		assert_eq!(
+			map_wallet_account_error(derived, bdk_wallet_aggregate::Error::WalletNotFound),
+			Error::OnchainWalletAccountNotRegistered
+		);
+		assert_eq!(
+			map_wallet_account_error(account_zero, bdk_wallet_aggregate::Error::WalletNotFound),
+			Error::WalletOperationFailed
+		);
+		assert_eq!(
+			map_wallet_account_error(derived, bdk_wallet_aggregate::Error::PersistenceFailed),
+			Error::WalletOperationFailed
+		);
 	}
 
 	#[test]

@@ -59,6 +59,15 @@ fn additional_wallet_full_scan_settings(config: &ElectrumSyncConfig) -> FullScan
 	}
 }
 
+fn additional_wallet_full_scan_timeout(
+	settings: FullScanSettings, keychain_count: usize,
+) -> Duration {
+	let request_count =
+		settings.stop_gap.div_ceil(settings.batch_size).saturating_mul(keychain_count);
+	let request_count = u64::try_from(request_count).unwrap_or(u64::MAX);
+	Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS.saturating_add(request_count))
+}
+
 pub(super) struct ElectrumChainSource {
 	server_url: String,
 	pub(super) sync_config: ElectrumSyncConfig,
@@ -209,6 +218,7 @@ impl ElectrumChainSource {
 								req,
 								txs.iter().cloned(),
 								PRIMARY_WALLET_FULL_SCAN_SETTINGS,
+								Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
 							)
 							.await
 							.map(|u| u.into());
@@ -232,12 +242,17 @@ impl ElectrumChainSource {
 					});
 				},
 				super::WalletSyncRequest::FullScan(req) => {
+					let timeout = additional_wallet_full_scan_timeout(
+						additional_full_scan_settings,
+						req.keychains().len(),
+					);
 					join_set.spawn(async move {
 						let result: Result<BdkUpdate, Error> = client
 							.get_full_scan_wallet_update(
 								req,
 								txs.iter().cloned(),
 								additional_full_scan_settings,
+								timeout,
 							)
 							.await
 							.map(|u| u.into());
@@ -665,7 +680,7 @@ impl ElectrumRuntimeClient {
 	async fn get_full_scan_wallet_update(
 		&self, request: BdkFullScanRequest<BdkKeyChainKind>,
 		cached_txs: impl IntoIterator<Item = impl Into<Arc<Transaction>>>,
-		settings: FullScanSettings,
+		settings: FullScanSettings, timeout: Duration,
 	) -> Result<BdkFullScanResponse<BdkKeyChainKind>, Error> {
 		let bdk_electrum_client = Arc::clone(&self.bdk_electrum_client);
 		bdk_electrum_client.populate_tx_cache(cached_txs);
@@ -673,8 +688,7 @@ impl ElectrumRuntimeClient {
 		let spawn_fut = self.runtime.spawn_blocking(move || {
 			bdk_electrum_client.full_scan(request, settings.stop_gap, settings.batch_size, true)
 		});
-		let wallet_sync_timeout_fut =
-			tokio::time::timeout(Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS), spawn_fut);
+		let wallet_sync_timeout_fut = tokio::time::timeout(timeout, spawn_fut);
 
 		wallet_sync_timeout_fut
 			.await
@@ -893,6 +907,24 @@ mod tests {
 		assert_eq!(
 			additional_wallet_full_scan_settings(&config),
 			FullScanSettings { stop_gap: 1, batch_size: 1 }
+		);
+	}
+
+	#[test]
+	fn additional_full_scan_timeout_scales_with_request_batches() {
+		assert_eq!(
+			additional_wallet_full_scan_timeout(
+				FullScanSettings { stop_gap: 20, batch_size: 5 },
+				2,
+			),
+			Duration::from_secs(28)
+		);
+		assert_eq!(
+			additional_wallet_full_scan_timeout(
+				FullScanSettings { stop_gap: 1_000, batch_size: 100 },
+				2,
+			),
+			Duration::from_secs(40)
 		);
 	}
 }

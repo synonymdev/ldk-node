@@ -2265,6 +2265,7 @@ impl Node {
 	///
 	/// Funds in a registered account are available to normal wallet payments, whose change is sent to
 	/// the configured primary account-`0` wallet.
+	/// An unloaded derived account returns [`Error::OnchainWalletAccountNotRegistered`].
 	pub fn get_balance_for_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32,
 	) -> Result<AddressTypeBalance, Error> {

@@ -2,6 +2,9 @@
 
 ## Bug Fixes
 
+- Scaled Electrum full-scan timeouts for additional wallets with the configured stop gap and batch
+  size.
+- Return `OnchainWalletAccountNotRegistered` consistently for unloaded derived-account operations.
 - Published stripped `ldk-node-android` artifacts with separate native debug symbols
   and failed Android binding generation when generated JNI libraries lack usable symbols.
 - Persist missing announced channel peers from the network graph during

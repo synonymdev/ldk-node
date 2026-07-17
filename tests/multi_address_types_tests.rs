@@ -4262,13 +4262,42 @@ mod derived_accounts {
 
 		assert_eq!(
 			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1).unwrap_err(),
-			NodeError::WalletOperationFailed
+			NodeError::OnchainWalletAccountNotRegistered
 		);
 		assert_eq!(
 			node.onchain_payment()
 				.new_address_for_account(AddressType::NativeSegwit, 1)
 				.unwrap_err(),
-			NodeError::WalletOperationFailed
+			NodeError::OnchainWalletAccountNotRegistered
+		);
+		assert_eq!(
+			node.onchain_payment()
+				.address_info_for_account_at_index(
+					AddressType::NativeSegwit,
+					1,
+					KeychainKind::External,
+					0,
+				)
+				.unwrap_err(),
+			NodeError::OnchainWalletAccountNotRegistered
+		);
+		assert_eq!(
+			node.onchain_payment()
+				.address_infos_for_account(
+					AddressType::NativeSegwit,
+					1,
+					KeychainKind::External,
+					0,
+					1,
+				)
+				.unwrap_err(),
+			NodeError::OnchainWalletAccountNotRegistered
+		);
+		assert_eq!(
+			node.onchain_payment()
+				.reveal_receive_addresses_to_account(AddressType::NativeSegwit, 1, 0)
+				.unwrap_err(),
+			NodeError::OnchainWalletAccountNotRegistered
 		);
 
 		let xpub2 = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 2).unwrap();

@@ -166,6 +166,8 @@ impl OnchainPayment {
 	}
 
 	/// Retrieve a new on-chain address for a specific wallet account.
+	///
+	/// An unloaded derived account returns [`Error::OnchainWalletAccountNotRegistered`].
 	pub fn new_address_for_account(
 		&self, address_type: AddressType, account_index: u32,
 	) -> Result<Address, Error> {
@@ -185,6 +187,8 @@ impl OnchainPayment {
 	}
 
 	/// Retrieve a new on-chain address with derivation metadata for a specific wallet account.
+	///
+	/// An unloaded derived account returns [`Error::OnchainWalletAccountNotRegistered`].
 	pub fn new_address_info_for_account(
 		&self, address_type: AddressType, account_index: u32,
 	) -> Result<AddressInfo, Error> {
@@ -220,6 +224,8 @@ impl OnchainPayment {
 	}
 
 	/// Derive address metadata for a wallet account without advancing its cursor.
+	///
+	/// An unloaded derived account returns [`Error::OnchainWalletAccountNotRegistered`].
 	pub fn address_info_for_account_at_index(
 		&self, address_type: AddressType, account_index: u32, keychain: KeychainKind, index: u32,
 	) -> Result<AddressInfo, Error> {
@@ -253,6 +259,7 @@ impl OnchainPayment {
 	/// Derive address metadata for a contiguous wallet-account range without advancing its cursor.
 	///
 	/// Batch requests are capped at 10,000 addresses per call.
+	/// An unloaded derived account returns [`Error::OnchainWalletAccountNotRegistered`].
 	pub fn address_infos_for_account(
 		&self, address_type: AddressType, account_index: u32, keychain: KeychainKind,
 		start_index: u32, count: u32,
@@ -286,6 +293,7 @@ impl OnchainPayment {
 	///
 	/// Apps issuing addresses from an exported account xpub should call this with the highest issued
 	/// index so wallet sync includes the corresponding scripts.
+	/// An unloaded derived account returns [`Error::OnchainWalletAccountNotRegistered`].
 	pub fn reveal_receive_addresses_to_account(
 		&self, address_type: AddressType, account_index: u32, index: u32,
 	) -> Result<(), Error> {
