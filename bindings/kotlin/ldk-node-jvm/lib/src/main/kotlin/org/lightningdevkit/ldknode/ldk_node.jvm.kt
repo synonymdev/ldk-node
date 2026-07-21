@@ -1548,6 +1548,12 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2430,6 +2436,12 @@ internal interface UniffiLib : Library {
         `addressType`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_fn_method_node_remove_onchain_wallet_account(
+        `ptr`: Pointer?,
+        `addressType`: RustBufferByValue,
+        `accountIndex`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_method_node_remove_payment(
         `ptr`: Pointer?,
         `paymentId`: RustBufferByValue,
@@ -2610,11 +2622,28 @@ internal interface UniffiLib : Library {
         `destinationAddress`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_address_info_for_account_at_index(
+        `ptr`: Pointer?,
+        `addressType`: RustBufferByValue,
+        `accountIndex`: Int,
+        `keychain`: RustBufferByValue,
+        `index`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_address_info_for_type_at_index(
         `ptr`: Pointer?,
         `addressType`: RustBufferByValue,
         `keychain`: RustBufferByValue,
         `index`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_account(
+        `ptr`: Pointer?,
+        `addressType`: RustBufferByValue,
+        `accountIndex`: Int,
+        `keychain`: RustBufferByValue,
+        `startIndex`: Int,
+        `count`: Int,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type(
@@ -3386,6 +3415,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor(
     ): Short
+    fun uniffi_ldk_node_checksum_method_node_remove_onchain_wallet_account(
+    ): Short
     fun uniffi_ldk_node_checksum_method_node_remove_payment(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_set_primary_address_type(
@@ -3444,7 +3475,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_type_at_index(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_account(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type(
     ): Short
@@ -3981,6 +4016,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor() != 37081.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_node_remove_onchain_wallet_account() != 21186.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_node_remove_payment() != 47952.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -4068,7 +4106,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index() != 63246.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_type_at_index() != 42692.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_account() != 39321.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type() != 3701.toShort()) {
@@ -7651,6 +7695,20 @@ open class Node: Disposable, NodeInterface {
     }
 
     @Throws(NodeException::class)
+    override fun `removeOnchainWalletAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt) {
+        callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_remove_onchain_wallet_account(
+                    it,
+                    FfiConverterTypeAddressType.lower(`addressType`),
+                    FfiConverterUInt.lower(`accountIndex`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+    @Throws(NodeException::class)
     override fun `removePayment`(`paymentId`: PaymentId) {
         callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -8308,6 +8366,22 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
     }
 
     @Throws(NodeException::class)
+    override fun `addressInfoForAccountAtIndex`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `keychain`: KeychainKind, `index`: kotlin.UInt): AddressInfo {
+        return FfiConverterTypeAddressInfo.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_address_info_for_account_at_index(
+                    it,
+                    FfiConverterTypeAddressType.lower(`addressType`),
+                    FfiConverterUInt.lower(`accountIndex`),
+                    FfiConverterTypeKeychainKind.lower(`keychain`),
+                    FfiConverterUInt.lower(`index`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
     override fun `addressInfoForTypeAtIndex`(`addressType`: AddressType, `keychain`: KeychainKind, `index`: kotlin.UInt): AddressInfo {
         return FfiConverterTypeAddressInfo.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -8316,6 +8390,23 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
                     FfiConverterTypeAddressType.lower(`addressType`),
                     FfiConverterTypeKeychainKind.lower(`keychain`),
                     FfiConverterUInt.lower(`index`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `addressInfosForAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `keychain`: KeychainKind, `startIndex`: kotlin.UInt, `count`: kotlin.UInt): List<AddressInfo> {
+        return FfiConverterSequenceTypeAddressInfo.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_account(
+                    it,
+                    FfiConverterTypeAddressType.lower(`addressType`),
+                    FfiConverterUInt.lower(`accountIndex`),
+                    FfiConverterTypeKeychainKind.lower(`keychain`),
+                    FfiConverterUInt.lower(`startIndex`),
+                    FfiConverterUInt.lower(`count`),
                     uniffiRustCallStatus,
                 )
             }
@@ -9807,6 +9898,7 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
             FfiConverterBoolean.read(buf),
             FfiConverterTypeAddressType.read(buf),
             FfiConverterSequenceTypeAddressType.read(buf),
+            FfiConverterSequenceTypeOnchainWalletAccountConfig.read(buf),
         )
     }
 
@@ -9824,7 +9916,8 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
             FfiConverterOptionalTypeScoringDecayParameters.allocationSize(value.`scoringDecayParams`) +
             FfiConverterBoolean.allocationSize(value.`includeUntrustedPendingInSpendable`) +
             FfiConverterTypeAddressType.allocationSize(value.`addressType`) +
-            FfiConverterSequenceTypeAddressType.allocationSize(value.`addressTypesToMonitor`)
+            FfiConverterSequenceTypeAddressType.allocationSize(value.`addressTypesToMonitor`) +
+            FfiConverterSequenceTypeOnchainWalletAccountConfig.allocationSize(value.`onchainWalletAccounts`)
     )
 
     override fun write(value: Config, buf: ByteBuffer) {
@@ -9842,6 +9935,7 @@ object FfiConverterTypeConfig: FfiConverterRustBuffer<Config> {
         FfiConverterBoolean.write(value.`includeUntrustedPendingInSpendable`, buf)
         FfiConverterTypeAddressType.write(value.`addressType`, buf)
         FfiConverterSequenceTypeAddressType.write(value.`addressTypesToMonitor`, buf)
+        FfiConverterSequenceTypeOnchainWalletAccountConfig.write(value.`onchainWalletAccounts`, buf)
     }
 }
 
@@ -9875,17 +9969,23 @@ object FfiConverterTypeElectrumSyncConfig: FfiConverterRustBuffer<ElectrumSyncCo
         return ElectrumSyncConfig(
             FfiConverterOptionalTypeBackgroundSyncConfig.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
         )
     }
 
     override fun allocationSize(value: ElectrumSyncConfig) = (
             FfiConverterOptionalTypeBackgroundSyncConfig.allocationSize(value.`backgroundSyncConfig`) +
-            FfiConverterULong.allocationSize(value.`connectionTimeoutSecs`)
+            FfiConverterULong.allocationSize(value.`connectionTimeoutSecs`) +
+            FfiConverterUInt.allocationSize(value.`additionalWalletFullScanBatchSize`) +
+            FfiConverterUInt.allocationSize(value.`additionalWalletFullScanStopGap`)
     )
 
     override fun write(value: ElectrumSyncConfig, buf: ByteBuffer) {
         FfiConverterOptionalTypeBackgroundSyncConfig.write(value.`backgroundSyncConfig`, buf)
         FfiConverterULong.write(value.`connectionTimeoutSecs`, buf)
+        FfiConverterUInt.write(value.`additionalWalletFullScanBatchSize`, buf)
+        FfiConverterUInt.write(value.`additionalWalletFullScanStopGap`, buf)
     }
 }
 
@@ -10296,6 +10396,31 @@ object FfiConverterTypeOnchainWalletAccount: FfiConverterRustBuffer<OnchainWalle
     override fun write(value: OnchainWalletAccount, buf: ByteBuffer) {
         FfiConverterTypeAddressType.write(value.`addressType`, buf)
         FfiConverterUInt.write(value.`accountIndex`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypeOnchainWalletAccountConfig: FfiConverterRustBuffer<OnchainWalletAccountConfig> {
+    override fun read(buf: ByteBuffer): OnchainWalletAccountConfig {
+        return OnchainWalletAccountConfig(
+            FfiConverterTypeAddressType.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: OnchainWalletAccountConfig) = (
+            FfiConverterTypeAddressType.allocationSize(value.`addressType`) +
+            FfiConverterUInt.allocationSize(value.`accountIndex`) +
+            FfiConverterString.allocationSize(value.`xpub`)
+    )
+
+    override fun write(value: OnchainWalletAccountConfig, buf: ByteBuffer) {
+        FfiConverterTypeAddressType.write(value.`addressType`, buf)
+        FfiConverterUInt.write(value.`accountIndex`, buf)
+        FfiConverterString.write(value.`xpub`, buf)
     }
 }
 
@@ -12086,7 +12211,8 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
             64 -> NodeException.AddressTypeAlreadyMonitored(FfiConverterString.read(buf))
             65 -> NodeException.AddressTypeIsPrimary(FfiConverterString.read(buf))
             66 -> NodeException.AddressTypeNotMonitored(FfiConverterString.read(buf))
-            67 -> NodeException.InvalidSeedBytes(FfiConverterString.read(buf))
+            67 -> NodeException.OnchainWalletAccountNotRegistered(FfiConverterString.read(buf))
+            68 -> NodeException.InvalidSeedBytes(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -12361,8 +12487,12 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
                 buf.putInt(66)
                 Unit
             }
-            is NodeException.InvalidSeedBytes -> {
+            is NodeException.OnchainWalletAccountNotRegistered -> {
                 buf.putInt(67)
+                Unit
+            }
+            is NodeException.InvalidSeedBytes -> {
+                buf.putInt(68)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -14388,6 +14518,31 @@ object FfiConverterSequenceTypeOnchainWalletAccount: FfiConverterRustBuffer<List
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeOnchainWalletAccount.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypeOnchainWalletAccountConfig: FfiConverterRustBuffer<List<OnchainWalletAccountConfig>> {
+    override fun read(buf: ByteBuffer): List<OnchainWalletAccountConfig> {
+        val len = buf.getInt()
+        return List<OnchainWalletAccountConfig>(len) {
+            FfiConverterTypeOnchainWalletAccountConfig.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<OnchainWalletAccountConfig>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeOnchainWalletAccountConfig.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<OnchainWalletAccountConfig>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeOnchainWalletAccountConfig.write(it, buf)
         }
     }
 }

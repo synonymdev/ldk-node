@@ -21,6 +21,7 @@ dictionary Config {
 	boolean include_untrusted_pending_in_spendable;
 	AddressType address_type;
 	sequence<AddressType> address_types_to_monitor;
+	sequence<OnchainWalletAccountConfig> onchain_wallet_accounts;
 };
 
 dictionary ScoringFeeParameters {
@@ -65,6 +66,8 @@ dictionary EsploraSyncConfig {
 dictionary ElectrumSyncConfig {
 	BackgroundSyncConfig? background_sync_config;
 	u64 connection_timeout_secs;
+	u32 additional_wallet_full_scan_batch_size;
+	u32 additional_wallet_full_scan_stop_gap;
 };
 
 dictionary LSPS2ServiceConfig {
@@ -98,6 +101,12 @@ enum AddressType {
 dictionary OnchainWalletAccount {
 	AddressType address_type;
 	u32 account_index;
+};
+
+dictionary OnchainWalletAccountConfig {
+	AddressType address_type;
+	u32 account_index;
+	string xpub;
 };
 
 enum KeychainKind {
@@ -253,6 +262,8 @@ interface Node {
 	[Throws=NodeError]
 	void add_onchain_wallet_account(AddressType address_type, u32 account_index, string xpub);
 	[Throws=NodeError]
+	void remove_onchain_wallet_account(AddressType address_type, u32 account_index);
+	[Throws=NodeError]
 	AddressTypeBalance get_balance_for_onchain_wallet_account(AddressType address_type, u32 account_index);
 	sequence<OnchainWalletAccount> list_onchain_wallet_accounts();
 	sequence<PaymentDetails> list_payments();
@@ -359,7 +370,11 @@ interface OnchainPayment {
     [Throws=NodeError]
     AddressInfo address_info_for_type_at_index(AddressType address_type, KeychainKind keychain, u32 index);
     [Throws=NodeError]
+    AddressInfo address_info_for_account_at_index(AddressType address_type, u32 account_index, KeychainKind keychain, u32 index);
+    [Throws=NodeError]
     sequence<AddressInfo> address_infos_for_type(AddressType address_type, KeychainKind keychain, u32 start_index, u32 count);
+    [Throws=NodeError]
+    sequence<AddressInfo> address_infos_for_account(AddressType address_type, u32 account_index, KeychainKind keychain, u32 start_index, u32 count);
     [Throws=NodeError]
     void reveal_receive_addresses_to(AddressType address_type, u32 index);
     [Throws=NodeError]
@@ -488,6 +503,7 @@ enum NodeError {
     "AddressTypeAlreadyMonitored",
     "AddressTypeIsPrimary",
     "AddressTypeNotMonitored",
+    "OnchainWalletAccountNotRegistered",
     "InvalidSeedBytes",
 };
 

@@ -3305,8 +3305,11 @@ async fn electrum_connection_timeout_config() {
 	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
 	let config = random_config(false);
 	setup_builder!(builder, config.node_config);
-	let sync_config =
-		ElectrumSyncConfig { background_sync_config: None, connection_timeout_secs: 20 };
+	let sync_config = ElectrumSyncConfig {
+		background_sync_config: None,
+		connection_timeout_secs: 20,
+		..Default::default()
+	};
 	builder.set_chain_source_electrum(electrum_url, Some(sync_config));
 	let node = builder.build().unwrap();
 	node.start().unwrap();
@@ -3323,8 +3326,11 @@ async fn electrum_connection_timeout_zero_disables() {
 	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
 	let config = random_config(false);
 	setup_builder!(builder, config.node_config);
-	let sync_config =
-		ElectrumSyncConfig { background_sync_config: None, connection_timeout_secs: 0 };
+	let sync_config = ElectrumSyncConfig {
+		background_sync_config: None,
+		connection_timeout_secs: 0,
+		..Default::default()
+	};
 	builder.set_chain_source_electrum(electrum_url, Some(sync_config));
 	let node = builder.build().unwrap();
 	node.start().unwrap();
@@ -3340,8 +3346,11 @@ async fn electrum_connection_timeout_above_max_is_capped() {
 	let electrum_url = format!("tcp://{}", electrsd.electrum_url);
 	let config = random_config(false);
 	setup_builder!(builder, config.node_config);
-	let sync_config =
-		ElectrumSyncConfig { background_sync_config: None, connection_timeout_secs: 300 };
+	let sync_config = ElectrumSyncConfig {
+		background_sync_config: None,
+		connection_timeout_secs: 300,
+		..Default::default()
+	};
 	builder.set_chain_source_electrum(electrum_url, Some(sync_config));
 	let node = builder.build().unwrap();
 	node.start().unwrap();

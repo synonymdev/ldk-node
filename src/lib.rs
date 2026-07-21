@@ -125,7 +125,7 @@ use config::{
 	default_user_config, may_announce_channel, AsyncPaymentsRole, BackgroundSyncConfig,
 	ChannelConfig, Config, NODE_ANN_BCAST_INTERVAL, PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
 };
-pub use config::{AddressType, OnchainWalletAccount};
+pub use config::{AddressType, OnchainWalletAccount, OnchainWalletAccountConfig};
 use connection::ConnectionManager;
 pub use error::Error as NodeError;
 use error::Error;
@@ -2047,9 +2047,8 @@ impl Node {
 
 	/// Retrieves an overview of all known balances.
 	///
-	/// On-chain totals include derived accounts currently registered via
-	/// [`Node::add_onchain_wallet_account`]. Derived funds are omitted until the app re-registers the
-	/// account after a restart.
+	/// On-chain totals include all currently loaded derived accounts. Funds from unloaded accounts
+	/// are omitted until the account is loaded from configuration or registered at runtime.
 	pub fn list_balances(&self) -> BalanceDetails {
 		let cur_anchor_reserve_sats =
 			total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
@@ -2219,8 +2218,8 @@ impl Node {
 
 	/// Exports the account-level xpub for a derived (or main) on-chain wallet account.
 	///
-	/// Persist `{ address_type, account_index, xpub }` externally and re-register derived
-	/// accounts via [`Node::add_onchain_wallet_account`] after every node build.
+	/// Store the returned xpub in [`Config::onchain_wallet_accounts`] to load a derived account on
+	/// future builds, or register it at runtime with [`Node::add_onchain_wallet_account`].
 	pub fn export_onchain_wallet_account_xpub(
 		&self, address_type: AddressType, account_index: u32,
 	) -> Result<String, Error> {
@@ -2234,7 +2233,8 @@ impl Node {
 	/// rejected with [`Error::InvalidQuantity`]. A mismatched xpub returns
 	/// [`Error::InvalidSeedBytes`].
 	///
-	/// Not persisted across restarts; re-add after each build. BDK data remains persisted.
+	/// Runtime registration is not persisted across restarts. BDK data remains persisted; use
+	/// [`Config::onchain_wallet_accounts`] to load the account on each build.
 	///
 	/// Registered funds participate in normal wallet coin selection and signing. Change remains on
 	/// the configured primary account-`0` wallet.
@@ -2249,10 +2249,23 @@ impl Node {
 		self.wallet.add_onchain_wallet_account(address_type, account_index, &xpub)
 	}
 
+	/// Unloads a derived on-chain wallet account (`account_index >= 1`).
+	///
+	/// Persisted BDK data is retained, so re-registering the account recovers its state on the next
+	/// sync. Accounts listed in [`Config::onchain_wallet_accounts`] are loaded again on restart.
+	/// Account `0` and out-of-range indexes return [`Error::InvalidQuantity`]; an unloaded account
+	/// returns [`Error::OnchainWalletAccountNotRegistered`].
+	pub fn remove_onchain_wallet_account(
+		&self, address_type: AddressType, account_index: u32,
+	) -> Result<(), Error> {
+		self.wallet.remove_onchain_wallet_account(address_type, account_index)
+	}
+
 	/// Retrieves the on-chain balance for a specific wallet account.
 	///
 	/// Funds in a registered account are available to normal wallet payments, whose change is sent to
 	/// the configured primary account-`0` wallet.
+	/// An unloaded derived account returns [`Error::OnchainWalletAccountNotRegistered`].
 	pub fn get_balance_for_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32,
 	) -> Result<AddressTypeBalance, Error> {
@@ -2263,10 +2276,6 @@ impl Node {
 	}
 
 	/// Returns all currently loaded on-chain wallet accounts, including derived accounts.
-	///
-	/// Derived accounts must be re-registered after restart via
-	/// [`Node::add_onchain_wallet_account`]. Until then, they are absent from this list and from
-	/// aggregate balances.
 	pub fn list_onchain_wallet_accounts(&self) -> Vec<OnchainWalletAccount> {
 		self.wallet.get_loaded_onchain_wallet_accounts()
 	}

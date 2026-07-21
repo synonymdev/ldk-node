@@ -3562,9 +3562,9 @@ mod derived_accounts {
 	use bitcoin::{Address, Amount, CompressedPublicKey, FeeRate, Network};
 	use electrsd::corepc_node::{Conf as BitcoindConf, Node as BitcoinD};
 	use electrum_client::ElectrumApi;
-	use ldk_node::config::AddressType;
+	use ldk_node::config::{AddressType, ElectrumSyncConfig, OnchainWalletAccountConfig};
 	use ldk_node::payment::KeychainKind;
-	use ldk_node::NodeError;
+	use ldk_node::{Builder, NodeError};
 
 	use crate::common::{
 		distribute_funds_unconfirmed, generate_blocks_and_wait, invalidate_blocks, open_channel,
@@ -3751,6 +3751,183 @@ mod derived_accounts {
 		assert_eq!(balance_after, balance_before);
 
 		node2.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_config_load_and_runtime_remove_preserve_derived_account_state() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+
+		let mut config = node_config(AddressType::NativeSegwit, vec![]);
+		config.store_type = crate::common::TestStoreType::Sqlite;
+		let storage_path = config.node_config.storage_dir_path.clone();
+		let node = setup_node(&chain_source, config, None);
+		let seed = read_node_seed(&node);
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::Taproot, 1).unwrap();
+		node.add_onchain_wallet_account(AddressType::Taproot, 1, xpub.clone()).unwrap();
+		let address =
+			node.onchain_payment().new_address_for_account(AddressType::Taproot, 1).unwrap();
+		fund_and_sync(&bitcoind, &electrsd, &node, address, 120_000).await;
+		let balance_before = node
+			.get_balance_for_onchain_wallet_account(AddressType::Taproot, 1)
+			.unwrap()
+			.total_sats;
+		node.stop().unwrap();
+		drop(node);
+
+		let mut config = node_config(AddressType::NativeSegwit, vec![]);
+		config.store_type = crate::common::TestStoreType::Sqlite;
+		config.node_config.storage_dir_path = storage_path;
+		config.node_config.onchain_wallet_accounts = vec![OnchainWalletAccountConfig {
+			address_type: AddressType::Taproot,
+			account_index: 1,
+			xpub: xpub.clone(),
+		}];
+		let node = setup_node(&chain_source, config, Some(seed.to_vec()));
+
+		assert!(node.list_onchain_wallet_accounts().iter().any(|account| {
+			account.address_type == AddressType::Taproot && account.account_index == 1
+		}));
+		node.sync_wallets().unwrap();
+		let loaded_balance = node
+			.get_balance_for_onchain_wallet_account(AddressType::Taproot, 1)
+			.unwrap()
+			.total_sats;
+		assert_eq!(loaded_balance, balance_before);
+
+		node.remove_onchain_wallet_account(AddressType::Taproot, 1).unwrap();
+		assert!(!node.list_onchain_wallet_accounts().iter().any(|account| {
+			account.address_type == AddressType::Taproot && account.account_index == 1
+		}));
+		assert_eq!(node.list_balances().total_onchain_balance_sats, 0);
+		assert_eq!(
+			node.remove_onchain_wallet_account(AddressType::Taproot, 1),
+			Err(NodeError::OnchainWalletAccountNotRegistered)
+		);
+		assert_eq!(
+			node.remove_onchain_wallet_account(AddressType::Taproot, 0),
+			Err(NodeError::InvalidQuantity)
+		);
+
+		node.add_onchain_wallet_account(AddressType::Taproot, 1, xpub).unwrap();
+		assert_eq!(
+			node.get_balance_for_onchain_wallet_account(AddressType::Taproot, 1)
+				.unwrap()
+				.total_sats,
+			balance_before
+		);
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_derived_account_address_lookup_by_index_and_range() {
+		let (_bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+		let node = setup_node(&chain_source, node_config(AddressType::NativeSegwit, vec![]), None);
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 2).unwrap();
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 2, xpub.clone()).unwrap();
+
+		let indexed = node
+			.onchain_payment()
+			.address_info_for_account_at_index(
+				AddressType::NativeSegwit,
+				2,
+				KeychainKind::External,
+				7,
+			)
+			.unwrap();
+		let range = node
+			.onchain_payment()
+			.address_infos_for_account(AddressType::NativeSegwit, 2, KeychainKind::External, 6, 3)
+			.unwrap();
+		assert_eq!(range.iter().map(|info| info.index).collect::<Vec<_>>(), vec![6, 7, 8]);
+		assert_eq!(range[1], indexed);
+
+		let account_xpub = Xpub::from_str(&xpub).unwrap();
+		let child = account_xpub
+			.derive_pub(
+				&Secp256k1::new(),
+				&[
+					ChildNumber::from_normal_idx(0).unwrap(),
+					ChildNumber::from_normal_idx(7).unwrap(),
+				],
+			)
+			.unwrap();
+		let expected = Address::p2wpkh(&CompressedPublicKey(child.public_key), Network::Regtest);
+		assert_eq!(indexed.address, expected);
+		assert_eq!(indexed.keychain, KeychainKind::External);
+		let internal = node
+			.onchain_payment()
+			.address_info_for_account_at_index(
+				AddressType::NativeSegwit,
+				2,
+				KeychainKind::Internal,
+				7,
+			)
+			.unwrap();
+		assert_ne!(internal.address, indexed.address);
+		assert_eq!(internal.keychain, KeychainKind::Internal);
+
+		let next = node
+			.onchain_payment()
+			.new_address_info_for_account(AddressType::NativeSegwit, 2)
+			.unwrap();
+		assert_eq!(next.index, 0);
+		assert_eq!(next.keychain, KeychainKind::External);
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_electrum_configured_account_full_scan_uses_custom_gap_and_batch_size() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Electrum(&electrsd);
+		let mut initial_config = node_config(AddressType::NativeSegwit, vec![]);
+		initial_config.store_type = crate::common::TestStoreType::Sqlite;
+		let node = setup_node(&chain_source, initial_config, None);
+
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		let address = native_segwit_receive_address_from_xpub(&xpub, 30);
+		let mut restart_config = node.config();
+		node.stop().unwrap();
+		drop(node);
+
+		premine_and_distribute_funds(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![address],
+			Amount::from_sat(100_000),
+		)
+		.await;
+
+		restart_config.onchain_wallet_accounts = vec![OnchainWalletAccountConfig {
+			address_type: AddressType::NativeSegwit,
+			account_index: 1,
+			xpub,
+		}];
+		crate::common::setup_builder!(builder, restart_config);
+		let electrum_url = format!("tcp://{}", electrsd.electrum_url);
+		let sync_config = ElectrumSyncConfig {
+			background_sync_config: None,
+			additional_wallet_full_scan_batch_size: 100,
+			additional_wallet_full_scan_stop_gap: 1_000,
+			..Default::default()
+		};
+		builder.set_chain_source_electrum(electrum_url, Some(sync_config));
+		builder.set_log_facade_logger();
+		let node = builder.build().unwrap();
+		node.start().unwrap();
+		node.sync_wallets().unwrap();
+		assert!(node.list_onchain_wallet_accounts().iter().any(|account| {
+			account.address_type == AddressType::NativeSegwit && account.account_index == 1
+		}));
+		assert_eq!(
+			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+				.unwrap()
+				.total_sats,
+			100_000
+		);
+
+		node.stop().unwrap();
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -4085,13 +4262,42 @@ mod derived_accounts {
 
 		assert_eq!(
 			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1).unwrap_err(),
-			NodeError::WalletOperationFailed
+			NodeError::OnchainWalletAccountNotRegistered
 		);
 		assert_eq!(
 			node.onchain_payment()
 				.new_address_for_account(AddressType::NativeSegwit, 1)
 				.unwrap_err(),
-			NodeError::WalletOperationFailed
+			NodeError::OnchainWalletAccountNotRegistered
+		);
+		assert_eq!(
+			node.onchain_payment()
+				.address_info_for_account_at_index(
+					AddressType::NativeSegwit,
+					1,
+					KeychainKind::External,
+					0,
+				)
+				.unwrap_err(),
+			NodeError::OnchainWalletAccountNotRegistered
+		);
+		assert_eq!(
+			node.onchain_payment()
+				.address_infos_for_account(
+					AddressType::NativeSegwit,
+					1,
+					KeychainKind::External,
+					0,
+					1,
+				)
+				.unwrap_err(),
+			NodeError::OnchainWalletAccountNotRegistered
+		);
+		assert_eq!(
+			node.onchain_payment()
+				.reveal_receive_addresses_to_account(AddressType::NativeSegwit, 1, 0)
+				.unwrap_err(),
+			NodeError::OnchainWalletAccountNotRegistered
 		);
 
 		let xpub2 = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 2).unwrap();

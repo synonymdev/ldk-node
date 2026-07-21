@@ -88,6 +88,17 @@ fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> 
 	validate_derivation_index(last_index)
 }
 
+fn map_wallet_account_error(
+	wallet_account: OnchainWalletAccount, error: bdk_wallet_aggregate::Error,
+) -> Error {
+	match error {
+		bdk_wallet_aggregate::Error::WalletNotFound if wallet_account.is_derived() => {
+			Error::OnchainWalletAccountNotRegistered
+		},
+		_ => Error::WalletOperationFailed,
+	}
+}
+
 fn additional_input_weight(utxos: &[UtxoPsbtInfo]) -> Result<Weight, Error> {
 	let base_weight = TxIn::default().segwit_weight().to_wu();
 	let total = utxos.iter().try_fold(0u64, |total, utxo| {
@@ -604,7 +615,7 @@ impl Wallet {
 
 	/// Registers a derived on-chain wallet account (`account_index >= 1`).
 	///
-	/// Not persisted across restarts; re-add after each build. Idempotent for the same xpub.
+	/// Runtime registration is not persisted. Idempotent for the same xpub.
 	pub(crate) fn add_onchain_wallet_account(
 		&self, address_type: AddressType, account_index: u32, xpub: &str,
 	) -> Result<(), Error> {
@@ -689,6 +700,57 @@ impl Wallet {
 		Ok(())
 	}
 
+	/// Unloads a derived on-chain wallet account while retaining its persisted state.
+	pub(crate) fn remove_onchain_wallet_account(
+		&self, address_type: AddressType, account_index: u32,
+	) -> Result<(), Error> {
+		if account_index == 0 || account_index > crate::config::MAX_ONCHAIN_WALLET_ACCOUNT_INDEX {
+			return Err(Error::InvalidQuantity);
+		}
+
+		let wallet_account = OnchainWalletAccount { address_type, account_index };
+		let _op = self.operation_lock.lock().unwrap();
+		if !self
+			.address_type_runtime_config
+			.read()
+			.unwrap()
+			.derived_accounts
+			.contains(&wallet_account)
+		{
+			return Err(Error::OnchainWalletAccountNotRegistered);
+		}
+
+		let removed = {
+			let mut aggregate = self.inner.lock().unwrap();
+			match aggregate.remove_wallet(wallet_account) {
+				Ok(()) => true,
+				Err(bdk_wallet_aggregate::Error::WalletNotFound) => false,
+				Err(e) => {
+					log_error!(
+						self.logger,
+						"Failed to remove derived account {:?}: {}",
+						wallet_account,
+						e
+					);
+					return Err(Error::WalletOperationFailed);
+				},
+			}
+		};
+
+		self.address_type_runtime_config
+			.write()
+			.unwrap()
+			.derived_accounts
+			.retain(|account| *account != wallet_account);
+		self.synced_derived_accounts.lock().unwrap().remove(&wallet_account);
+		if removed {
+			self.account_generation.fetch_add(1, Ordering::AcqRel);
+		}
+
+		log_info!(self.logger, "Removed derived on-chain wallet account {:?}", wallet_account);
+		Ok(())
+	}
+
 	/// Callers are responsible for calling `update_payment_store_for_all_transactions`
 	/// after all updates have been applied.
 	pub(crate) fn apply_update(
@@ -712,10 +774,14 @@ impl Wallet {
 	/// after all updates have been applied.
 	pub(crate) fn apply_update_for_wallet_account(
 		&self, wallet_account: OnchainWalletAccount, update: impl Into<Update>,
-	) -> Result<Vec<WalletEvent>, Error> {
+	) -> Result<Option<Vec<WalletEvent>>, Error> {
+		let _op = self.operation_lock.lock().unwrap();
 		let mut locked_wallet = self.inner.lock().unwrap();
+		if locked_wallet.wallet(&wallet_account).is_none() {
+			return Ok(None);
+		}
 		match locked_wallet.apply_update_to_wallet(wallet_account, update) {
-			Ok((events, _txids)) => Ok(events),
+			Ok((events, _txids)) => Ok(Some(events)),
 			Err(e) => {
 				log_error!(
 					self.logger,
@@ -1086,7 +1152,7 @@ impl Wallet {
 				wallet_account,
 				e
 			);
-			Error::WalletOperationFailed
+			map_wallet_account_error(wallet_account, e)
 		})
 	}
 
@@ -1100,43 +1166,63 @@ impl Wallet {
 	pub(crate) fn get_address_info_for_type_at_index(
 		&self, address_type: AddressType, keychain: KeychainKind, index: u32,
 	) -> Result<AddressInfo, Error> {
+		self.get_address_info_for_account_at_index(
+			OnchainWalletAccount::account_zero(address_type),
+			keychain,
+			index,
+		)
+	}
+
+	pub(crate) fn get_address_info_for_account_at_index(
+		&self, wallet_account: OnchainWalletAccount, keychain: KeychainKind, index: u32,
+	) -> Result<AddressInfo, Error> {
 		validate_derivation_index(index)?;
 
-		let wallet_account = OnchainWalletAccount::account_zero(address_type);
 		let locked_wallet = self.inner.lock().unwrap();
 		locked_wallet.address_info_for(&wallet_account, keychain.into(), index).map_err(|e| {
 			log_error!(
 				self.logger,
-				"Failed to get address info for type {:?} keychain {:?} at index {}: {}",
-				address_type,
+				"Failed to get address info for account {:?} keychain {:?} at index {}: {}",
+				wallet_account,
 				keychain,
 				index,
 				e
 			);
-			Error::WalletOperationFailed
+			map_wallet_account_error(wallet_account, e)
 		})
 	}
 
 	pub(crate) fn get_address_infos_for_type(
 		&self, address_type: AddressType, keychain: KeychainKind, start_index: u32, count: u32,
 	) -> Result<Vec<AddressInfo>, Error> {
+		self.get_address_infos_for_account(
+			OnchainWalletAccount::account_zero(address_type),
+			keychain,
+			start_index,
+			count,
+		)
+	}
+
+	pub(crate) fn get_address_infos_for_account(
+		&self, wallet_account: OnchainWalletAccount, keychain: KeychainKind, start_index: u32,
+		count: u32,
+	) -> Result<Vec<AddressInfo>, Error> {
 		validate_derivation_range(start_index, count)?;
 
-		let wallet_account = OnchainWalletAccount::account_zero(address_type);
 		let locked_wallet = self.inner.lock().unwrap();
 		locked_wallet
 			.address_infos_for(&wallet_account, keychain.into(), start_index, count)
 			.map_err(|e| {
 				log_error!(
 					self.logger,
-					"Failed to get address infos for type {:?} keychain {:?} at indexes {}..{}: {}",
-					address_type,
+					"Failed to get address infos for account {:?} keychain {:?} at indexes {}..{}: {}",
+					wallet_account,
 					keychain,
 					start_index,
 					start_index.saturating_add(count),
 					e
 				);
-				Error::WalletOperationFailed
+				map_wallet_account_error(wallet_account, e)
 			})
 	}
 
@@ -1162,7 +1248,7 @@ impl Wallet {
 				wallet_account,
 				e
 			);
-			Error::WalletOperationFailed
+			map_wallet_account_error(wallet_account, e)
 		})
 	}
 
@@ -1240,7 +1326,7 @@ impl Wallet {
 		let locked_wallet = self.inner.lock().unwrap();
 		let balance = locked_wallet.balance_for(&wallet_account).map_err(|e| {
 			log_error!(self.logger, "Failed to get balance for {:?}: {}", wallet_account, e);
-			Error::WalletOperationFailed
+			map_wallet_account_error(wallet_account, e)
 		})?;
 
 		self.get_balances_inner(&balance, 0)
@@ -2310,9 +2396,10 @@ impl ChangeDestinationSource for WalletKeysManager {
 #[cfg(test)]
 mod tests {
 	use super::{
-		additional_input_weight, validate_derivation_index, validate_derivation_range,
-		BIP32_MAX_NORMAL_INDEX, MAX_ADDRESS_INFO_BATCH_COUNT,
+		additional_input_weight, map_wallet_account_error, validate_derivation_index,
+		validate_derivation_range, BIP32_MAX_NORMAL_INDEX, MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
+	use crate::config::{AddressType, OnchainWalletAccount};
 	use crate::Error;
 	use bdk_wallet_aggregate::UtxoPsbtInfo;
 	use bitcoin::{psbt, OutPoint, TxIn, Weight};
@@ -2348,6 +2435,26 @@ mod tests {
 	#[test]
 	fn derivation_range_validation_allows_empty_ranges_at_valid_start() {
 		assert_eq!(validate_derivation_range(BIP32_MAX_NORMAL_INDEX, 0), Ok(()));
+	}
+
+	#[test]
+	fn missing_derived_wallet_maps_to_not_registered() {
+		let derived =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let account_zero = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+
+		assert_eq!(
+			map_wallet_account_error(derived, bdk_wallet_aggregate::Error::WalletNotFound),
+			Error::OnchainWalletAccountNotRegistered
+		);
+		assert_eq!(
+			map_wallet_account_error(account_zero, bdk_wallet_aggregate::Error::WalletNotFound),
+			Error::WalletOperationFailed
+		);
+		assert_eq!(
+			map_wallet_account_error(derived, bdk_wallet_aggregate::Error::PersistenceFailed),
+			Error::WalletOperationFailed
+		);
 	}
 
 	#[test]

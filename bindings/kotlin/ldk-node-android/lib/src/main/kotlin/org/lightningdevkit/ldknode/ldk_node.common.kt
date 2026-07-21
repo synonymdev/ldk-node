@@ -511,6 +511,9 @@ interface NodeInterface {
     fun `removeAddressTypeFromMonitor`(`addressType`: AddressType)
 
     @Throws(NodeException::class)
+    fun `removeOnchainWalletAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt)
+
+    @Throws(NodeException::class)
     fun `removePayment`(`paymentId`: PaymentId)
 
     @Throws(NodeException::class)
@@ -596,7 +599,13 @@ interface OnchainPaymentInterface {
     fun `accelerateByCpfp`(`txid`: Txid, `feeRate`: FeeRate?, `destinationAddress`: Address?): Txid
 
     @Throws(NodeException::class)
+    fun `addressInfoForAccountAtIndex`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `keychain`: KeychainKind, `index`: kotlin.UInt): AddressInfo
+
+    @Throws(NodeException::class)
     fun `addressInfoForTypeAtIndex`(`addressType`: AddressType, `keychain`: KeychainKind, `index`: kotlin.UInt): AddressInfo
+
+    @Throws(NodeException::class)
+    fun `addressInfosForAccount`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `keychain`: KeychainKind, `startIndex`: kotlin.UInt, `count`: kotlin.UInt): List<AddressInfo>
 
     @Throws(NodeException::class)
     fun `addressInfosForType`(`addressType`: AddressType, `keychain`: KeychainKind, `startIndex`: kotlin.UInt, `count`: kotlin.UInt): List<AddressInfo>
@@ -903,7 +912,8 @@ data class Config (
     val `scoringDecayParams`: ScoringDecayParameters?,
     val `includeUntrustedPendingInSpendable`: kotlin.Boolean,
     val `addressType`: AddressType,
-    val `addressTypesToMonitor`: List<AddressType>
+    val `addressTypesToMonitor`: List<AddressType>,
+    val `onchainWalletAccounts`: List<OnchainWalletAccountConfig>
 ) {
     companion object
 }
@@ -923,7 +933,9 @@ data class CustomTlvRecord (
 @kotlinx.serialization.Serializable
 data class ElectrumSyncConfig (
     val `backgroundSyncConfig`: BackgroundSyncConfig?,
-    val `connectionTimeoutSecs`: kotlin.ULong
+    val `connectionTimeoutSecs`: kotlin.ULong,
+    val `additionalWalletFullScanBatchSize`: kotlin.UInt,
+    val `additionalWalletFullScanStopGap`: kotlin.UInt
 ) {
     companion object
 }
@@ -1133,6 +1145,17 @@ data class NodeStatus (
 data class OnchainWalletAccount (
     val `addressType`: AddressType,
     val `accountIndex`: kotlin.UInt
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class OnchainWalletAccountConfig (
+    val `addressType`: AddressType,
+    val `accountIndex`: kotlin.UInt,
+    val `xpub`: kotlin.String
 ) {
     companion object
 }
@@ -2000,6 +2023,8 @@ sealed class NodeException(message: String): kotlin.Exception(message) {
 
     class AddressTypeNotMonitored(message: String) : NodeException(message)
 
+    class OnchainWalletAccountNotRegistered(message: String) : NodeException(message)
+
     class InvalidSeedBytes(message: String) : NodeException(message)
 
 }
@@ -2240,6 +2265,8 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
 
 
 

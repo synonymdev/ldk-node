@@ -1,7 +1,10 @@
-# 0.7.0-rc.54 (Synonym Fork)
+# 0.7.0-rc.55 (Synonym Fork)
 
 ## Bug Fixes
 
+- Scaled Electrum full-scan timeouts for additional wallets with the configured stop gap and batch
+  size.
+- Return `OnchainWalletAccountNotRegistered` consistently for unloaded derived-account operations.
 - Published stripped `ldk-node-android` artifacts with separate native debug symbols
   and failed Android binding generation when generated JNI libraries lack usable symbols.
 - Persist missing announced channel peers from the network graph during
@@ -65,16 +68,23 @@
 
 ## Synonym Fork Additions
 
+- Added configurable Electrum batch size and stop gap for full scans of non-primary on-chain
+  wallets, while preserving the existing primary-wallet behavior and defaults.
+- Added derived-account lifecycle parity with account-`0` wallets: configured accounts load on
+  build, registered accounts can be unloaded at runtime without deleting persisted BDK state, and
+  account-specific address metadata can be derived by index or range.
 - Added derived on-chain wallet account support (`account_index >= 1`) from the node's master
   seed:
-  - `export_onchain_wallet_account_xpub` / `add_onchain_wallet_account` (idempotent; validates
-    xpub; rejects account `0` and indexes above `MAX_ONCHAIN_WALLET_ACCOUNT_INDEX`);
+  - `export_onchain_wallet_account_xpub` / `add_onchain_wallet_account` /
+    `remove_onchain_wallet_account` (idempotent add; validates xpub; reserves account `0`);
     `get_balance_for_onchain_wallet_account` / `list_onchain_wallet_accounts`;
-    `OnchainPayment::new_address_for_account` / `new_address_info_for_account` /
-    `reveal_receive_addresses_to_account`;
-    `OnchainWalletAccount`
-  - Registration is not persisted and not auto-loaded; re-add after each build. BDK data
-    remains persisted per account
+    `OnchainPayment::new_address_for_account` /
+    `new_address_info_for_account` / `address_info_for_account_at_index` /
+    `address_infos_for_account` / `reveal_receive_addresses_to_account`;
+    `OnchainWalletAccount` / `OnchainWalletAccountConfig`
+  - Runtime registration changes are not persisted. Configure registrations in
+    `Config::onchain_wallet_accounts` to load them on each build. BDK data remains persisted per
+    account after unload
   - Derived accounts full-scan after registration, then use incremental sync. Apps issuing addresses
     from an exported xpub reveal their highest issued index before syncing; descriptor origins use
     the real account path; channel preflight requires an account-`0` SegWit builder before counting
