@@ -52,8 +52,8 @@ use crate::config::{
 	default_user_config, may_announce_channel, AddressType, AddressTypeRuntimeConfig,
 	AnnounceError, AsyncPaymentsRole, BitcoindRestClientConfig, Config, ElectrumSyncConfig,
 	EsploraSyncConfig, OnchainWalletAccount, RuntimeSyncIntervals, ScoringDecayParameters,
-	ScoringFeeParameters, DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME, DEFAULT_LOG_LEVEL,
-	MAX_ONCHAIN_WALLET_ACCOUNT_INDEX, WALLET_KEYS_SEED_LEN,
+	ScoringFeeParameters, BDK_CLIENT_STOP_GAP, DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME,
+	DEFAULT_LOG_LEVEL, MAX_ONCHAIN_WALLET_ACCOUNT_INDEX, WALLET_KEYS_SEED_LEN,
 };
 use crate::connection::ConnectionManager;
 use crate::event::EventQueue;
@@ -113,6 +113,18 @@ enum ChainDataSourceConfig {
 		rpc_password: String,
 		rest_client_config: Option<BitcoindRestClientConfig>,
 	},
+}
+
+fn derived_account_lookahead(chain_data_source_config: Option<&ChainDataSourceConfig>) -> u32 {
+	match chain_data_source_config {
+		Some(ChainDataSourceConfig::Electrum { sync_config, .. }) => {
+			sync_config.unwrap_or_default().additional_wallet_full_scan_stop_gap.max(1)
+		},
+		Some(ChainDataSourceConfig::Bitcoind { .. }) => {
+			bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD
+		},
+		Some(ChainDataSourceConfig::Esplora { .. }) | None => BDK_CLIENT_STOP_GAP as u32,
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1350,42 +1362,49 @@ fn account_keychain_derivation_path(
 /// persisted wallet was restored.
 pub(crate) fn get_or_create_wallet_for_account(
 	wallet_account: OnchainWalletAccount, master_xprv: Xpriv, network: Network,
-	persister: &mut KVStoreWalletPersister,
+	persister: &mut KVStoreWalletPersister, lookahead: Option<u32>,
 ) -> Result<(PersistedWallet<KVStoreWalletPersister>, bool), BuildError> {
 	macro_rules! load_or_create {
 		($ext:expr, $int:expr) => {{
-			let wallet_opt = BdkWallet::load()
+			let mut load_params = BdkWallet::load()
 				.descriptor(KeychainKind::External, Some($ext))
 				.descriptor(KeychainKind::Internal, Some($int))
 				.extract_keys()
-				.check_network(network)
-				.load_wallet(persister)
-				.map_err(|e| match e {
-					bdk_wallet::LoadWithPersistError::InvalidChangeSet(
-						bdk_wallet::LoadError::Mismatch(bdk_wallet::LoadMismatch::Network {
-							loaded,
-							expected,
-						}),
-					) => {
-						log::error!(
-							"Failed to setup wallet: Networks do not match. Expected {} but got {}",
-							expected,
-							loaded
-						);
-						BuildError::NetworkMismatch
-					},
-					_ => {
-						log::error!("Failed to set up wallet: {}", e);
-						BuildError::WalletSetupFailed
-					},
-				})?;
+				.check_network(network);
+			if let Some(lookahead) = lookahead {
+				load_params = load_params.lookahead(lookahead);
+			}
+			let wallet_opt = load_params.load_wallet(persister).map_err(|e| match e {
+				bdk_wallet::LoadWithPersistError::InvalidChangeSet(
+					bdk_wallet::LoadError::Mismatch(bdk_wallet::LoadMismatch::Network {
+						loaded,
+						expected,
+					}),
+				) => {
+					log::error!(
+						"Failed to setup wallet: Networks do not match. Expected {} but got {}",
+						expected,
+						loaded
+					);
+					BuildError::NetworkMismatch
+				},
+				_ => {
+					log::error!("Failed to set up wallet: {}", e);
+					BuildError::WalletSetupFailed
+				},
+			})?;
 			match wallet_opt {
 				Some(w) => Ok((w, true)),
-				None => BdkWallet::create($ext, $int)
-					.network(network)
-					.create_wallet(persister)
-					.map(|w| (w, false))
-					.map_err(|_| BuildError::WalletSetupFailed),
+				None => {
+					let mut create_params = BdkWallet::create($ext, $int).network(network);
+					if let Some(lookahead) = lookahead {
+						create_params = create_params.lookahead(lookahead);
+					}
+					create_params
+						.create_wallet(persister)
+						.map(|w| (w, false))
+						.map_err(|_| BuildError::WalletSetupFailed)
+				},
 			}
 		}};
 	}
@@ -1484,7 +1503,7 @@ fn validate_configured_onchain_wallet_accounts(
 
 fn build_wallet_for_account(
 	config: &Config, wallet_account: OnchainWalletAccount, xprv: Xpriv, kv_store: Arc<DynStore>,
-	logger: Arc<Logger>, chain_tip_opt: Option<&BestBlock>,
+	logger: Arc<Logger>, chain_tip_opt: Option<&BestBlock>, lookahead: Option<u32>,
 ) -> Result<
 	(OnchainWalletAccount, PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister),
 	BuildError,
@@ -1492,12 +1511,17 @@ fn build_wallet_for_account(
 	let mut persister =
 		KVStoreWalletPersister::new(Arc::clone(&kv_store), Arc::clone(&logger), wallet_account);
 
-	let (mut wallet, loaded_from_store) =
-		get_or_create_wallet_for_account(wallet_account, xprv, config.network, &mut persister)
-			.map_err(|e| {
-				log_error!(logger, "Failed to setup wallet for {:?}: {}", wallet_account, e);
-				e
-			})?;
+	let (mut wallet, loaded_from_store) = get_or_create_wallet_for_account(
+		wallet_account,
+		xprv,
+		config.network,
+		&mut persister,
+		lookahead,
+	)
+	.map_err(|e| {
+		log_error!(logger, "Failed to setup wallet for {:?}: {}", wallet_account, e);
+		e
+	})?;
 
 	// Re-loaded wallets keep their persisted tip so chain backends can catch up. New wallets start
 	// at the known tip; Esplora and Electrum recover history independently with a full scan, while
@@ -1522,6 +1546,7 @@ fn build_wallet_for_account(
 fn build_additional_wallets(
 	config: &Config, configured_accounts: &[OnchainWalletAccount], xprv: Xpriv,
 	kv_store: Arc<DynStore>, logger: Arc<Logger>, chain_tip_opt: Option<&BestBlock>,
+	derived_account_lookahead: u32,
 ) -> Result<
 	Vec<(OnchainWalletAccount, PersistedWallet<KVStoreWalletPersister>, KVStoreWalletPersister)>,
 	BuildError,
@@ -1537,6 +1562,7 @@ fn build_additional_wallets(
 			Arc::clone(&kv_store),
 			Arc::clone(&logger),
 			chain_tip_opt,
+			None,
 		) {
 			Ok(tuple) => {
 				log_info!(logger, "Created additional wallet for {:?}", tuple.0);
@@ -1561,6 +1587,7 @@ fn build_additional_wallets(
 			Arc::clone(&kv_store),
 			Arc::clone(&logger),
 			chain_tip_opt,
+			Some(derived_account_lookahead),
 		)?;
 		log_info!(logger, "Loaded configured wallet for {:?}", wallet_account);
 		additional_wallets.push(wallet);
@@ -1755,6 +1782,7 @@ fn build_with_store_internal(
 		BuildError::InvalidSeedBytes
 	})?;
 	let configured_accounts = validate_configured_onchain_wallet_accounts(&config, xprv)?;
+	let derived_account_lookahead = derived_account_lookahead(chain_data_source_config);
 
 	let tx_broadcaster = Arc::new(TransactionBroadcaster::new(Arc::clone(&logger)));
 	let fee_estimator = Arc::new(OnchainFeeEstimator::new());
@@ -1785,6 +1813,7 @@ fn build_with_store_internal(
 						xprv,
 						network,
 						&mut persister,
+						None,
 					)
 					.map(|(wallet, _loaded)| wallet);
 					(result, persister)
@@ -1951,6 +1980,7 @@ fn build_with_store_internal(
 		Arc::clone(&kv_store),
 		Arc::clone(&logger),
 		chain_tip_opt.as_ref(),
+		derived_account_lookahead,
 	)?;
 
 	let wallet = Arc::new(Wallet::new(
@@ -1966,6 +1996,7 @@ fn build_with_store_internal(
 		Arc::clone(&address_type_runtime_config),
 		Arc::clone(&node_metrics),
 		Arc::clone(&logger),
+		derived_account_lookahead,
 	));
 
 	// Initialize the KeysManager
@@ -3291,7 +3322,8 @@ mod tests {
 		let mut persister =
 			KVStoreWalletPersister::new(Arc::clone(&store), Arc::clone(&logger), account);
 		let (wallet, loaded) =
-			get_or_create_wallet_for_account(account, master, network, &mut persister).unwrap();
+			get_or_create_wallet_for_account(account, master, network, &mut persister, None)
+				.unwrap();
 		assert!(!loaded);
 
 		let descriptor = wallet.public_descriptor(KeychainKind::External).to_string();

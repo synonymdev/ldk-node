@@ -3926,6 +3926,75 @@ mod derived_accounts {
 				.total_sats,
 			100_000
 		);
+		node.stop().unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_electrum_derived_account_incremental_sync_rolls_lookahead() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		premine_blocks(&bitcoind.client, &electrsd.client).await;
+
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		crate::common::setup_builder!(builder, config.node_config);
+		let electrum_url = format!("tcp://{}", electrsd.electrum_url);
+		let sync_config = ElectrumSyncConfig {
+			background_sync_config: None,
+			additional_wallet_full_scan_batch_size: 100,
+			additional_wallet_full_scan_stop_gap: 1_000,
+			..Default::default()
+		};
+		builder.set_chain_source_electrum(electrum_url, Some(sync_config));
+		builder.set_log_facade_logger();
+		let node = builder.build().unwrap();
+		node.start().unwrap();
+
+		let xpub = node.export_onchain_wallet_account_xpub(AddressType::NativeSegwit, 1).unwrap();
+		node.add_onchain_wallet_account(AddressType::NativeSegwit, 1, xpub.clone()).unwrap();
+		node.onchain_payment()
+			.reveal_receive_addresses_to_account(AddressType::NativeSegwit, 1, 999)
+			.unwrap();
+		node.sync_wallets().unwrap();
+
+		let index_990 = native_segwit_receive_address_from_xpub(&xpub, 990);
+		distribute_funds_unconfirmed(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![index_990],
+			Amount::from_sat(100_000),
+		)
+		.await;
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
+		node.sync_wallets().unwrap();
+		assert_eq!(
+			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+				.unwrap()
+				.total_sats,
+			100_000
+		);
+
+		let index_1200 = native_segwit_receive_address_from_xpub(&xpub, 1_200);
+		distribute_funds_unconfirmed(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![index_1200],
+			Amount::from_sat(70_000),
+		)
+		.await;
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
+		node.sync_wallets().unwrap();
+		assert_eq!(
+			node.get_balance_for_onchain_wallet_account(AddressType::NativeSegwit, 1)
+				.unwrap()
+				.total_sats,
+			170_000
+		);
+		assert_eq!(
+			node.onchain_payment()
+				.new_address_info_for_account(AddressType::NativeSegwit, 1)
+				.unwrap()
+				.index,
+			1_201
+		);
 
 		node.stop().unwrap();
 	}

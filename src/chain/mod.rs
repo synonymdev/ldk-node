@@ -1382,7 +1382,7 @@ mod tests {
 
 	use super::{collect_additional_sync_requests, WalletSyncRequest};
 	use crate::builder::NodeBuilder;
-	use crate::config::{AddressType, Config, OnchainWalletAccount};
+	use crate::config::{AddressType, Config, ElectrumSyncConfig, OnchainWalletAccount};
 	use crate::io::test_utils::InMemoryStore;
 	use crate::types::DynStore;
 
@@ -1422,5 +1422,43 @@ mod tests {
 		)
 		.unwrap();
 		assert!(matches!(requests[0].1, WalletSyncRequest::Incremental(_)));
+	}
+
+	#[test]
+	fn electrum_stop_gap_sets_derived_account_incremental_lookahead() {
+		let mut config = Config::default();
+		config.network = Network::Regtest;
+		let sync_config = ElectrumSyncConfig {
+			background_sync_config: None,
+			additional_wallet_full_scan_stop_gap: 1_000,
+			..ElectrumSyncConfig::default()
+		};
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_electrum("ssl://127.0.0.1:1".to_string(), Some(sync_config));
+		builder.set_entropy_seed_bytes([42u8; 64]);
+		builder.set_log_facade_logger();
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = builder.build_with_store(store).unwrap();
+		let account =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let xpub = node
+			.export_onchain_wallet_account_xpub(account.address_type, account.account_index)
+			.unwrap();
+		node.add_onchain_wallet_account(account.address_type, account.account_index, xpub).unwrap();
+		node.wallet.mark_derived_account_synced(account);
+
+		let mut requests = collect_additional_sync_requests(
+			&[account],
+			&node.wallet,
+			&node.node_metrics,
+			&node.logger,
+		)
+		.unwrap();
+		match requests.pop().unwrap().1 {
+			WalletSyncRequest::Incremental(request) => {
+				assert_eq!(request.progress().spks_remaining, 1_000);
+			},
+			WalletSyncRequest::FullScan(_) => panic!("expected incremental sync request"),
+		}
 	}
 }
