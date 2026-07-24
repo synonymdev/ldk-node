@@ -2,6 +2,10 @@
 
 set -e
 
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/android_native_validation.sh"
+
 BINDINGS_DIR="bindings/kotlin"
 TARGET_DIR="target"
 PROJECT_DIR="ldk-node-android"
@@ -122,115 +126,8 @@ find_strip() {
     exit 1
 }
 
-has_dwarf_debug_metadata() {
-    local sections
-
-    for attempt in 1 2 3; do
-        sections=$("$READELF_BIN" -S "$1")
-        case "$sections" in
-            *".debug_info"*) return 0 ;;
-        esac
-
-        sleep "$attempt"
-    done
-
-    printf '%s\n' "$sections" | grep -E '\.debug_info' || true
-    return 1
-}
-
-has_unstripped_sections() {
-    local sections
-    sections=$("$READELF_BIN" -S "$1")
-    case "$sections" in
-        *".debug_"*|*".zdebug_"*|*".symtab"*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-readelf_program_headers() {
-    if "$READELF_BIN" -W -l "$1" >/dev/null 2>&1; then
-        "$READELF_BIN" -W -l "$1"
-        return
-    fi
-
-    "$READELF_BIN" -l "$1"
-}
-
-has_16kb_elf_alignment() {
-    DETECTED_LOAD_ALIGNMENTS=""
-    DETECTED_RELRO_ENDS=""
-    program_headers=$(readelf_program_headers "$1")
-    DETECTED_LOAD_ALIGNMENTS=$(printf '%s\n' "$program_headers" | awk '$1 == "LOAD" { print $NF }')
-    if [ -z "$DETECTED_LOAD_ALIGNMENTS" ]; then
-        return 1
-    fi
-
-    while read -r alignment; do
-        if [ -z "$alignment" ]; then
-            continue
-        fi
-
-        if [ "$((alignment))" -lt 16384 ]; then
-            return 1
-        fi
-    done <<EOF
-$DETECTED_LOAD_ALIGNMENTS
-EOF
-
-    relro_segments=$(printf '%s\n' "$program_headers" | awk '$1 == "GNU_RELRO" { print $3, $6 }')
-    if [ -z "$relro_segments" ]; then
-        return 1
-    fi
-
-    while read -r virtual_address memory_size; do
-        if [ -z "$virtual_address" ] || [ -z "$memory_size" ]; then
-            continue
-        fi
-
-        relro_end=$((virtual_address + memory_size))
-        formatted_relro_end=$(printf '0x%x' "$relro_end")
-        DETECTED_RELRO_ENDS="${DETECTED_RELRO_ENDS:+$DETECTED_RELRO_ENDS }$formatted_relro_end"
-        if [ "$((relro_end % 16384))" -ne 0 ]; then
-            return 1
-        fi
-    done <<EOF
-$relro_segments
-EOF
-
-    [ -n "$DETECTED_RELRO_ENDS" ]
-}
-
-validate_android_library() {
-    abi="$1"
-    lib="$2"
-    if ! has_dwarf_debug_metadata "$lib"; then
-        echo "Error: Android native library has no .debug_info DWARF metadata: ABI=$abi library=$lib"
-        exit 1
-    fi
-
-    if ! has_16kb_elf_alignment "$lib"; then
-        echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$lib LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
-        readelf_program_headers "$lib" | grep -E 'LOAD|GNU_RELRO' || true
-        exit 1
-    fi
-}
-
-validate_stripped_android_library() {
-    abi="$1"
-    lib="$2"
-    if has_unstripped_sections "$lib"; then
-        echo "Error: Android release native library contains an unstripped .debug_*, .zdebug_*, or .symtab section: ABI=$abi library=$lib"
-        exit 1
-    fi
-
-    if ! has_16kb_elf_alignment "$lib"; then
-        echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$lib LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
-        readelf_program_headers "$lib" | grep -E 'LOAD|GNU_RELRO' || true
-        exit 1
-    fi
-}
-
 validate_android_symbols() {
+    export READELF_BIN
     READELF_BIN=$(find_readelf)
 
     for abi in armeabi-v7a arm64-v8a x86_64; do
@@ -240,7 +137,7 @@ validate_android_symbols() {
             exit 1
         fi
 
-        validate_android_library "$abi" "$lib"
+        validate_android_library "$abi" "$lib" || exit 1
     done
 }
 
@@ -277,14 +174,16 @@ strip_android_libraries() {
 }
 
 validate_stripped_android_symbols() {
+    export READELF_BIN
     READELF_BIN=$(find_readelf)
 
     for abi in armeabi-v7a arm64-v8a x86_64; do
-        validate_stripped_android_library "$abi" "$JNI_LIB_DIR/$abi/libldk_node.so"
+        validate_stripped_android_library "$abi" "$JNI_LIB_DIR/$abi/libldk_node.so" || exit 1
     done
 }
 
 validate_android_aar_symbols() {
+    export READELF_BIN
     READELF_BIN=$(find_readelf)
     aar=$(find "$ANDROID_LIB_DIR" -path '*/build/outputs/aar/*release.aar' -print | head -n 1)
     if [ -z "$aar" ]; then
@@ -333,11 +232,13 @@ validate_android_aar_symbols() {
         lib="$tmp_dir/native/$native_index/$file_name"
         mkdir -p "$(dirname "$lib")"
         unzip -p "$aar" "$entry" > "$lib"
-        validate_stripped_android_library "$abi" "$lib"
+        validate_stripped_android_library "$abi" "$lib" || exit 1
     done < "$native_entries"
 
     rm -rf "$tmp_dir"
 }
+
+"$SCRIPT_DIR/test_android_native_validation.sh"
 
 cargo ndk \
     -o "$JNI_LIB_DIR" \

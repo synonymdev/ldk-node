@@ -63,6 +63,12 @@ dependencies {
 }
 
 val androidNativeAbis = listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+val androidElfIdentities = mapOf(
+    "armeabi-v7a" to (1 to 40),
+    "arm64-v8a" to (2 to 183),
+    "x86" to (1 to 3),
+    "x86_64" to (2 to 62)
+)
 
 fun executableFromPath(name: String): String? {
     return System.getenv("PATH")
@@ -114,43 +120,63 @@ fun String.parseElfAlignment(): Long {
     }
 }
 
-fun Project.validateReleaseNativeLibrary(
-    readelf: String,
+fun File.readElfIdentity(): Pair<Int, Int> {
+    val header = inputStream().use { input ->
+        ByteArray(20).also { bytes ->
+            if (input.readNBytes(bytes, 0, bytes.size) != bytes.size) {
+                throw GradleException("Android native library has a truncated ELF header: library='$path'")
+            }
+        }
+    }
+    if (
+        header[0].toInt() != 0x7f ||
+        header[1].toInt() != 'E'.code ||
+        header[2].toInt() != 'L'.code ||
+        header[3].toInt() != 'F'.code ||
+        header[5].toInt() != 1
+    ) {
+        throw GradleException("Android native library has an invalid little-endian ELF header: library='$path'")
+    }
+
+    val elfClass = header[4].toInt() and 0xff
+    val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
+    return elfClass to machine
+}
+
+fun requireMatchingAndroidElfIdentity(
     abi: String,
+    detectedIdentity: Pair<Int, Int>,
     library: File,
     artifact: String
 ) {
-    val (sectionsExit, sections) = runReadelf(readelf, "-S", library.absolutePath)
-    if (sectionsExit != 0) {
-        throw GradleException(
-            "Unable to inspect Android native library sections: " +
+    val expectedIdentity = androidElfIdentities[abi]
+        ?: throw GradleException(
+            "Android release native library uses an unsupported ABI directory: " +
                 "ABI=$abi library='${library.path}' artifact=$artifact"
         )
-    }
-    val unstrippedSection = Regex("""\.(?:debug_|zdebug_|symtab)""").find(sections)?.value
-    if (unstrippedSection != null) {
+    if (detectedIdentity != expectedIdentity) {
         throw GradleException(
-            "Android release native library contains an unstripped section: " +
-                "ABI=$abi library='${library.path}' artifact=$artifact section=$unstrippedSection"
+            "Android native library ELF identity does not match its ABI directory: " +
+                "ABI=$abi library='${library.path}' artifact=$artifact " +
+                "ELF_class=${detectedIdentity.first} ELF_machine=${detectedIdentity.second}"
         )
     }
+}
 
-    val wideHeaders = runReadelf(readelf, "-W", "-l", library.absolutePath)
-    val headers = if (wideHeaders.first == 0) {
-        wideHeaders.second
-    } else {
-        val fallbackHeaders = runReadelf(readelf, "-l", library.absolutePath)
-        if (fallbackHeaders.first != 0) {
-            throw GradleException(
-                "Unable to inspect Android native library headers: " +
-                    "ABI=$abi library='${library.path}' artifact=$artifact"
-            )
-        }
-        fallbackHeaders.second
-    }
+fun String.findUnstrippedElfSection(): String? =
+    Regex("""\.(?:debug_|zdebug_|symtab)""").find(this)?.value
 
-    val programHeaders = headers
-        .lineSequence()
+fun selectProgramHeaderOutput(
+    wideHeaders: Pair<Int, String>,
+    fallbackHeaders: Pair<Int, String>
+): String? = when {
+    wideHeaders.first == 0 -> wideHeaders.second
+    fallbackHeaders.first == 0 -> fallbackHeaders.second
+    else -> null
+}
+
+fun String.parseElfProgramHeaders(): Pair<List<Long>, List<Long>> {
+    val programHeaders = lineSequence()
         .map { it.trim().split(Regex("""\s+""")) }
         .filter { it.isNotEmpty() }
         .toList()
@@ -160,11 +186,70 @@ fun Project.validateReleaseNativeLibrary(
     val relroEnds = programHeaders
         .filter { it.first() == "GNU_RELRO" && it.size >= 6 }
         .map { it[2].parseElfAlignment() + it[5].parseElfAlignment() }
+    return loadAlignments to relroEnds
+}
 
-    val compatible = loadAlignments.isNotEmpty() &&
+fun is16KbElfLayoutCompatible(loadAlignments: List<Long>, relroEnds: List<Long>): Boolean =
+    loadAlignments.isNotEmpty() &&
         loadAlignments.all { it >= 16_384 } &&
         relroEnds.isNotEmpty() &&
         relroEnds.all { it % 16_384 == 0L }
+
+fun parseAndroidNativeEntryPath(entryName: String): Pair<String, String> {
+    val match = Regex("""^jni/([^/\\]+)/([^/\\]+\.so)$""").matchEntire(entryName)
+        ?: throw GradleException("Android release AAR contains an invalid native library path: library=$entryName")
+    return match.groupValues[1] to match.groupValues[2]
+}
+
+fun requireAndroidNativeEntries(packagedEntries: Set<String>) {
+    val missingRequired = androidNativeAbis
+        .map { "jni/$it/libldk_node.so" }
+        .filterNot(packagedEntries::contains)
+    if (missingRequired.isNotEmpty()) {
+        throw GradleException(
+            "Android release AAR required native libraries missing: libraries=${missingRequired.joinToString()}"
+        )
+    }
+}
+
+fun Project.validateReleaseNativeLibrary(
+    readelf: String,
+    abi: String,
+    library: File,
+    artifact: String
+) {
+    val detectedIdentity = library.readElfIdentity()
+    requireMatchingAndroidElfIdentity(abi, detectedIdentity, library, artifact)
+
+    val (sectionsExit, sections) = runReadelf(readelf, "-S", library.absolutePath)
+    if (sectionsExit != 0) {
+        throw GradleException(
+            "Unable to inspect Android native library sections: " +
+                "ABI=$abi library='${library.path}' artifact=$artifact"
+        )
+    }
+    val unstrippedSection = sections.findUnstrippedElfSection()
+    if (unstrippedSection != null) {
+        throw GradleException(
+            "Android release native library contains an unstripped section: " +
+                "ABI=$abi library='${library.path}' artifact=$artifact section=$unstrippedSection"
+        )
+    }
+
+    val wideHeaders = runReadelf(readelf, "-W", "-l", library.absolutePath)
+    val fallbackHeaders = if (wideHeaders.first == 0) {
+        1 to ""
+    } else {
+        runReadelf(readelf, "-l", library.absolutePath)
+    }
+    val headers = selectProgramHeaderOutput(wideHeaders, fallbackHeaders)
+        ?: throw GradleException(
+            "Unable to inspect Android native library headers: " +
+                "ABI=$abi library='${library.path}' artifact=$artifact"
+        )
+    val (loadAlignments, relroEnds) = headers.parseElfProgramHeaders()
+
+    val compatible = is16KbElfLayoutCompatible(loadAlignments, relroEnds)
     val detectedLoad = loadAlignments.joinToString(prefix = "[", postfix = "]") { "0x${it.toString(16)}" }
     val detectedRelro = relroEnds.joinToString(prefix = "[", postfix = "]") { "0x${it.toString(16)}" }
 
@@ -182,9 +267,88 @@ fun Project.validateReleaseNativeLibrary(
     )
 }
 
+val testNativeLibraryValidation by tasks.registering {
+    group = "verification"
+    description = "Runs deterministic regression fixtures for Android archive and ELF validation."
+
+    doLast {
+        fun expectFailure(description: String, action: () -> Unit) {
+            if (runCatching(action).exceptionOrNull() !is GradleException) {
+                throw GradleException("Expected native validation fixture to fail: $description")
+            }
+        }
+
+        check(parseAndroidNativeEntryPath("jni/arm64-v8a/libldk_node.so") == ("arm64-v8a" to "libldk_node.so"))
+        expectFailure("parent traversal") { parseAndroidNativeEntryPath("jni/../../outside.so") }
+        expectFailure("nested native path") { parseAndroidNativeEntryPath("jni/arm64-v8a/nested/lib.so") }
+        expectFailure("missing required ABI") {
+            requireAndroidNativeEntries(setOf("jni/arm64-v8a/libldk_node.so"))
+        }
+        requireAndroidNativeEntries(androidNativeAbis.map { "jni/$it/libldk_node.so" }.toSet())
+
+        check(".debug_info".findUnstrippedElfSection() == ".debug_")
+        check(".zdebug_info".findUnstrippedElfSection() == ".zdebug_")
+        check(".symtab".findUnstrippedElfSection() == ".symtab")
+        check(".dynsym".findUnstrippedElfSection() == null)
+
+        val compatibleHeaders = """
+            LOAD 0x0 0x0 0x0 0x100 0x100 R 0x4000
+            LOAD 0x4000 0x4000 0x4000 0x100 0x100 R E 0x4000
+            GNU_RELRO 0x7000 0x7000 0x7000 0x1000 0x1000 R 0x1
+        """.trimIndent()
+        val (loads, relroEnds) = compatibleHeaders.parseElfProgramHeaders()
+        check(loads == listOf(0x4000L, 0x4000L))
+        check(relroEnds == listOf(0x8000L))
+        check(is16KbElfLayoutCompatible(loads, relroEnds))
+        check(!is16KbElfLayoutCompatible(listOf(0x1000L), relroEnds))
+        check(!is16KbElfLayoutCompatible(loads, listOf(0x8100L)))
+        check(!is16KbElfLayoutCompatible(emptyList(), relroEnds))
+        check(!is16KbElfLayoutCompatible(loads, emptyList()))
+        check(selectProgramHeaderOutput(0 to compatibleHeaders, 1 to "") == compatibleHeaders)
+        check(selectProgramHeaderOutput(1 to "", 0 to compatibleHeaders) == compatibleHeaders)
+        check(selectProgramHeaderOutput(1 to "", 1 to "") == null)
+
+        androidElfIdentities.forEach { (abi, identity) ->
+            val fixture = temporaryDir.resolve("$abi.so")
+            val header = ByteArray(20)
+            header[0] = 0x7f
+            header[1] = 'E'.code.toByte()
+            header[2] = 'L'.code.toByte()
+            header[3] = 'F'.code.toByte()
+            header[4] = identity.first.toByte()
+            header[5] = 1
+            header[18] = (identity.second and 0xff).toByte()
+            header[19] = (identity.second shr 8).toByte()
+            fixture.writeBytes(header)
+            check(fixture.readElfIdentity() == identity)
+            requireMatchingAndroidElfIdentity(abi, fixture.readElfIdentity(), fixture, "fixture")
+        }
+        expectFailure("swapped ABI") {
+            requireMatchingAndroidElfIdentity(
+                "arm64-v8a",
+                androidElfIdentities.getValue("x86_64"),
+                temporaryDir.resolve("swapped.so"),
+                "fixture"
+            )
+        }
+        expectFailure("unsupported ABI") {
+            requireMatchingAndroidElfIdentity(
+                "unsupported",
+                androidElfIdentities.getValue("arm64-v8a"),
+                temporaryDir.resolve("unsupported.so"),
+                "fixture"
+            )
+        }
+        expectFailure("truncated ELF header") {
+            temporaryDir.resolve("truncated.so").apply { writeBytes(byteArrayOf(0x7f)) }.readElfIdentity()
+        }
+    }
+}
+
 val validateReleaseNativeLibraries by tasks.registering {
     group = "verification"
     description = "Validates source release JNI libraries are stripped and 16 KB page-size compatible."
+    dependsOn(testNativeLibraryValidation)
 
     doLast {
         val readelf = findReadelf()
@@ -219,16 +383,15 @@ val validateReleaseAarNativeLibraries by tasks.registering {
         temporaryDir.deleteRecursively()
         temporaryDir.mkdirs()
         ZipFile(aar).use { archive ->
-            val nativeEntryPattern = Regex("""^jni/([^/\\]+)/([^/\\]+\.so)$""")
             val nativeEntries = archive.entries().asSequence()
                 .filter { !it.isDirectory && it.name.startsWith("jni/") && it.name.endsWith(".so") }
                 .map { entry ->
-                    val match = nativeEntryPattern.matchEntire(entry.name)
-                        ?: throw GradleException(
-                            "Android release AAR contains an invalid native library path: " +
-                                "library=${entry.name} artifact='${aar.path}'"
-                        )
-                    Triple(entry, match.groupValues[1], match.groupValues[2])
+                    val (abi, fileName) = try {
+                        parseAndroidNativeEntryPath(entry.name)
+                    } catch (error: GradleException) {
+                        throw GradleException("${error.message} artifact='${aar.path}'")
+                    }
+                    Triple(entry, abi, fileName)
                 }
                 .toList()
             if (nativeEntries.isEmpty()) {
@@ -236,14 +399,10 @@ val validateReleaseAarNativeLibraries by tasks.registering {
             }
 
             val packagedEntries = nativeEntries.map { it.first.name }.toSet()
-            val missingRequired = androidNativeAbis
-                .map { "jni/$it/libldk_node.so" }
-                .filterNot(packagedEntries::contains)
-            if (missingRequired.isNotEmpty()) {
-                throw GradleException(
-                    "Android release AAR required native libraries missing: " +
-                        "libraries=${missingRequired.joinToString()} artifact='${aar.path}'"
-                )
+            try {
+                requireAndroidNativeEntries(packagedEntries)
+            } catch (error: GradleException) {
+                throw GradleException("${error.message} artifact='${aar.path}'")
             }
 
             val extractionRoot = temporaryDir.canonicalFile

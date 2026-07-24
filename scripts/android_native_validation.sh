@@ -1,0 +1,170 @@
+#!/bin/bash
+
+# Shared Android ELF validation helpers. The caller supplies READELF_BIN.
+
+read_android_elf_identity() {
+    local header
+    local -a header_bytes
+
+    DETECTED_ELF_CLASS=""
+    DETECTED_ELF_MACHINE=""
+    header=$(od -An -v -t u1 -N20 "$1") || return 1
+    read -r -a header_bytes <<< "${header//$'\n'/ }"
+    if [ "${#header_bytes[@]}" -lt 20 ] ||
+       [ "${header_bytes[0]}" -ne 127 ] || [ "${header_bytes[1]}" -ne 69 ] ||
+       [ "${header_bytes[2]}" -ne 76 ] || [ "${header_bytes[3]}" -ne 70 ] ||
+       [ "${header_bytes[5]}" -ne 1 ]; then
+        return 1
+    fi
+
+    DETECTED_ELF_CLASS="${header_bytes[4]}"
+    DETECTED_ELF_MACHINE=$((header_bytes[18] + (header_bytes[19] * 256)))
+}
+
+has_matching_android_elf_abi() {
+    local abi="$1"
+    local library="$2"
+    local expected_class
+    local expected_machine
+
+    case "$abi" in
+        armeabi-v7a) expected_class=1; expected_machine=40 ;;
+        arm64-v8a) expected_class=2; expected_machine=183 ;;
+        x86) expected_class=1; expected_machine=3 ;;
+        x86_64) expected_class=2; expected_machine=62 ;;
+        *) return 1 ;;
+    esac
+
+    read_android_elf_identity "$library" &&
+        [ "$DETECTED_ELF_CLASS" -eq "$expected_class" ] &&
+        [ "$DETECTED_ELF_MACHINE" -eq "$expected_machine" ]
+}
+
+has_dwarf_debug_metadata() {
+    local sections
+    local attempt
+
+    for attempt in 1 2 3; do
+        sections=$("$READELF_BIN" -S "$1")
+        case "$sections" in
+            *".debug_info"*) return 0 ;;
+        esac
+
+        sleep "$attempt"
+    done
+
+    printf '%s\n' "$sections" | grep -E '\.debug_info' || true
+    return 1
+}
+
+has_unstripped_sections() {
+    local sections
+    sections=$("$READELF_BIN" -S "$1")
+    case "$sections" in
+        *".debug_"*|*".zdebug_"*|*".symtab"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+readelf_program_headers() {
+    if "$READELF_BIN" -W -l "$1" >/dev/null 2>&1; then
+        "$READELF_BIN" -W -l "$1"
+        return
+    fi
+
+    "$READELF_BIN" -l "$1"
+}
+
+has_16kb_elf_alignment() {
+    local program_headers
+    local alignment
+    local relro_segments
+    local virtual_address
+    local memory_size
+    local relro_end
+    local formatted_relro_end
+
+    DETECTED_LOAD_ALIGNMENTS=""
+    DETECTED_RELRO_ENDS=""
+    program_headers=$(readelf_program_headers "$1")
+    DETECTED_LOAD_ALIGNMENTS=$(printf '%s\n' "$program_headers" | awk '$1 == "LOAD" { print $NF }')
+    if [ -z "$DETECTED_LOAD_ALIGNMENTS" ]; then
+        return 1
+    fi
+
+    while read -r alignment; do
+        if [ -z "$alignment" ]; then
+            continue
+        fi
+
+        if [ "$((alignment))" -lt 16384 ]; then
+            return 1
+        fi
+    done <<EOF
+$DETECTED_LOAD_ALIGNMENTS
+EOF
+
+    relro_segments=$(printf '%s\n' "$program_headers" | awk '$1 == "GNU_RELRO" { print $3, $6 }')
+    if [ -z "$relro_segments" ]; then
+        return 1
+    fi
+
+    while read -r virtual_address memory_size; do
+        if [ -z "$virtual_address" ] || [ -z "$memory_size" ]; then
+            continue
+        fi
+
+        relro_end=$((virtual_address + memory_size))
+        formatted_relro_end=$(printf '0x%x' "$relro_end")
+        DETECTED_RELRO_ENDS="${DETECTED_RELRO_ENDS:+$DETECTED_RELRO_ENDS }$formatted_relro_end"
+        if [ "$((relro_end % 16384))" -ne 0 ]; then
+            return 1
+        fi
+    done <<EOF
+$relro_segments
+EOF
+
+    [ -n "$DETECTED_RELRO_ENDS" ]
+}
+
+validate_android_library() {
+    local abi="$1"
+    local library="$2"
+
+    if ! has_matching_android_elf_abi "$abi" "$library"; then
+        echo "Error: Android native library ELF identity does not match its ABI directory: ABI=$abi library=$library ELF_class=${DETECTED_ELF_CLASS:-unknown} ELF_machine=${DETECTED_ELF_MACHINE:-unknown}"
+        return 1
+    fi
+
+    if ! has_dwarf_debug_metadata "$library"; then
+        echo "Error: Android native library has no .debug_info DWARF metadata: ABI=$abi library=$library"
+        return 1
+    fi
+
+    if ! has_16kb_elf_alignment "$library"; then
+        echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$library LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
+        readelf_program_headers "$library" | grep -E 'LOAD|GNU_RELRO' || true
+        return 1
+    fi
+}
+
+validate_stripped_android_library() {
+    local abi="$1"
+    local library="$2"
+
+    if ! has_matching_android_elf_abi "$abi" "$library"; then
+        echo "Error: Android native library ELF identity does not match its ABI directory: ABI=$abi library=$library ELF_class=${DETECTED_ELF_CLASS:-unknown} ELF_machine=${DETECTED_ELF_MACHINE:-unknown}"
+        return 1
+    fi
+
+    if has_unstripped_sections "$library"; then
+        echo "Error: Android release native library contains an unstripped .debug_*, .zdebug_*, or .symtab section: ABI=$abi library=$library"
+        return 1
+    fi
+
+    if ! has_16kb_elf_alignment "$library"; then
+        echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$library LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
+        readelf_program_headers "$library" | grep -E 'LOAD|GNU_RELRO' || true
+        return 1
+    fi
+}
