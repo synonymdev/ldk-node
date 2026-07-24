@@ -295,37 +295,46 @@ validate_android_aar_symbols() {
     tmp_dir=$(mktemp -d)
     entry_list="$tmp_dir/archive-entries.txt"
     unzip -Z1 "$aar" > "$entry_list"
-    if ! awk '
-        /^\// || /\\/ || /(^|\/)\.\.(\/|$)/ { exit 1 }
-    ' "$entry_list"; then
-        echo "Error: Android release AAR contains an unsafe archive entry"
-        rm -rf "$tmp_dir"
-        exit 1
-    fi
-    unzip -q "$aar" -d "$tmp_dir"
 
     for abi in armeabi-v7a arm64-v8a x86_64; do
-        lib="$tmp_dir/jni/$abi/libldk_node.so"
-        if [ ! -f "$lib" ]; then
-            echo "Error: Android release AAR native library missing at $lib"
+        required_entry="jni/$abi/libldk_node.so"
+        if ! grep -Fqx "$required_entry" "$entry_list"; then
+            echo "Error: Android release AAR native library missing at $required_entry"
             rm -rf "$tmp_dir"
             exit 1
         fi
     done
 
-    native_list="$tmp_dir/native-libraries.txt"
-    find "$tmp_dir/jni" -type f -name '*.so' -print > "$native_list"
-    if [ ! -s "$native_list" ]; then
+    native_entries="$tmp_dir/native-entry-names.txt"
+    if ! awk '
+        /^jni\/.*[.]so$/ {
+            if ($0 !~ /^jni\/[A-Za-z0-9._+-]+\/lib[A-Za-z0-9._+-]*[.]so$/) {
+                exit 1
+            }
+            print
+        }
+    ' "$entry_list" > "$native_entries"; then
+        echo "Error: Android release AAR contains an unsafe native library entry"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+    if [ ! -s "$native_entries" ]; then
         echo "Error: Android release AAR contains no native libraries"
         rm -rf "$tmp_dir"
         exit 1
     fi
 
-    while IFS= read -r lib; do
-        relative_path=${lib#"$tmp_dir/jni/"}
+    native_index=0
+    while IFS= read -r entry; do
+        native_index=$((native_index + 1))
+        relative_path=${entry#jni/}
         abi=${relative_path%%/*}
+        file_name=${relative_path#*/}
+        lib="$tmp_dir/native/$native_index/$file_name"
+        mkdir -p "$(dirname "$lib")"
+        unzip -p "$aar" "$entry" > "$lib"
         validate_stripped_android_library "$abi" "$lib"
-    done < "$native_list"
+    done < "$native_entries"
 
     rm -rf "$tmp_dir"
 }
