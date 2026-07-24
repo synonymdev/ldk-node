@@ -127,10 +127,11 @@ fun Project.validateReleaseNativeLibrary(
                 "ABI=$abi library='${library.path}' artifact=$artifact"
         )
     }
-    if (Regex("""\.debug_""").containsMatchIn(sections)) {
+    val unstrippedSection = Regex("""\.(?:debug_|zdebug_|symtab)""").find(sections)?.value
+    if (unstrippedSection != null) {
         throw GradleException(
-            "Android release native library still contains .debug_* sections: " +
-                "ABI=$abi library='${library.path}' artifact=$artifact"
+            "Android release native library contains an unstripped section: " +
+                "ABI=$abi library='${library.path}' artifact=$artifact section=$unstrippedSection"
         )
     }
 

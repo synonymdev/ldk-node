@@ -138,11 +138,11 @@ has_dwarf_debug_metadata() {
     return 1
 }
 
-has_dwarf_sections() {
+has_unstripped_sections() {
     local sections
     sections=$("$READELF_BIN" -S "$1")
     case "$sections" in
-        *".debug_"*) return 0 ;;
+        *".debug_"*|*".zdebug_"*|*".symtab"*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -218,8 +218,8 @@ validate_android_library() {
 validate_stripped_android_library() {
     abi="$1"
     lib="$2"
-    if has_dwarf_sections "$lib"; then
-        echo "Error: Android release native library still contains .debug_* sections: ABI=$abi library=$lib"
+    if has_unstripped_sections "$lib"; then
+        echo "Error: Android release native library contains an unstripped .debug_*, .zdebug_*, or .symtab section: ABI=$abi library=$lib"
         exit 1
     fi
 
