@@ -64,6 +64,7 @@ case "$1" in
             esac
             case "$library" in
                 *zdebug*) echo ".zdebug_info PROGBITS" ;;
+                *debug-placeholder*) echo ".debug_info_placeholder PROGBITS" ;;
                 *debug*) echo ".debug_info PROGBITS" ;;
                 *renamed-symtab*) echo ".stripped_symbols SYMTAB" ;;
                 *symtab*) echo ".symtab SYMTAB" ;;
@@ -105,6 +106,7 @@ export READELF_BIN="$TEST_DIR/readelf"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/valid.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/debug.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/zdebug.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/debug-placeholder.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/symtab.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/renamed-symtab.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-load.so"
@@ -163,6 +165,10 @@ done
 
 validate_android_library arm64-v8a "$TEST_DIR/debug.so"
 validate_android_library arm64-v8a "$TEST_DIR/zdebug.so"
+if validate_android_library arm64-v8a "$TEST_DIR/debug-placeholder.so" >/dev/null; then
+    echo "Expected non-DWARF debug section substring fixture to fail"
+    exit 1
+fi
 validate_stripped_android_library arm64-v8a "$TEST_DIR/valid.so"
 if has_dwarf_debug_metadata "$TEST_DIR/section-inspection-partial.so"; then
     echo "Expected partial section-inspection fixture to fail"

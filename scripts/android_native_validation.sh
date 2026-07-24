@@ -42,16 +42,25 @@ has_matching_android_elf_abi() {
 
 has_dwarf_debug_metadata() {
     local sections
+    local line
+    local field
+    local -a section_fields
 
     if ! sections=$("$READELF_BIN" -W -S "$1"); then
         return 2
     fi
 
-    case "$sections" in
-        *".debug_info"*|*".zdebug_info"*) return 0 ;;
-    esac
+    while IFS= read -r line; do
+        read -r -a section_fields <<< "$line" || true
+        for field in "${section_fields[@]}"; do
+            case "$field" in
+                .debug_info|.zdebug_info) return 0 ;;
+            esac
+        done
+    done <<EOF
+$sections
+EOF
 
-    printf '%s\n' "$sections" | grep -E '\.(z)?debug_info' || true
     return 1
 }
 
