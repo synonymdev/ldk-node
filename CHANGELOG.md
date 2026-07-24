@@ -1,7 +1,9 @@
-# 0.7.0-rc.52 (Synonym Fork)
+# 0.7.0-rc.52.1 (Synonym Fork)
 
 ## Bug Fixes
 
+- Published Android native libraries with an exact NDK r28c toolchain selection and final-AAR
+  16 KB page-size validation across every ABI.
 - Published stripped `ldk-node-android` artifacts with separate native debug symbols
   and failed Android binding generation when generated JNI libraries lack usable symbols.
 - Persist missing announced channel peers from the network graph during

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version/tag to publish (e.g., v0.7.0-rc.50 or 0.7.0-rc.50)"
+        description: "Version/tag to publish (e.g., v0.7.0-rc.52.1 or 0.7.0-rc.52.1)"
         required: true
 
 jobs:
@@ -29,11 +29,11 @@ jobs:
         echo "tag=$TAG" >> "$GITHUB_OUTPUT"
         echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         ref: ${{ steps.version.outputs.tag }}
     - name: Set up JDK 17
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5
       with:
         java-version: '17'
         distribution: 'temurin'
@@ -41,13 +41,13 @@ jobs:
         settings-path: ${{ github.workspace }}
 
     - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v4
+      uses: gradle/actions/setup-gradle@v6
 
     - name: Install native build dependencies
       run: sudo apt-get update && sudo apt-get install -y pkg-config protobuf-compiler
 
     - name: Set up Android SDK
-      uses: android-actions/setup-android@v3
+      uses: android-actions/setup-android@v4
 
     - name: Set up Android NDK
       id: setup-ndk
@@ -56,8 +56,16 @@ jobs:
         ndk-version: r28c
         add-to-path: true
 
-    - name: Export Android NDK root
-      run: echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+    - name: Select and verify Android NDK
+      shell: bash
+      env:
+        SELECTED_ANDROID_NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+      run: |
+        cat "$SELECTED_ANDROID_NDK/source.properties"
+        grep -Fx "Pkg.Revision = 28.2.13676358" "$SELECTED_ANDROID_NDK/source.properties"
+        grep -Fx "Pkg.ReleaseName = r28c" "$SELECTED_ANDROID_NDK/source.properties"
+        echo "ANDROID_NDK_HOME=$SELECTED_ANDROID_NDK" >> "$GITHUB_ENV"
+        echo "ANDROID_NDK_ROOT=$SELECTED_ANDROID_NDK" >> "$GITHUB_ENV"
 
     - name: Generate Android bindings
       run: scripts/uniffi_bindgen_generate_kotlin_android.sh
@@ -67,7 +75,7 @@ jobs:
       run: ./gradlew build -Pversion=${{ steps.version.outputs.version }}
 
     - name: Upload native debug symbols artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ldk-node-native-debug-symbols-${{ steps.version.outputs.version }}
         path: bindings/kotlin/ldk-node-android/native-debug-symbols.zip
