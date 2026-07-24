@@ -218,14 +218,23 @@ val validateReleaseAarNativeLibraries by tasks.registering {
         temporaryDir.deleteRecursively()
         temporaryDir.mkdirs()
         ZipFile(aar).use { archive ->
+            val nativeEntryPattern = Regex("""^jni/([^/\\]+)/([^/\\]+\.so)$""")
             val nativeEntries = archive.entries().asSequence()
                 .filter { !it.isDirectory && it.name.startsWith("jni/") && it.name.endsWith(".so") }
+                .map { entry ->
+                    val match = nativeEntryPattern.matchEntire(entry.name)
+                        ?: throw GradleException(
+                            "Android release AAR contains an invalid native library path: " +
+                                "library=${entry.name} artifact='${aar.path}'"
+                        )
+                    Triple(entry, match.groupValues[1], match.groupValues[2])
+                }
                 .toList()
             if (nativeEntries.isEmpty()) {
                 throw GradleException("Android release AAR contains no native libraries: artifact='${aar.path}'")
             }
 
-            val packagedEntries = nativeEntries.map { it.name }.toSet()
+            val packagedEntries = nativeEntries.map { it.first.name }.toSet()
             val missingRequired = androidNativeAbis
                 .map { "jni/$it/libldk_node.so" }
                 .filterNot(packagedEntries::contains)
@@ -236,10 +245,15 @@ val validateReleaseAarNativeLibraries by tasks.registering {
                 )
             }
 
-            nativeEntries.forEach { entry ->
-                val relativePath = entry.name.removePrefix("jni/")
-                val abi = relativePath.substringBefore("/")
-                val extracted = temporaryDir.resolve(relativePath)
+            val extractionRoot = temporaryDir.canonicalFile
+            nativeEntries.forEach { (entry, abi, fileName) ->
+                val extracted = extractionRoot.resolve("$abi/$fileName").canonicalFile
+                if (!extracted.toPath().startsWith(extractionRoot.toPath())) {
+                    throw GradleException(
+                        "Android release AAR native library escapes the extraction directory: " +
+                            "library=${entry.name} artifact='${aar.path}'"
+                    )
+                }
                 extracted.parentFile.mkdirs()
                 archive.getInputStream(entry).use { input ->
                     extracted.outputStream().use { output -> input.copyTo(output) }

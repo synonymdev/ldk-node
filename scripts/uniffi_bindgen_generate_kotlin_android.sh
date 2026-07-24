@@ -293,6 +293,15 @@ validate_android_aar_symbols() {
     fi
 
     tmp_dir=$(mktemp -d)
+    entry_list="$tmp_dir/archive-entries.txt"
+    unzip -Z1 "$aar" > "$entry_list"
+    if ! awk '
+        /^\// || /\\/ || /(^|\/)\.\.(\/|$)/ { exit 1 }
+    ' "$entry_list"; then
+        echo "Error: Android release AAR contains an unsafe archive entry"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
     unzip -q "$aar" -d "$tmp_dir"
 
     for abi in armeabi-v7a arm64-v8a x86_64; do
