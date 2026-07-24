@@ -45,6 +45,9 @@ case "$1" in
     -W)
         if [ "$2" = "-S" ]; then
             case "$library" in
+                *section-inspection-fail*) exit 1 ;;
+            esac
+            case "$library" in
                 *zdebug*) echo ".zdebug_info PROGBITS" ;;
                 *debug*) echo ".debug_info PROGBITS" ;;
                 *renamed-symtab*) echo ".stripped_symbols SYMTAB" ;;
@@ -84,6 +87,7 @@ cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-relro.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/no-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/readelf-fail.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/section-inspection-fail.so"
 
 has_unstripped_sections "$TEST_DIR/debug.so"
 has_unstripped_sections "$TEST_DIR/zdebug.so"
@@ -112,6 +116,19 @@ if validate_stripped_android_library arm64-v8a "$TEST_DIR/x86_64.so" >/dev/null;
     echo "Expected wrong-ABI release fixture to fail"
     exit 1
 fi
+if section_failure_output=$(
+    validate_stripped_android_library arm64-v8a "$TEST_DIR/section-inspection-fail.so" 2>&1
+); then
+    echo "Expected section-inspection-failure release fixture to fail"
+    exit 1
+fi
+case "$section_failure_output" in
+    *"Unable to inspect Android native library sections"*) ;;
+    *)
+        echo "Section-inspection fixture failed for an unexpected reason: $section_failure_output"
+        exit 1
+        ;;
+esac
 
 create_required_aar_tree() {
     local root="$1"
@@ -195,6 +212,26 @@ case "$duplicate_output" in
     *"duplicate native library entry"*) ;;
     *)
         echo "Duplicate AAR fixture failed for an unexpected reason: $duplicate_output"
+        exit 1
+        ;;
+esac
+
+section_failure_aar_root="$TEST_DIR/section-inspection-fail-aar"
+create_required_aar_tree "$section_failure_aar_root"
+cp \
+    "$TEST_DIR/section-inspection-fail.so" \
+    "$section_failure_aar_root/jni/arm64-v8a/libsection-inspection-fail.so"
+create_aar "$section_failure_aar_root" "$TEST_DIR/section-inspection-fail.aar"
+if section_aar_output=$(
+    validate_android_aar_symbols "$TEST_DIR/section-inspection-fail.aar" 2>&1
+); then
+    echo "Expected section-inspection-failure AAR fixture to fail"
+    exit 1
+fi
+case "$section_aar_output" in
+    *"Unable to inspect Android native library sections"*) ;;
+    *)
+        echo "Section-inspection AAR fixture failed for an unexpected reason: $section_aar_output"
         exit 1
         ;;
 esac

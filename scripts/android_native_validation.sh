@@ -59,7 +59,9 @@ has_dwarf_debug_metadata() {
 
 has_unstripped_sections() {
     local sections
-    sections=$("$READELF_BIN" -W -S "$1")
+    if ! sections=$("$READELF_BIN" -W -S "$1"); then
+        return 2
+    fi
     case "$sections" in
         *".debug_"*|*".zdebug_"*) return 0 ;;
     esac
@@ -155,6 +157,7 @@ validate_android_library() {
 validate_stripped_android_library() {
     local abi="$1"
     local library="$2"
+    local section_status
 
     if ! has_matching_android_elf_abi "$abi" "$library"; then
         echo "Error: Android native library ELF identity does not match its ABI directory: ABI=$abi library=$library ELF_class=${DETECTED_ELF_CLASS:-unknown} ELF_machine=${DETECTED_ELF_MACHINE:-unknown}"
@@ -164,6 +167,12 @@ validate_stripped_android_library() {
     if has_unstripped_sections "$library"; then
         echo "Error: Android release native library contains debug metadata or an SHT_SYMTAB section: ABI=$abi library=$library"
         return 1
+    else
+        section_status=$?
+        if [ "$section_status" -ne 1 ]; then
+            echo "Error: Unable to inspect Android native library sections: ABI=$abi library=$library"
+            return 1
+        fi
     fi
 
     if ! has_16kb_elf_alignment "$library"; then
