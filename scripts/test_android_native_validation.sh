@@ -165,4 +165,34 @@ if validate_android_aar_symbols "$TEST_DIR/unknown-abi.aar" >/dev/null; then
     exit 1
 fi
 
+python3 - "$valid_aar_root" "$TEST_DIR/duplicate.aar" <<'PY'
+import pathlib
+import sys
+import warnings
+import zipfile
+
+root = pathlib.Path(sys.argv[1])
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", UserWarning)
+    with zipfile.ZipFile(sys.argv[2], "w") as archive:
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                archive.write(path, path.relative_to(root))
+        archive.write(
+            root / "jni/x86_64/libldk_node.so",
+            "jni/arm64-v8a/libldk_node.so",
+        )
+PY
+if duplicate_output=$(validate_android_aar_symbols "$TEST_DIR/duplicate.aar" 2>&1); then
+    echo "Expected duplicate-native-entry AAR fixture to fail"
+    exit 1
+fi
+case "$duplicate_output" in
+    *"duplicate native library entry"*) ;;
+    *)
+        echo "Duplicate AAR fixture failed for an unexpected reason: $duplicate_output"
+        exit 1
+        ;;
+esac
+
 echo "Android native validation regression fixtures passed"

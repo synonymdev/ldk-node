@@ -170,6 +170,7 @@ validate_android_aar_symbols() {
     local entry_list
     local required_entry
     local native_entries
+    local duplicate_native_entries
     local native_index
     local entry
     local relative_path
@@ -210,6 +211,12 @@ validate_android_aar_symbols() {
     fi
     if [ ! -s "$native_entries" ]; then
         echo "Error: Android release AAR contains no native libraries"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    duplicate_native_entries=$(sort "$native_entries" | uniq -d)
+    if [ -n "$duplicate_native_entries" ]; then
+        echo "Error: Android release AAR contains a duplicate native library entry: $duplicate_native_entries"
         rm -rf "$tmp_dir"
         return 1
     fi
