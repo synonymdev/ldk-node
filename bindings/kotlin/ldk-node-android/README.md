@@ -30,6 +30,6 @@ Publishing new version guide.
         ```
     - add dependency in `libs.versions.toml`:
         ```toml
-        ldk-node-android = { module = "com.synonym:ldk-node-android", version = "0.7.0-rc.26" }
+        ldk-node-android = { module = "com.synonym:ldk-node-android", version = "0.7.0-rc.52.1" }
         ```
     - Run `Sync project with gradle files` action in android studio

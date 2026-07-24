@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version/tag to publish (e.g., v0.7.0-rc.50 or 0.7.0-rc.50)"
+        description: "Version/tag to publish (e.g., v0.7.0-rc.52.1 or 0.7.0-rc.52.1)"
         required: true
 
 jobs:
