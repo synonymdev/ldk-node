@@ -182,7 +182,7 @@ validate_stripped_android_symbols() {
     done
 }
 
-validate_android_aar_symbols() {
+validate_built_android_aar_symbols() {
     export READELF_BIN
     READELF_BIN=$(find_readelf)
     aar=$(find "$ANDROID_LIB_DIR" -path '*/build/outputs/aar/*release.aar' -print | head -n 1)
@@ -190,52 +190,7 @@ validate_android_aar_symbols() {
         echo "Error: Android release AAR missing under $ANDROID_LIB_DIR"
         exit 1
     fi
-
-    tmp_dir=$(mktemp -d)
-    entry_list="$tmp_dir/archive-entries.txt"
-    unzip -Z1 "$aar" > "$entry_list"
-
-    for abi in armeabi-v7a arm64-v8a x86_64; do
-        required_entry="jni/$abi/libldk_node.so"
-        if ! grep -Fqx "$required_entry" "$entry_list"; then
-            echo "Error: Android release AAR native library missing at $required_entry"
-            rm -rf "$tmp_dir"
-            exit 1
-        fi
-    done
-
-    native_entries="$tmp_dir/native-entry-names.txt"
-    if ! awk '
-        /^jni\/.*[.]so$/ {
-            if ($0 !~ /^jni\/[A-Za-z0-9._+-]+\/lib[A-Za-z0-9._+-]*[.]so$/) {
-                exit 1
-            }
-            print
-        }
-    ' "$entry_list" > "$native_entries"; then
-        echo "Error: Android release AAR contains an unsafe native library entry"
-        rm -rf "$tmp_dir"
-        exit 1
-    fi
-    if [ ! -s "$native_entries" ]; then
-        echo "Error: Android release AAR contains no native libraries"
-        rm -rf "$tmp_dir"
-        exit 1
-    fi
-
-    native_index=0
-    while IFS= read -r entry; do
-        native_index=$((native_index + 1))
-        relative_path=${entry#jni/}
-        abi=${relative_path%%/*}
-        file_name=${relative_path#*/}
-        lib="$tmp_dir/native/$native_index/$file_name"
-        mkdir -p "$(dirname "$lib")"
-        unzip -p "$aar" "$entry" > "$lib"
-        validate_stripped_android_library "$abi" "$lib" || exit 1
-    done < "$native_entries"
-
-    rm -rf "$tmp_dir"
+    validate_android_aar_symbols "$aar" || exit 1
 }
 
 "$SCRIPT_DIR/test_android_native_validation.sh"
@@ -283,6 +238,6 @@ echo "Version synced: $CARGO_VERSION"
 # Verify android library publish task graph
 echo "Testing android library publish to Maven Local..."
 $ANDROID_LIB_DIR/gradlew --project-dir "$ANDROID_LIB_DIR" clean publishToMavenLocal
-validate_android_aar_symbols
+validate_built_android_aar_symbols
 
 echo "Android build process completed successfully!"

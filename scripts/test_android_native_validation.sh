@@ -109,4 +109,60 @@ if validate_stripped_android_library arm64-v8a "$TEST_DIR/x86_64.so" >/dev/null;
     exit 1
 fi
 
+create_required_aar_tree() {
+    local root="$1"
+
+    mkdir -p "$root/jni/armeabi-v7a" "$root/jni/arm64-v8a" "$root/jni/x86_64"
+    write_elf_header "$root/jni/armeabi-v7a/libldk_node.so" 1 40
+    write_elf_header "$root/jni/arm64-v8a/libldk_node.so" 2 183
+    write_elf_header "$root/jni/x86_64/libldk_node.so" 2 62
+}
+
+create_aar() {
+    local root="$1"
+    local aar="$2"
+
+    (
+        cd "$root"
+        zip -qr "$aar" jni
+    )
+}
+
+valid_aar_root="$TEST_DIR/valid-aar"
+create_required_aar_tree "$valid_aar_root"
+mkdir -p "$valid_aar_root/jni/x86"
+write_elf_header "$valid_aar_root/jni/x86/libextra.so" 1 3
+create_aar "$valid_aar_root" "$TEST_DIR/valid.aar"
+validate_android_aar_symbols "$TEST_DIR/valid.aar"
+
+missing_aar_root="$TEST_DIR/missing-aar"
+mkdir -p "$missing_aar_root/jni/arm64-v8a" "$missing_aar_root/jni/x86_64"
+write_elf_header "$missing_aar_root/jni/arm64-v8a/libldk_node.so" 2 183
+write_elf_header "$missing_aar_root/jni/x86_64/libldk_node.so" 2 62
+create_aar "$missing_aar_root" "$TEST_DIR/missing.aar"
+if validate_android_aar_symbols "$TEST_DIR/missing.aar" >/dev/null; then
+    echo "Expected missing-required-library AAR fixture to fail"
+    exit 1
+fi
+
+malformed_aar_root="$TEST_DIR/malformed-aar"
+create_required_aar_tree "$malformed_aar_root"
+mkdir -p "$malformed_aar_root/jni/arm64-v8a/nested"
+write_elf_header "$malformed_aar_root/jni/arm64-v8a/nested/libbad.so" 2 183
+create_aar "$malformed_aar_root" "$TEST_DIR/malformed.aar"
+if validate_android_aar_symbols "$TEST_DIR/malformed.aar" >/dev/null; then
+    echo "Expected malformed-native-path AAR fixture to fail"
+    exit 1
+fi
+
+unknown_abi_root="$TEST_DIR/unknown-abi-aar"
+create_required_aar_tree "$unknown_abi_root"
+mkdir -p "$unknown_abi_root/jni/unknown"
+write_elf_header "$unknown_abi_root/jni/unknown/libextra.so" 2 62
+create_aar "$unknown_abi_root" "$TEST_DIR/unknown-abi.aar"
+if validate_android_aar_symbols "$TEST_DIR/unknown-abi.aar" >/dev/null; then
+    echo "Expected unknown-ABI AAR fixture to fail"
+    exit 1
+fi
+
 echo "Android native validation regression fixtures passed"

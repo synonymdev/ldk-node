@@ -163,3 +163,71 @@ validate_stripped_android_library() {
         return 1
     fi
 }
+
+validate_android_aar_symbols() {
+    local aar="$1"
+    local tmp_dir
+    local entry_list
+    local required_entry
+    local native_entries
+    local native_index
+    local entry
+    local relative_path
+    local abi
+    local file_name
+    local library
+
+    if [ ! -f "$aar" ]; then
+        echo "Error: Android release AAR missing at $aar"
+        return 1
+    fi
+
+    tmp_dir=$(mktemp -d)
+    entry_list="$tmp_dir/archive-entries.txt"
+    unzip -Z1 "$aar" > "$entry_list"
+
+    for abi in armeabi-v7a arm64-v8a x86_64; do
+        required_entry="jni/$abi/libldk_node.so"
+        if ! grep -Fqx "$required_entry" "$entry_list"; then
+            echo "Error: Android release AAR native library missing at $required_entry"
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+    done
+
+    native_entries="$tmp_dir/native-entry-names.txt"
+    if ! awk '
+        /^jni\/.*[.]so$/ {
+            if ($0 !~ /^jni\/[A-Za-z0-9._+-]+\/lib[A-Za-z0-9._+-]*[.]so$/) {
+                exit 1
+            }
+            print
+        }
+    ' "$entry_list" > "$native_entries"; then
+        echo "Error: Android release AAR contains an unsafe native library entry"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    if [ ! -s "$native_entries" ]; then
+        echo "Error: Android release AAR contains no native libraries"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    native_index=0
+    while IFS= read -r entry; do
+        native_index=$((native_index + 1))
+        relative_path=${entry#jni/}
+        abi=${relative_path%%/*}
+        file_name=${relative_path#*/}
+        library="$tmp_dir/native/$native_index/$file_name"
+        mkdir -p "$(dirname "$library")"
+        unzip -p "$aar" "$entry" > "$library"
+        if ! validate_stripped_android_library "$abi" "$library"; then
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+    done < "$native_entries"
+
+    rm -rf "$tmp_dir"
+}
