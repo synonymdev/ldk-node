@@ -61,7 +61,7 @@ echo "Building for Android architectures..."
 JNI_LIB_DIR="$ANDROID_LIB_DIR/lib/src/main/jniLibs"
 export CARGO_PROFILE_RELEASE_SMALLER_STRIP=false
 export CARGO_PROFILE_RELEASE_SMALLER_DEBUG=2
-export RUSTFLAGS="-C link-args=-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
+export RUSTFLAGS="-C link-arg=-Wl,--build-id=sha1 -C link-args=-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
 export CFLAGS="-D__ANDROID_MIN_SDK_VERSION__=21"
 
 find_readelf() {
@@ -130,6 +130,28 @@ has_dwarf_sections() {
     "$READELF_BIN" -S "$1" | grep -E '\.debug_' >/dev/null
 }
 
+android_build_id() {
+    readelf_notes=$("$READELF_BIN" -n "$1") || {
+        echo "Error: Unable to inspect Android native library notes: $1" >&2
+        return 1
+    }
+
+    printf '%s\n' "$readelf_notes" | awk '
+        /NT_GNU_BUILD_ID/ { found_gnu_build_id = 1; next }
+        found_gnu_build_id && /Build ID:/ { print $3; exit }
+    '
+}
+
+require_android_build_id() {
+    build_id=$(android_build_id "$1")
+    if [ -z "$build_id" ]; then
+        echo "Error: Android native library has no NT_GNU_BUILD_ID: $1" >&2
+        exit 1
+    fi
+
+    printf '%s\n' "$build_id"
+}
+
 readelf_program_headers() {
     if "$READELF_BIN" -W -l "$1" >/dev/null 2>&1; then
         "$READELF_BIN" -W -l "$1"
@@ -160,6 +182,8 @@ EOF
 
 validate_android_library() {
     lib="$1"
+    require_android_build_id "$lib" >/dev/null
+
     if ! has_dwarf_debug_metadata "$lib"; then
         echo "Error: Android native library has no .debug_info DWARF metadata: $lib"
         exit 1
@@ -174,6 +198,8 @@ validate_android_library() {
 
 validate_stripped_android_library() {
     lib="$1"
+    require_android_build_id "$lib" >/dev/null
+
     if has_dwarf_sections "$lib"; then
         echo "Error: Android release native library still contains .debug_* sections: $lib"
         exit 1
@@ -249,17 +275,36 @@ validate_android_aar_symbols() {
     fi
 
     tmp_dir=$(mktemp -d)
-    unzip -q "$aar" -d "$tmp_dir"
+    aar_dir="$tmp_dir/aar"
+    symbols_dir="$tmp_dir/symbols"
+    mkdir -p "$aar_dir" "$symbols_dir"
+    unzip -q "$aar" -d "$aar_dir"
+    unzip -q "$NATIVE_DEBUG_SYMBOLS_ZIP" -d "$symbols_dir"
 
     for abi in armeabi-v7a arm64-v8a x86_64; do
-        lib="$tmp_dir/jni/$abi/libldk_node.so"
-        if [ ! -f "$lib" ]; then
-            echo "Error: Android release AAR native library missing at $lib"
+        packaged_lib="$aar_dir/jni/$abi/libldk_node.so"
+        symbol_lib="$symbols_dir/$abi/libldk_node.so"
+        if [ ! -f "$packaged_lib" ]; then
+            echo "Error: Android release AAR native library missing at $packaged_lib"
+            rm -rf "$tmp_dir"
+            exit 1
+        fi
+        if [ ! -f "$symbol_lib" ]; then
+            echo "Error: Android native debug symbol library missing at $symbol_lib"
             rm -rf "$tmp_dir"
             exit 1
         fi
 
-        validate_stripped_android_library "$lib"
+        validate_stripped_android_library "$packaged_lib"
+        validate_android_library "$symbol_lib"
+
+        packaged_build_id=$(require_android_build_id "$packaged_lib")
+        symbol_build_id=$(require_android_build_id "$symbol_lib")
+        if [ "$packaged_build_id" != "$symbol_build_id" ]; then
+            echo "Error: Android build ID mismatch for $abi/libldk_node.so: packaged=$packaged_build_id symbols=$symbol_build_id"
+            rm -rf "$tmp_dir"
+            exit 1
+        fi
     done
 
     rm -rf "$tmp_dir"
@@ -310,7 +355,8 @@ echo "Version synced: $CARGO_VERSION"
 
 # Verify android library publish task graph
 echo "Testing android library publish to Maven Local..."
-$ANDROID_LIB_DIR/gradlew --project-dir "$ANDROID_LIB_DIR" clean publishToMavenLocal
+$ANDROID_LIB_DIR/gradlew --project-dir "$ANDROID_LIB_DIR" clean bundleReleaseAar
 validate_android_aar_symbols
+$ANDROID_LIB_DIR/gradlew --project-dir "$ANDROID_LIB_DIR" publishToMavenLocal
 
 echo "Android build process completed successfully!"
