@@ -42,15 +42,17 @@ cat > "$TEST_DIR/readelf" <<'EOF'
 #!/bin/bash
 library="${!#}"
 case "$1" in
-    -S)
-        case "$library" in
-            *zdebug*) echo ".zdebug_info" ;;
-            *debug*) echo ".debug_info" ;;
-            *symtab*) echo ".symtab" ;;
-            *) echo ".dynsym" ;;
-        esac
-        ;;
     -W)
+        if [ "$2" = "-S" ]; then
+            case "$library" in
+                *zdebug*) echo ".zdebug_info PROGBITS" ;;
+                *debug*) echo ".debug_info PROGBITS" ;;
+                *renamed-symtab*) echo ".stripped_symbols SYMTAB" ;;
+                *symtab*) echo ".symtab SYMTAB" ;;
+                *) echo ".dynsym DYNSYM" ;;
+            esac
+            exit
+        fi
         case "$library" in
             *readelf-fail*) exit 1 ;;
         esac
@@ -77,6 +79,7 @@ cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/valid.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/debug.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/zdebug.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/symtab.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/renamed-symtab.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-relro.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/no-load.so"
@@ -85,6 +88,7 @@ cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/readelf-fail.so"
 has_unstripped_sections "$TEST_DIR/debug.so"
 has_unstripped_sections "$TEST_DIR/zdebug.so"
 has_unstripped_sections "$TEST_DIR/symtab.so"
+has_unstripped_sections "$TEST_DIR/renamed-symtab.so"
 if has_unstripped_sections "$TEST_DIR/valid.so"; then
     echo "Expected stripped fixture to pass"
     exit 1

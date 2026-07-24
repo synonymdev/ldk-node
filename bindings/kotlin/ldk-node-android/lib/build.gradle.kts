@@ -164,7 +164,8 @@ fun requireMatchingAndroidElfIdentity(
 }
 
 fun String.findUnstrippedElfSection(): String? =
-    Regex("""\.(?:debug_|zdebug_|symtab)""").find(this)?.value
+    Regex("""\.(?:debug_|zdebug_)""").find(this)?.value
+        ?: Regex("""(?:^|\s)SYMTAB(?:\s|$)""").find(this)?.let { "SHT_SYMTAB" }
 
 fun String.parseElfProgramHeaders(): Pair<List<Long>, List<Long>> {
     val programHeaders = lineSequence()
@@ -226,7 +227,7 @@ fun Project.validateReleaseNativeLibrary(
     val detectedIdentity = library.readElfIdentity()
     requireMatchingAndroidElfIdentity(abi, detectedIdentity, library, artifact)
 
-    val (sectionsExit, sections) = runReadelf(readelf, "-S", library.absolutePath)
+    val (sectionsExit, sections) = runReadelf(readelf, "-W", "-S", library.absolutePath)
     if (sectionsExit != 0) {
         throw GradleException(
             "Unable to inspect Android native library sections: " +
@@ -298,7 +299,8 @@ val testNativeLibraryValidation by tasks.registering {
 
         check(".debug_info".findUnstrippedElfSection() == ".debug_")
         check(".zdebug_info".findUnstrippedElfSection() == ".zdebug_")
-        check(".symtab".findUnstrippedElfSection() == ".symtab")
+        check("[ 2] .symtab SYMTAB".findUnstrippedElfSection() == "SHT_SYMTAB")
+        check("[ 2] .stripped_symbols SYMTAB".findUnstrippedElfSection() == "SHT_SYMTAB")
         check(".dynsym".findUnstrippedElfSection() == null)
 
         val compatibleHeaders = """

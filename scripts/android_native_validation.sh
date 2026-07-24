@@ -45,7 +45,7 @@ has_dwarf_debug_metadata() {
     local attempt
 
     for attempt in 1 2 3; do
-        sections=$("$READELF_BIN" -S "$1")
+        sections=$("$READELF_BIN" -W -S "$1")
         case "$sections" in
             *".debug_info"*) return 0 ;;
         esac
@@ -59,11 +59,20 @@ has_dwarf_debug_metadata() {
 
 has_unstripped_sections() {
     local sections
-    sections=$("$READELF_BIN" -S "$1")
+    sections=$("$READELF_BIN" -W -S "$1")
     case "$sections" in
-        *".debug_"*|*".zdebug_"*|*".symtab"*) return 0 ;;
-        *) return 1 ;;
+        *".debug_"*|*".zdebug_"*) return 0 ;;
     esac
+
+    printf '%s\n' "$sections" |
+        awk '{
+            for (field = 1; field <= NF; field++) {
+                if ($field == "SYMTAB") {
+                    found = 1
+                }
+            }
+        }
+        END { exit !found }'
 }
 
 readelf_program_headers() {
@@ -153,7 +162,7 @@ validate_stripped_android_library() {
     fi
 
     if has_unstripped_sections "$library"; then
-        echo "Error: Android release native library contains an unstripped .debug_*, .zdebug_*, or .symtab section: ABI=$abi library=$library"
+        echo "Error: Android release native library contains debug metadata or an SHT_SYMTAB section: ABI=$abi library=$library"
         return 1
     fi
 
