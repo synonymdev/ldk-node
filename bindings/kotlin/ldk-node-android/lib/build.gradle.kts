@@ -203,6 +203,20 @@ fun requireAndroidNativeEntries(packagedEntries: Set<String>) {
     }
 }
 
+fun requireUniqueAndroidNativeEntries(packagedEntries: List<String>) {
+    val duplicateEntries = packagedEntries
+        .groupingBy { it }
+        .eachCount()
+        .filterValues { it > 1 }
+        .keys
+    if (duplicateEntries.isNotEmpty()) {
+        throw GradleException(
+            "Android release AAR contains duplicate native library entries: " +
+                "libraries=${duplicateEntries.joinToString()}"
+        )
+    }
+}
+
 fun Project.validateReleaseNativeLibrary(
     readelf: String,
     abi: String,
@@ -271,6 +285,15 @@ val testNativeLibraryValidation by tasks.registering {
         expectFailure("missing required ABI") {
             requireAndroidNativeEntries(setOf("jni/arm64-v8a/libldk_node.so"))
         }
+        expectFailure("duplicate native entry") {
+            requireUniqueAndroidNativeEntries(
+                listOf(
+                    "jni/arm64-v8a/libldk_node.so",
+                    "jni/arm64-v8a/libldk_node.so"
+                )
+            )
+        }
+        requireUniqueAndroidNativeEntries(androidNativeAbis.map { "jni/$it/libldk_node.so" })
         requireAndroidNativeEntries(androidNativeAbis.map { "jni/$it/libldk_node.so" }.toSet())
 
         check(".debug_info".findUnstrippedElfSection() == ".debug_")
@@ -381,7 +404,13 @@ val validateReleaseAarNativeLibraries by tasks.registering {
                 throw GradleException("Android release AAR contains no native libraries: artifact='${aar.path}'")
             }
 
-            val packagedEntries = nativeEntries.map { it.first.name }.toSet()
+            val packagedEntryNames = nativeEntries.map { it.first.name }
+            try {
+                requireUniqueAndroidNativeEntries(packagedEntryNames)
+            } catch (error: GradleException) {
+                throw GradleException("${error.message} artifact='${aar.path}'")
+            }
+            val packagedEntries = packagedEntryNames.toSet()
             try {
                 requireAndroidNativeEntries(packagedEntries)
             } catch (error: GradleException) {
