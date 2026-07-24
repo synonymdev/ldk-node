@@ -175,9 +175,14 @@ fun requireMatchingAndroidElfIdentity(
     }
 }
 
-fun String.findUnstrippedElfSection(): String? =
-    Regex("""\.(?:debug_|zdebug_)""").find(this)?.value
-        ?: Regex("""(?:^|\s)SYMTAB(?:\s|$)""").find(this)?.let { "SHT_SYMTAB" }
+fun String.findUnstrippedElfSection(): String? {
+    for (line in lineSequence()) {
+        val fields = line.trim().split(Regex("""\s+"""))
+        fields.firstOrNull { it.startsWith(".debug_") || it.startsWith(".zdebug_") }?.let { return it }
+        if ("SYMTAB" in fields) return "SHT_SYMTAB"
+    }
+    return null
+}
 
 fun String.parseElfProgramHeaders(): Pair<List<Long>, List<Long>> {
     val programHeaders = lineSequence()
@@ -341,8 +346,10 @@ val testNativeLibraryValidation by tasks.registering {
         requireUniqueAndroidNativeEntries(androidNativeAbis.map { "jni/$it/libldk_node.so" })
         requireAndroidNativeEntries(androidNativeAbis.map { "jni/$it/libldk_node.so" }.toSet())
 
-        check(".debug_info".findUnstrippedElfSection() == ".debug_")
-        check(".zdebug_info".findUnstrippedElfSection() == ".zdebug_")
+        check(".debug_info".findUnstrippedElfSection() == ".debug_info")
+        check(".zdebug_info".findUnstrippedElfSection() == ".zdebug_info")
+        check(".debug_info_placeholder".findUnstrippedElfSection() == ".debug_info_placeholder")
+        check(".custom.debug_info".findUnstrippedElfSection() == null)
         check("[ 2] .symtab SYMTAB".findUnstrippedElfSection() == "SHT_SYMTAB")
         check("[ 2] .stripped_symbols SYMTAB".findUnstrippedElfSection() == "SHT_SYMTAB")
         check(".dynsym".findUnstrippedElfSection() == null)
