@@ -16,32 +16,41 @@ if [ -z "${BINDGEN_GOBLEY_INSTALLED:-}" ]; then
 fi
 UNIFFI_BINDGEN_BIN="gobley-uniffi-bindgen"
 
-export_variable_if_not_present() {
-  local name="$1"
-  local value="$2"
-
-  # Check if the variable is already set
-  if [ -z "${!name}" ]; then
-    export "$name=$value"
-    echo "Exported $name=$value"
-  else
-    echo "$name is already set to ${!name}, not exporting."
-  fi
-}
-
 case "$OSTYPE" in
     linux-gnu)
-      export_variable_if_not_present "ANDROID_NDK_ROOT" "/opt/android-ndk"
-      export_variable_if_not_present "LLVM_ARCH_PATH" "linux-x86_64"
+      DEFAULT_ANDROID_NDK="/opt/android-ndk"
+      LLVM_ARCH_PATH="${LLVM_ARCH_PATH:-linux-x86_64}"
       ;;
     darwin*)
-      export_variable_if_not_present "ANDROID_NDK_ROOT" "/opt/homebrew/share/android-ndk"
-      export_variable_if_not_present "LLVM_ARCH_PATH" "darwin-x86_64"
+      DEFAULT_ANDROID_NDK="/opt/homebrew/share/android-ndk"
+      LLVM_ARCH_PATH="${LLVM_ARCH_PATH:-darwin-x86_64}"
       ;;
     *)
       echo "Unknown operating system: $OSTYPE"
+      exit 1
       ;;
-    esac
+esac
+
+if [ -n "${ANDROID_NDK_HOME:-}" ] &&
+   [ -n "${ANDROID_NDK_ROOT:-}" ] &&
+   [ "$ANDROID_NDK_HOME" != "$ANDROID_NDK_ROOT" ]; then
+    echo "Error: ANDROID_NDK_HOME and ANDROID_NDK_ROOT select different NDKs"
+    echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+    echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
+    exit 1
+fi
+
+SELECTED_ANDROID_NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-$DEFAULT_ANDROID_NDK}}"
+if [ ! -f "$SELECTED_ANDROID_NDK/source.properties" ]; then
+    echo "Error: Android NDK source.properties missing at $SELECTED_ANDROID_NDK"
+    exit 1
+fi
+
+export ANDROID_NDK_HOME="$SELECTED_ANDROID_NDK"
+export ANDROID_NDK_ROOT="$SELECTED_ANDROID_NDK"
+export LLVM_ARCH_PATH
+echo "Using Android NDK from $SELECTED_ANDROID_NDK"
+cat "$SELECTED_ANDROID_NDK/source.properties"
 
 PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/$LLVM_ARCH_PATH/bin:$PATH"
 
@@ -114,20 +123,28 @@ find_strip() {
 }
 
 has_dwarf_debug_metadata() {
+    local sections
+
     for attempt in 1 2 3; do
-        if "$READELF_BIN" -S "$1" | grep -Eq '\.debug_info'; then
-            return 0
-        fi
+        sections=$("$READELF_BIN" -S "$1")
+        case "$sections" in
+            *".debug_info"*) return 0 ;;
+        esac
 
         sleep "$attempt"
     done
 
-    "$READELF_BIN" -S "$1" | grep -E '\.debug_info' || true
+    printf '%s\n' "$sections" | grep -E '\.debug_info' || true
     return 1
 }
 
 has_dwarf_sections() {
-    "$READELF_BIN" -S "$1" | grep -Eq '\.debug_'
+    local sections
+    sections=$("$READELF_BIN" -S "$1")
+    case "$sections" in
+        *".debug_"*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 readelf_program_headers() {
@@ -139,9 +156,12 @@ readelf_program_headers() {
     "$READELF_BIN" -l "$1"
 }
 
-has_16kb_load_alignment() {
-    alignments=$(readelf_program_headers "$1" | awk '$1 == "LOAD" { print $NF }')
-    if [ -z "$alignments" ]; then
+has_16kb_elf_alignment() {
+    DETECTED_LOAD_ALIGNMENTS=""
+    DETECTED_RELRO_ENDS=""
+    program_headers=$(readelf_program_headers "$1")
+    DETECTED_LOAD_ALIGNMENTS=$(printf '%s\n' "$program_headers" | awk '$1 == "LOAD" { print $NF }')
+    if [ -z "$DETECTED_LOAD_ALIGNMENTS" ]; then
         return 1
     fi
 
@@ -154,34 +174,58 @@ has_16kb_load_alignment() {
             return 1
         fi
     done <<EOF
-$alignments
+$DETECTED_LOAD_ALIGNMENTS
 EOF
+
+    relro_segments=$(printf '%s\n' "$program_headers" | awk '$1 == "GNU_RELRO" { print $3, $6 }')
+    if [ -z "$relro_segments" ]; then
+        return 1
+    fi
+
+    while read -r virtual_address memory_size; do
+        if [ -z "$virtual_address" ] || [ -z "$memory_size" ]; then
+            continue
+        fi
+
+        relro_end=$((virtual_address + memory_size))
+        formatted_relro_end=$(printf '0x%x' "$relro_end")
+        DETECTED_RELRO_ENDS="${DETECTED_RELRO_ENDS:+$DETECTED_RELRO_ENDS }$formatted_relro_end"
+        if [ "$((relro_end % 16384))" -ne 0 ]; then
+            return 1
+        fi
+    done <<EOF
+$relro_segments
+EOF
+
+    [ -n "$DETECTED_RELRO_ENDS" ]
 }
 
 validate_android_library() {
-    lib="$1"
+    abi="$1"
+    lib="$2"
     if ! has_dwarf_debug_metadata "$lib"; then
-        echo "Error: Android native library has no .debug_info DWARF metadata: $lib"
+        echo "Error: Android native library has no .debug_info DWARF metadata: ABI=$abi library=$lib"
         exit 1
     fi
 
-    if ! has_16kb_load_alignment "$lib"; then
-        echo "Error: Android native library is not 16 KB page-size aligned: $lib"
-        readelf_program_headers "$lib" | grep LOAD || true
+    if ! has_16kb_elf_alignment "$lib"; then
+        echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$lib LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
+        readelf_program_headers "$lib" | grep -E 'LOAD|GNU_RELRO' || true
         exit 1
     fi
 }
 
 validate_stripped_android_library() {
-    lib="$1"
+    abi="$1"
+    lib="$2"
     if has_dwarf_sections "$lib"; then
-        echo "Error: Android release native library still contains .debug_* sections: $lib"
+        echo "Error: Android release native library still contains .debug_* sections: ABI=$abi library=$lib"
         exit 1
     fi
 
-    if ! has_16kb_load_alignment "$lib"; then
-        echo "Error: Android native library is not 16 KB page-size aligned: $lib"
-        readelf_program_headers "$lib" | grep LOAD || true
+    if ! has_16kb_elf_alignment "$lib"; then
+        echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$lib LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
+        readelf_program_headers "$lib" | grep -E 'LOAD|GNU_RELRO' || true
         exit 1
     fi
 }
@@ -196,7 +240,7 @@ validate_android_symbols() {
             exit 1
         fi
 
-        validate_android_library "$lib"
+        validate_android_library "$abi" "$lib"
     done
 }
 
@@ -236,7 +280,7 @@ validate_stripped_android_symbols() {
     READELF_BIN=$(find_readelf)
 
     for abi in armeabi-v7a arm64-v8a x86_64; do
-        validate_stripped_android_library "$JNI_LIB_DIR/$abi/libldk_node.so"
+        validate_stripped_android_library "$abi" "$JNI_LIB_DIR/$abi/libldk_node.so"
     done
 }
 
@@ -259,7 +303,7 @@ validate_android_aar_symbols() {
             exit 1
         fi
 
-        validate_stripped_android_library "$lib"
+        validate_stripped_android_library "$abi" "$lib"
     done
 
     rm -rf "$tmp_dir"
