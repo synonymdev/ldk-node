@@ -45,6 +45,7 @@ case "$1" in
     -W)
         if [ "$2" = "-S" ]; then
             case "$library" in
+                *section-inspection-partial*) echo ".debug_info PROGBITS"; exit 1 ;;
                 *section-inspection-fail*) exit 1 ;;
             esac
             case "$library" in
@@ -57,6 +58,11 @@ case "$1" in
             exit
         fi
         case "$library" in
+            *program-inspection-partial*)
+                echo "LOAD 0x0 0x0 0x0 0x100 0x100 R E 0x4000"
+                echo "GNU_RELRO 0x0 0x7000 0x0 0x0 0x1000 R 0x1"
+                exit 1
+                ;;
             *readelf-fail*) exit 1 ;;
         esac
         case "$library" in
@@ -88,6 +94,8 @@ cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-relro.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/no-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/readelf-fail.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/section-inspection-fail.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/section-inspection-partial.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/program-inspection-partial.so"
 
 has_unstripped_sections "$TEST_DIR/debug.so"
 has_unstripped_sections "$TEST_DIR/zdebug.so"
@@ -99,7 +107,7 @@ if has_unstripped_sections "$TEST_DIR/valid.so"; then
 fi
 
 has_16kb_elf_alignment "$TEST_DIR/valid.so"
-for invalid in bad-load bad-relro no-load readelf-fail; do
+for invalid in bad-load bad-relro no-load readelf-fail program-inspection-partial; do
     if has_16kb_elf_alignment "$TEST_DIR/$invalid.so"; then
         echo "Expected $invalid alignment fixture to fail"
         exit 1
@@ -108,6 +116,10 @@ done
 
 validate_android_library arm64-v8a "$TEST_DIR/debug.so"
 validate_stripped_android_library arm64-v8a "$TEST_DIR/valid.so"
+if has_dwarf_debug_metadata "$TEST_DIR/section-inspection-partial.so"; then
+    echo "Expected partial section-inspection fixture to fail"
+    exit 1
+fi
 if validate_stripped_android_library arm64-v8a "$TEST_DIR/debug.so" >/dev/null; then
     echo "Expected unstripped release fixture to fail"
     exit 1
@@ -126,6 +138,45 @@ case "$section_failure_output" in
     *"Unable to inspect Android native library sections"*) ;;
     *)
         echo "Section-inspection fixture failed for an unexpected reason: $section_failure_output"
+        exit 1
+        ;;
+esac
+if partial_section_output=$(
+    validate_android_library arm64-v8a "$TEST_DIR/section-inspection-partial.so" 2>&1
+); then
+    echo "Expected partial section-inspection pre-strip fixture to fail"
+    exit 1
+fi
+case "$partial_section_output" in
+    *"Unable to inspect Android native library sections"*) ;;
+    *)
+        echo "Partial section-inspection fixture failed for an unexpected reason: $partial_section_output"
+        exit 1
+        ;;
+esac
+if partial_stripped_section_output=$(
+    validate_stripped_android_library arm64-v8a "$TEST_DIR/section-inspection-partial.so" 2>&1
+); then
+    echo "Expected partial section-inspection stripped fixture to fail"
+    exit 1
+fi
+case "$partial_stripped_section_output" in
+    *"Unable to inspect Android native library sections"*) ;;
+    *)
+        echo "Partial stripped section-inspection fixture failed for an unexpected reason: $partial_stripped_section_output"
+        exit 1
+        ;;
+esac
+if partial_program_output=$(
+    validate_stripped_android_library arm64-v8a "$TEST_DIR/program-inspection-partial.so" 2>&1
+); then
+    echo "Expected partial program-header inspection fixture to fail"
+    exit 1
+fi
+case "$partial_program_output" in
+    *"Unable to inspect Android native library program headers"*) ;;
+    *)
+        echo "Partial program-header fixture failed for an unexpected reason: $partial_program_output"
         exit 1
         ;;
 esac
@@ -232,6 +283,46 @@ case "$section_aar_output" in
     *"Unable to inspect Android native library sections"*) ;;
     *)
         echo "Section-inspection AAR fixture failed for an unexpected reason: $section_aar_output"
+        exit 1
+        ;;
+esac
+
+partial_section_aar_root="$TEST_DIR/section-inspection-partial-aar"
+create_required_aar_tree "$partial_section_aar_root"
+cp \
+    "$TEST_DIR/section-inspection-partial.so" \
+    "$partial_section_aar_root/jni/arm64-v8a/libsection-inspection-partial.so"
+create_aar "$partial_section_aar_root" "$TEST_DIR/section-inspection-partial.aar"
+if partial_section_aar_output=$(
+    validate_android_aar_symbols "$TEST_DIR/section-inspection-partial.aar" 2>&1
+); then
+    echo "Expected partial section-inspection AAR fixture to fail"
+    exit 1
+fi
+case "$partial_section_aar_output" in
+    *"Unable to inspect Android native library sections"*) ;;
+    *)
+        echo "Partial section-inspection AAR fixture failed for an unexpected reason: $partial_section_aar_output"
+        exit 1
+        ;;
+esac
+
+partial_program_aar_root="$TEST_DIR/program-inspection-partial-aar"
+create_required_aar_tree "$partial_program_aar_root"
+cp \
+    "$TEST_DIR/program-inspection-partial.so" \
+    "$partial_program_aar_root/jni/arm64-v8a/libprogram-inspection-partial.so"
+create_aar "$partial_program_aar_root" "$TEST_DIR/program-inspection-partial.aar"
+if partial_program_aar_output=$(
+    validate_android_aar_symbols "$TEST_DIR/program-inspection-partial.aar" 2>&1
+); then
+    echo "Expected partial program-header inspection AAR fixture to fail"
+    exit 1
+fi
+case "$partial_program_aar_output" in
+    *"Unable to inspect Android native library program headers"*) ;;
+    *)
+        echo "Partial program-header AAR fixture failed for an unexpected reason: $partial_program_aar_output"
         exit 1
         ;;
 esac

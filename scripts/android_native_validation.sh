@@ -42,18 +42,29 @@ has_matching_android_elf_abi() {
 
 has_dwarf_debug_metadata() {
     local sections
+    local successful_sections=""
+    local inspection_succeeded=0
     local attempt
 
     for attempt in 1 2 3; do
-        sections=$("$READELF_BIN" -W -S "$1")
-        case "$sections" in
-            *".debug_info"*) return 0 ;;
-        esac
+        if sections=$("$READELF_BIN" -W -S "$1"); then
+            inspection_succeeded=1
+            successful_sections="$sections"
+            case "$sections" in
+                *".debug_info"*) return 0 ;;
+            esac
+        fi
 
-        sleep "$attempt"
+        if [ "$attempt" -lt 3 ]; then
+            sleep "$attempt"
+        fi
     done
 
-    printf '%s\n' "$sections" | grep -E '\.debug_info' || true
+    if [ "$inspection_succeeded" -eq 0 ]; then
+        return 2
+    fi
+
+    printf '%s\n' "$successful_sections" | grep -E '\.debug_info' || true
     return 1
 }
 
@@ -92,7 +103,9 @@ has_16kb_elf_alignment() {
 
     DETECTED_LOAD_ALIGNMENTS=""
     DETECTED_RELRO_ENDS=""
-    program_headers=$(readelf_program_headers "$1")
+    if ! program_headers=$(readelf_program_headers "$1"); then
+        return 2
+    fi
     DETECTED_LOAD_ALIGNMENTS=$(printf '%s\n' "$program_headers" | awk '$1 == "LOAD" { print $NF }')
     if [ -z "$DETECTED_LOAD_ALIGNMENTS" ]; then
         return 1
@@ -136,19 +149,35 @@ EOF
 validate_android_library() {
     local abi="$1"
     local library="$2"
+    local debug_status
+    local alignment_status
 
     if ! has_matching_android_elf_abi "$abi" "$library"; then
         echo "Error: Android native library ELF identity does not match its ABI directory: ABI=$abi library=$library ELF_class=${DETECTED_ELF_CLASS:-unknown} ELF_machine=${DETECTED_ELF_MACHINE:-unknown}"
         return 1
     fi
 
-    if ! has_dwarf_debug_metadata "$library"; then
-        echo "Error: Android native library has no .debug_info DWARF metadata: ABI=$abi library=$library"
+    if has_dwarf_debug_metadata "$library"; then
+        :
+    else
+        debug_status=$?
+        if [ "$debug_status" -eq 2 ]; then
+            echo "Error: Unable to inspect Android native library sections: ABI=$abi library=$library"
+        else
+            echo "Error: Android native library has no .debug_info DWARF metadata: ABI=$abi library=$library"
+        fi
         return 1
     fi
 
-    if ! has_16kb_elf_alignment "$library"; then
-        echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$library LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
+    if has_16kb_elf_alignment "$library"; then
+        :
+    else
+        alignment_status=$?
+        if [ "$alignment_status" -eq 2 ]; then
+            echo "Error: Unable to inspect Android native library program headers: ABI=$abi library=$library"
+        else
+            echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$library LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
+        fi
         readelf_program_headers "$library" | grep -E 'LOAD|GNU_RELRO' || true
         return 1
     fi
@@ -158,6 +187,7 @@ validate_stripped_android_library() {
     local abi="$1"
     local library="$2"
     local section_status
+    local alignment_status
 
     if ! has_matching_android_elf_abi "$abi" "$library"; then
         echo "Error: Android native library ELF identity does not match its ABI directory: ABI=$abi library=$library ELF_class=${DETECTED_ELF_CLASS:-unknown} ELF_machine=${DETECTED_ELF_MACHINE:-unknown}"
@@ -175,8 +205,15 @@ validate_stripped_android_library() {
         fi
     fi
 
-    if ! has_16kb_elf_alignment "$library"; then
-        echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$library LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
+    if has_16kb_elf_alignment "$library"; then
+        :
+    else
+        alignment_status=$?
+        if [ "$alignment_status" -eq 2 ]; then
+            echo "Error: Unable to inspect Android native library program headers: ABI=$abi library=$library"
+        else
+            echo "Error: Android native library is not 16 KB page-size compatible: ABI=$abi library=$library LOAD=${DETECTED_LOAD_ALIGNMENTS:-missing} GNU_RELRO_end=${DETECTED_RELRO_ENDS:-missing}"
+        fi
         readelf_program_headers "$library" | grep -E 'LOAD|GNU_RELRO' || true
         return 1
     fi
