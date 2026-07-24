@@ -205,7 +205,7 @@ tasks.matching { it.name == "bundleReleaseAar" }.configureEach {
 
 val validateReleaseAarNativeLibraries by tasks.registering {
     group = "verification"
-    description = "Validates every packaged ABI in the final release AAR for 16 KB page-size compatibility."
+    description = "Validates every native library in the final release AAR for 16 KB page-size compatibility."
     dependsOn("bundleReleaseAar")
 
     doLast {
@@ -218,14 +218,28 @@ val validateReleaseAarNativeLibraries by tasks.registering {
         temporaryDir.deleteRecursively()
         temporaryDir.mkdirs()
         ZipFile(aar).use { archive ->
-            androidNativeAbis.forEach { abi ->
-                val entryPath = "jni/$abi/libldk_node.so"
-                val entry = archive.getEntry(entryPath)
-                    ?: throw GradleException(
-                        "Android release AAR native library missing: " +
-                            "ABI=$abi library=$entryPath artifact='${aar.path}'"
-                    )
-                val extracted = temporaryDir.resolve("$abi/libldk_node.so")
+            val nativeEntries = archive.entries().asSequence()
+                .filter { !it.isDirectory && it.name.startsWith("jni/") && it.name.endsWith(".so") }
+                .toList()
+            if (nativeEntries.isEmpty()) {
+                throw GradleException("Android release AAR contains no native libraries: artifact='${aar.path}'")
+            }
+
+            val packagedEntries = nativeEntries.map { it.name }.toSet()
+            val missingRequired = androidNativeAbis
+                .map { "jni/$it/libldk_node.so" }
+                .filterNot(packagedEntries::contains)
+            if (missingRequired.isNotEmpty()) {
+                throw GradleException(
+                    "Android release AAR required native libraries missing: " +
+                        "libraries=${missingRequired.joinToString()} artifact='${aar.path}'"
+                )
+            }
+
+            nativeEntries.forEach { entry ->
+                val relativePath = entry.name.removePrefix("jni/")
+                val abi = relativePath.substringBefore("/")
+                val extracted = temporaryDir.resolve(relativePath)
                 extracted.parentFile.mkdirs()
                 archive.getInputStream(entry).use { input ->
                     extracted.outputStream().use { output -> input.copyTo(output) }

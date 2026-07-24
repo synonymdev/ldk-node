@@ -302,9 +302,21 @@ validate_android_aar_symbols() {
             rm -rf "$tmp_dir"
             exit 1
         fi
-
-        validate_stripped_android_library "$abi" "$lib"
     done
+
+    native_list="$tmp_dir/native-libraries.txt"
+    find "$tmp_dir/jni" -type f -name '*.so' -print > "$native_list"
+    if [ ! -s "$native_list" ]; then
+        echo "Error: Android release AAR contains no native libraries"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    while IFS= read -r lib; do
+        relative_path=${lib#"$tmp_dir/jni/"}
+        abi=${relative_path%%/*}
+        validate_stripped_android_library "$abi" "$lib"
+    done < "$native_list"
 
     rm -rf "$tmp_dir"
 }
