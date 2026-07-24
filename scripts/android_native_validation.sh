@@ -106,7 +106,11 @@ has_16kb_elf_alignment() {
     if ! program_headers=$(readelf_program_headers "$1"); then
         return 2
     fi
-    DETECTED_LOAD_ALIGNMENTS=$(printf '%s\n' "$program_headers" | awk '$1 == "LOAD" { print $NF }')
+    if ! DETECTED_LOAD_ALIGNMENTS=$(
+        printf '%s\n' "$program_headers" | awk '$1 == "LOAD" { print $NF }'
+    ); then
+        return 2
+    fi
     if [ -z "$DETECTED_LOAD_ALIGNMENTS" ]; then
         return 1
     fi
@@ -116,6 +120,9 @@ has_16kb_elf_alignment() {
             continue
         fi
 
+        if [[ ! "$alignment" =~ ^0[xX][0-9a-fA-F]+$ ]]; then
+            return 1
+        fi
         if [ "$((alignment))" -lt 16384 ]; then
             return 1
         fi
@@ -123,7 +130,11 @@ has_16kb_elf_alignment() {
 $DETECTED_LOAD_ALIGNMENTS
 EOF
 
-    relro_segments=$(printf '%s\n' "$program_headers" | awk '$1 == "GNU_RELRO" { print $3, $6 }')
+    if ! relro_segments=$(
+        printf '%s\n' "$program_headers" | awk '$1 == "GNU_RELRO" { print $3, $6 }'
+    ); then
+        return 2
+    fi
     if [ -z "$relro_segments" ]; then
         return 1
     fi
@@ -133,8 +144,14 @@ EOF
             continue
         fi
 
+        if [[ ! "$virtual_address" =~ ^0[xX][0-9a-fA-F]+$ ]] ||
+           [[ ! "$memory_size" =~ ^0[xX][0-9a-fA-F]+$ ]]; then
+            return 1
+        fi
         relro_end=$((virtual_address + memory_size))
-        formatted_relro_end=$(printf '0x%x' "$relro_end")
+        if ! formatted_relro_end=$(printf '0x%x' "$relro_end"); then
+            return 1
+        fi
         DETECTED_RELRO_ENDS="${DETECTED_RELRO_ENDS:+$DETECTED_RELRO_ENDS }$formatted_relro_end"
         if [ "$((relro_end % 16384))" -ne 0 ]; then
             return 1
@@ -238,9 +255,21 @@ validate_android_aar_symbols() {
         return 1
     fi
 
-    tmp_dir=$(mktemp -d)
+    if ! tmp_dir=$(mktemp -d); then
+        echo "Error: Unable to create Android release AAR validation directory"
+        return 1
+    fi
+    if ! unzip -tqq "$aar"; then
+        echo "Error: Android release AAR failed archive integrity validation: $aar"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
     entry_list="$tmp_dir/archive-entries.txt"
-    unzip -Z1 "$aar" > "$entry_list"
+    if ! unzip -Z1 "$aar" > "$entry_list"; then
+        echo "Error: Unable to enumerate Android release AAR entries: $aar"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
 
     for abi in armeabi-v7a arm64-v8a x86_64; do
         required_entry="jni/$abi/libldk_node.so"
@@ -269,7 +298,11 @@ validate_android_aar_symbols() {
         rm -rf "$tmp_dir"
         return 1
     fi
-    duplicate_native_entries=$(sort "$native_entries" | uniq -d)
+    if ! duplicate_native_entries=$(awk 'seen[$0]++ { print }' "$native_entries"); then
+        echo "Error: Unable to inspect Android release AAR native entry names"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
     if [ -n "$duplicate_native_entries" ]; then
         echo "Error: Android release AAR contains a duplicate native library entry: $duplicate_native_entries"
         rm -rf "$tmp_dir"
@@ -283,8 +316,16 @@ validate_android_aar_symbols() {
         abi=${relative_path%%/*}
         file_name=${relative_path#*/}
         library="$tmp_dir/native/$native_index/$file_name"
-        mkdir -p "$(dirname "$library")"
-        unzip -p "$aar" "$entry" > "$library"
+        if ! mkdir -p "$(dirname "$library")"; then
+            echo "Error: Unable to create Android release AAR native validation directory"
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+        if ! unzip -p "$aar" "$entry" > "$library"; then
+            echo "Error: Unable to extract Android release AAR native library: $entry"
+            rm -rf "$tmp_dir"
+            return 1
+        fi
         if ! validate_stripped_android_library "$abi" "$library"; then
             rm -rf "$tmp_dir"
             return 1
@@ -292,4 +333,5 @@ validate_android_aar_symbols() {
     done < "$native_entries"
 
     rm -rf "$tmp_dir"
+    return 0
 }

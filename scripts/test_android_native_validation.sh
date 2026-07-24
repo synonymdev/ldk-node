@@ -67,10 +67,12 @@ case "$1" in
         esac
         case "$library" in
             *bad-load*) load_alignment=0x1000 ;;
+            *malformed-load*) load_alignment=invalid ;;
             *) load_alignment=0x4000 ;;
         esac
         case "$library" in
             *bad-relro*) relro_address=0x7100 ;;
+            *malformed-relro*) relro_address=invalid ;;
             *) relro_address=0x7000 ;;
         esac
         case "$library" in
@@ -91,6 +93,8 @@ cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/symtab.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/renamed-symtab.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-relro.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/malformed-load.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/malformed-relro.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/no-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/readelf-fail.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/section-inspection-fail.so"
@@ -107,12 +111,34 @@ if has_unstripped_sections "$TEST_DIR/valid.so"; then
 fi
 
 has_16kb_elf_alignment "$TEST_DIR/valid.so"
-for invalid in bad-load bad-relro no-load readelf-fail program-inspection-partial; do
+for invalid in \
+    bad-load \
+    bad-relro \
+    malformed-load \
+    malformed-relro \
+    no-load \
+    readelf-fail \
+    program-inspection-partial
+do
     if has_16kb_elf_alignment "$TEST_DIR/$invalid.so"; then
         echo "Expected $invalid alignment fixture to fail"
         exit 1
     fi
 done
+(
+    # shellcheck disable=SC2329
+    awk() {
+        command awk "$@"
+        return 1
+    }
+    set +e
+    has_16kb_elf_alignment "$TEST_DIR/valid.so"
+    parser_status=$?
+    if [ "$parser_status" -ne 2 ]; then
+        echo "Expected program-header parser failure to return inspection status 2"
+        exit 1
+    fi
+)
 
 validate_android_library arm64-v8a "$TEST_DIR/debug.so"
 validate_stripped_android_library arm64-v8a "$TEST_DIR/valid.so"
@@ -206,6 +232,83 @@ mkdir -p "$valid_aar_root/jni/x86"
 write_elf_header "$valid_aar_root/jni/x86/libextra.so" 1 3
 create_aar "$valid_aar_root" "$TEST_DIR/valid.aar"
 validate_android_aar_symbols "$TEST_DIR/valid.aar"
+
+REAL_UNZIP_BIN=$(command -v unzip)
+export REAL_UNZIP_BIN
+cat > "$TEST_DIR/unzip" <<'EOF'
+#!/bin/bash
+archive="${2:-}"
+case "$1:$archive" in
+    -Z1:*archive-list-partial.aar)
+        "$REAL_UNZIP_BIN" "$@"
+        exit 1
+        ;;
+    -p:*archive-extraction-partial.aar)
+        "$REAL_UNZIP_BIN" "$@"
+        exit 1
+        ;;
+esac
+exec "$REAL_UNZIP_BIN" "$@"
+EOF
+chmod +x "$TEST_DIR/unzip"
+PATH="$TEST_DIR:$PATH"
+export PATH
+
+run_production_aar_validation() (
+    validate_android_aar_symbols "$1" || exit 1
+)
+
+cp "$TEST_DIR/valid.aar" "$TEST_DIR/archive-list-partial.aar"
+if list_partial_output=$(
+    run_production_aar_validation "$TEST_DIR/archive-list-partial.aar" 2>&1
+); then
+    echo "Expected partial archive-listing fixture to fail"
+    exit 1
+fi
+case "$list_partial_output" in
+    *"Unable to enumerate Android release AAR entries"*) ;;
+    *)
+        echo "Partial archive-listing fixture failed for an unexpected reason: $list_partial_output"
+        exit 1
+        ;;
+esac
+
+cp "$TEST_DIR/valid.aar" "$TEST_DIR/archive-extraction-partial.aar"
+if extraction_partial_output=$(
+    run_production_aar_validation "$TEST_DIR/archive-extraction-partial.aar" 2>&1
+); then
+    echo "Expected partial archive-extraction fixture to fail"
+    exit 1
+fi
+case "$extraction_partial_output" in
+    *"Unable to extract Android release AAR native library"*) ;;
+    *)
+        echo "Partial archive-extraction fixture failed for an unexpected reason: $extraction_partial_output"
+        exit 1
+        ;;
+esac
+
+cp "$TEST_DIR/valid.aar" "$TEST_DIR/corrupt.aar"
+python3 - "$TEST_DIR/corrupt.aar" <<'PY'
+import pathlib
+import sys
+
+archive = pathlib.Path(sys.argv[1])
+archive.write_bytes(archive.read_bytes()[:-16])
+PY
+if corrupt_output=$(
+    run_production_aar_validation "$TEST_DIR/corrupt.aar" 2>&1
+); then
+    echo "Expected corrupt archive fixture to fail"
+    exit 1
+fi
+case "$corrupt_output" in
+    *"failed archive integrity validation"*) ;;
+    *)
+        echo "Corrupt archive fixture failed for an unexpected reason: $corrupt_output"
+        exit 1
+        ;;
+esac
 
 missing_aar_root="$TEST_DIR/missing-aar"
 mkdir -p "$missing_aar_root/jni/arm64-v8a" "$missing_aar_root/jni/x86_64"
