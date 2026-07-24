@@ -48,10 +48,10 @@ has_dwarf_debug_metadata() {
     fi
 
     case "$sections" in
-        *".debug_info"*) return 0 ;;
+        *".debug_info"*|*".zdebug_info"*) return 0 ;;
     esac
 
-    printf '%s\n' "$sections" | grep -E '\.debug_info' || true
+    printf '%s\n' "$sections" | grep -E '\.(z)?debug_info' || true
     return 1
 }
 
@@ -200,7 +200,7 @@ validate_android_library() {
         if [ "$debug_status" -eq 2 ]; then
             echo "Error: Unable to inspect Android native library sections: ABI=$abi library=$library"
         else
-            echo "Error: Android native library has no .debug_info DWARF metadata: ABI=$abi library=$library"
+            echo "Error: Android native library has no .debug_info or .zdebug_info DWARF metadata: ABI=$abi library=$library"
         fi
         return 1
     fi

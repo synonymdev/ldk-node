@@ -162,6 +162,7 @@ done
 )
 
 validate_android_library arm64-v8a "$TEST_DIR/debug.so"
+validate_android_library arm64-v8a "$TEST_DIR/zdebug.so"
 validate_stripped_android_library arm64-v8a "$TEST_DIR/valid.so"
 if has_dwarf_debug_metadata "$TEST_DIR/section-inspection-partial.so"; then
     echo "Expected partial section-inspection fixture to fail"
