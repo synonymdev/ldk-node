@@ -1,6 +1,10 @@
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.math.BigInteger
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 plugins {
     id("com.android.library")
@@ -113,11 +117,19 @@ fun Project.runReadelf(readelf: String, vararg args: String): Pair<Int, String> 
 }
 
 fun String.parseElfAlignment(): Long {
-    return if (startsWith("0x")) {
-        removePrefix("0x").toLong(16)
-    } else {
-        toLong()
+    val value = try {
+        if (startsWith("0x", ignoreCase = true)) {
+            substring(2).toBigInteger(16)
+        } else {
+            toBigInteger()
+        }
+    } catch (error: NumberFormatException) {
+        throw GradleException("Android native library contains an invalid ELF numeric field: value=$this", error)
     }
+    if (value.signum() < 0 || value > BigInteger.valueOf(Long.MAX_VALUE)) {
+        throw GradleException("Android native library ELF numeric field exceeds the supported range: value=$this")
+    }
+    return value.toLong()
 }
 
 fun File.readElfIdentity(): Pair<Int, Int> {
@@ -177,7 +189,19 @@ fun String.parseElfProgramHeaders(): Pair<List<Long>, List<Long>> {
         .map { it.last().parseElfAlignment() }
     val relroEnds = programHeaders
         .filter { it.first() == "GNU_RELRO" && it.size >= 6 }
-        .map { it[2].parseElfAlignment() + it[5].parseElfAlignment() }
+        .map {
+            val virtualAddress = it[2].parseElfAlignment()
+            val memorySize = it[5].parseElfAlignment()
+            try {
+                Math.addExact(virtualAddress, memorySize)
+            } catch (error: ArithmeticException) {
+                throw GradleException(
+                    "Android native library GNU_RELRO end exceeds the supported range: " +
+                        "address=${it[2]} size=${it[5]}",
+                    error
+                )
+            }
+        }
     return loadAlignments to relroEnds
 }
 
@@ -214,6 +238,26 @@ fun requireUniqueAndroidNativeEntries(packagedEntries: List<String>) {
         throw GradleException(
             "Android release AAR contains duplicate native library entries: " +
                 "libraries=${duplicateEntries.joinToString()}"
+        )
+    }
+}
+
+fun ZipFile.requireEntryIntegrity(entry: ZipEntry, artifact: String) {
+    val checksum = CRC32()
+    var size = 0L
+    getInputStream(entry).use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            checksum.update(buffer, 0, count)
+            size = Math.addExact(size, count.toLong())
+        }
+    }
+    if (entry.size < 0 || entry.crc < 0 || size != entry.size || checksum.value != entry.crc) {
+        throw GradleException(
+            "Android release AAR entry failed integrity validation: " +
+                "entry=${entry.name} artifact='$artifact'"
         )
     }
 }
@@ -316,6 +360,47 @@ val testNativeLibraryValidation by tasks.registering {
         check(!is16KbElfLayoutCompatible(loads, listOf(0x8100L)))
         check(!is16KbElfLayoutCompatible(emptyList(), relroEnds))
         check(!is16KbElfLayoutCompatible(loads, emptyList()))
+        expectFailure("RELRO addition overflow") {
+            """
+                LOAD 0x0 0x0 0x0 0x100 0x100 R 0x4000
+                GNU_RELRO 0x0 0x7ffffffffffff000 0x0 0x0 0x1000 R 0x1
+            """.trimIndent().parseElfProgramHeaders()
+        }
+        expectFailure("ELF field outside supported range") {
+            "0x8000000000000000".parseElfAlignment()
+        }
+
+        val intactArchive = temporaryDir.resolve("intact-integrity.aar")
+        val corruptArchive = temporaryDir.resolve("corrupt-integrity.aar")
+        val integrityPayload = "classes-jar-integrity-fixture".toByteArray()
+        val integrityChecksum = CRC32().apply { update(integrityPayload) }
+        ZipOutputStream(intactArchive.outputStream()).use { output ->
+            val entry = ZipEntry("classes.jar").apply {
+                method = ZipEntry.STORED
+                size = integrityPayload.size.toLong()
+                compressedSize = size
+                crc = integrityChecksum.value
+            }
+            output.putNextEntry(entry)
+            output.write(integrityPayload)
+            output.closeEntry()
+        }
+        val corruptBytes = intactArchive.readBytes()
+        val payloadOffset = (0..corruptBytes.size - integrityPayload.size).firstOrNull { offset ->
+            integrityPayload.indices.all { index ->
+                corruptBytes[offset + index] == integrityPayload[index]
+            }
+        } ?: throw GradleException("Unable to locate archive integrity fixture payload")
+        corruptBytes[payloadOffset] = (corruptBytes[payloadOffset].toInt() xor 1).toByte()
+        corruptArchive.writeBytes(corruptBytes)
+        expectFailure("corrupt non-native AAR entry") {
+            ZipFile(corruptArchive).use { archive ->
+                val entry = archive.getEntry("classes.jar")
+                    ?: throw GradleException("Archive integrity fixture entry missing")
+                archive.requireEntryIntegrity(entry, corruptArchive.path)
+            }
+        }
+
         androidElfIdentities.forEach { (abi, identity) ->
             val fixture = temporaryDir.resolve("$abi.so")
             val header = ByteArray(20)
@@ -391,7 +476,11 @@ val validateReleaseAarNativeLibraries by tasks.registering {
         temporaryDir.deleteRecursively()
         temporaryDir.mkdirs()
         ZipFile(aar).use { archive ->
-            val nativeEntries = archive.entries().asSequence()
+            val archiveEntries = archive.entries().asSequence().toList()
+            archiveEntries
+                .filterNot { it.isDirectory }
+                .forEach { archive.requireEntryIntegrity(it, aar.path) }
+            val nativeEntries = archiveEntries.asSequence()
                 .filter { !it.isDirectory && it.name.startsWith("jni/") && it.name.endsWith(".so") }
                 .map { entry ->
                     val (abi, fileName) = try {

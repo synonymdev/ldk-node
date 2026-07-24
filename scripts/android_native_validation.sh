@@ -42,29 +42,16 @@ has_matching_android_elf_abi() {
 
 has_dwarf_debug_metadata() {
     local sections
-    local successful_sections=""
-    local inspection_succeeded=0
-    local attempt
 
-    for attempt in 1 2 3; do
-        if sections=$("$READELF_BIN" -W -S "$1"); then
-            inspection_succeeded=1
-            successful_sections="$sections"
-            case "$sections" in
-                *".debug_info"*) return 0 ;;
-            esac
-        fi
-
-        if [ "$attempt" -lt 3 ]; then
-            sleep "$attempt"
-        fi
-    done
-
-    if [ "$inspection_succeeded" -eq 0 ]; then
+    if ! sections=$("$READELF_BIN" -W -S "$1"); then
         return 2
     fi
 
-    printf '%s\n' "$successful_sections" | grep -E '\.debug_info' || true
+    case "$sections" in
+        *".debug_info"*) return 0 ;;
+    esac
+
+    printf '%s\n' "$sections" | grep -E '\.debug_info' || true
     return 1
 }
 
@@ -92,12 +79,36 @@ readelf_program_headers() {
     "$READELF_BIN" -W -l "$1"
 }
 
+parse_android_elf_hex_integer() {
+    local value="$1"
+    local digits
+
+    PARSED_ANDROID_ELF_INTEGER=""
+    if [[ ! "$value" =~ ^0[xX][0-9a-fA-F]+$ ]]; then
+        return 1
+    fi
+
+    digits="${value:2}"
+    while [ "${#digits}" -gt 1 ] && [ "${digits#0}" != "$digits" ]; do
+        digits="${digits#0}"
+    done
+    if [ "${#digits}" -gt 16 ] ||
+       { [ "${#digits}" -eq 16 ] && [[ "${digits:0:1}" =~ [89a-fA-F] ]]; }; then
+        return 1
+    fi
+
+    PARSED_ANDROID_ELF_INTEGER=$((16#$digits))
+}
+
 has_16kb_elf_alignment() {
     local program_headers
     local alignment
+    local alignment_value
     local relro_segments
     local virtual_address
+    local virtual_address_value
     local memory_size
+    local memory_size_value
     local relro_end
     local formatted_relro_end
 
@@ -120,10 +131,11 @@ has_16kb_elf_alignment() {
             continue
         fi
 
-        if [[ ! "$alignment" =~ ^0[xX][0-9a-fA-F]+$ ]]; then
+        if ! parse_android_elf_hex_integer "$alignment"; then
             return 1
         fi
-        if [ "$((alignment))" -lt 16384 ]; then
+        alignment_value="$PARSED_ANDROID_ELF_INTEGER"
+        if [ "$alignment_value" -lt 16384 ]; then
             return 1
         fi
     done <<EOF
@@ -144,11 +156,18 @@ EOF
             continue
         fi
 
-        if [[ ! "$virtual_address" =~ ^0[xX][0-9a-fA-F]+$ ]] ||
-           [[ ! "$memory_size" =~ ^0[xX][0-9a-fA-F]+$ ]]; then
+        if ! parse_android_elf_hex_integer "$virtual_address"; then
             return 1
         fi
-        relro_end=$((virtual_address + memory_size))
+        virtual_address_value="$PARSED_ANDROID_ELF_INTEGER"
+        if ! parse_android_elf_hex_integer "$memory_size"; then
+            return 1
+        fi
+        memory_size_value="$PARSED_ANDROID_ELF_INTEGER"
+        if [ "$virtual_address_value" -gt "$((9223372036854775807 - memory_size_value))" ]; then
+            return 1
+        fi
+        relro_end=$((virtual_address_value + memory_size_value))
         if ! formatted_relro_end=$(printf '0x%x' "$relro_end"); then
             return 1
         fi

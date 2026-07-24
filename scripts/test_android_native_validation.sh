@@ -45,6 +45,20 @@ case "$1" in
     -W)
         if [ "$2" = "-S" ]; then
             case "$library" in
+                *section-inspection-recovers*)
+                    recovery_counter="${library}.readelf-count"
+                    recovery_count=0
+                    if [ -f "$recovery_counter" ]; then
+                        recovery_count=$(cat "$recovery_counter")
+                    fi
+                    echo $((recovery_count + 1)) > "$recovery_counter"
+                    if [ "$recovery_count" -eq 0 ]; then
+                        echo ".debug_info PROGBITS"
+                        exit 1
+                    fi
+                    echo ".debug_info PROGBITS"
+                    exit 0
+                    ;;
                 *section-inspection-partial*) echo ".debug_info PROGBITS"; exit 1 ;;
                 *section-inspection-fail*) exit 1 ;;
             esac
@@ -68,11 +82,13 @@ case "$1" in
         case "$library" in
             *bad-load*) load_alignment=0x1000 ;;
             *malformed-load*) load_alignment=invalid ;;
+            *too-large-load*) load_alignment=0x8000000000000000 ;;
             *) load_alignment=0x4000 ;;
         esac
         case "$library" in
             *bad-relro*) relro_address=0x7100 ;;
             *malformed-relro*) relro_address=invalid ;;
+            *overflow-relro*) relro_address=0x7ffffffffffff000 ;;
             *) relro_address=0x7000 ;;
         esac
         case "$library" in
@@ -95,10 +111,13 @@ cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-relro.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/malformed-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/malformed-relro.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/too-large-load.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/overflow-relro.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/no-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/readelf-fail.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/section-inspection-fail.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/section-inspection-partial.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/section-inspection-recovers.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/program-inspection-partial.so"
 
 has_unstripped_sections "$TEST_DIR/debug.so"
@@ -116,6 +135,8 @@ for invalid in \
     bad-relro \
     malformed-load \
     malformed-relro \
+    too-large-load \
+    overflow-relro \
     no-load \
     readelf-fail \
     program-inspection-partial
@@ -144,6 +165,23 @@ validate_android_library arm64-v8a "$TEST_DIR/debug.so"
 validate_stripped_android_library arm64-v8a "$TEST_DIR/valid.so"
 if has_dwarf_debug_metadata "$TEST_DIR/section-inspection-partial.so"; then
     echo "Expected partial section-inspection fixture to fail"
+    exit 1
+fi
+if recovery_output=$(
+    validate_android_library arm64-v8a "$TEST_DIR/section-inspection-recovers.so" 2>&1
+); then
+    echo "Expected recovering section-inspection fixture to fail on its first tool error"
+    exit 1
+fi
+case "$recovery_output" in
+    *"Unable to inspect Android native library sections"*) ;;
+    *)
+        echo "Recovering section-inspection fixture failed for an unexpected reason: $recovery_output"
+        exit 1
+        ;;
+esac
+if [ "$(cat "$TEST_DIR/section-inspection-recovers.so.readelf-count")" -ne 1 ]; then
+    echo "Expected section inspection to stop after the first tool error"
     exit 1
 fi
 if validate_stripped_android_library arm64-v8a "$TEST_DIR/debug.so" >/dev/null; then
