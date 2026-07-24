@@ -166,15 +166,6 @@ fun requireMatchingAndroidElfIdentity(
 fun String.findUnstrippedElfSection(): String? =
     Regex("""\.(?:debug_|zdebug_|symtab)""").find(this)?.value
 
-fun selectProgramHeaderOutput(
-    wideHeaders: Pair<Int, String>,
-    fallbackHeaders: Pair<Int, String>
-): String? = when {
-    wideHeaders.first == 0 -> wideHeaders.second
-    fallbackHeaders.first == 0 -> fallbackHeaders.second
-    else -> null
-}
-
 fun String.parseElfProgramHeaders(): Pair<List<Long>, List<Long>> {
     val programHeaders = lineSequence()
         .map { it.trim().split(Regex("""\s+""")) }
@@ -237,17 +228,13 @@ fun Project.validateReleaseNativeLibrary(
     }
 
     val wideHeaders = runReadelf(readelf, "-W", "-l", library.absolutePath)
-    val fallbackHeaders = if (wideHeaders.first == 0) {
-        1 to ""
-    } else {
-        runReadelf(readelf, "-l", library.absolutePath)
-    }
-    val headers = selectProgramHeaderOutput(wideHeaders, fallbackHeaders)
-        ?: throw GradleException(
+    if (wideHeaders.first != 0) {
+        throw GradleException(
             "Unable to inspect Android native library headers: " +
                 "ABI=$abi library='${library.path}' artifact=$artifact"
         )
-    val (loadAlignments, relroEnds) = headers.parseElfProgramHeaders()
+    }
+    val (loadAlignments, relroEnds) = wideHeaders.second.parseElfProgramHeaders()
 
     val compatible = is16KbElfLayoutCompatible(loadAlignments, relroEnds)
     val detectedLoad = loadAlignments.joinToString(prefix = "[", postfix = "]") { "0x${it.toString(16)}" }
@@ -304,10 +291,6 @@ val testNativeLibraryValidation by tasks.registering {
         check(!is16KbElfLayoutCompatible(loads, listOf(0x8100L)))
         check(!is16KbElfLayoutCompatible(emptyList(), relroEnds))
         check(!is16KbElfLayoutCompatible(loads, emptyList()))
-        check(selectProgramHeaderOutput(0 to compatibleHeaders, 1 to "") == compatibleHeaders)
-        check(selectProgramHeaderOutput(1 to "", 0 to compatibleHeaders) == compatibleHeaders)
-        check(selectProgramHeaderOutput(1 to "", 1 to "") == null)
-
         androidElfIdentities.forEach { (abi, identity) ->
             val fixture = temporaryDir.resolve("$abi.so")
             val header = ByteArray(20)

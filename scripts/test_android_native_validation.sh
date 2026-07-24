@@ -52,7 +52,7 @@ case "$1" in
         ;;
     -W)
         case "$library" in
-            *fallback*) exit 1 ;;
+            *readelf-fail*) exit 1 ;;
         esac
         case "$library" in
             *bad-load*) load_alignment=0x1000 ;;
@@ -68,10 +68,6 @@ case "$1" in
         esac
         echo "GNU_RELRO 0x0 $relro_address 0x0 0x0 0x1000 R 0x1"
         ;;
-    -l)
-        echo "LOAD 0x0 0x0 0x0 0x100 0x100 R E 0x4000"
-        echo "GNU_RELRO 0x0 0x7000 0x0 0x0 0x1000 R 0x1"
-        ;;
 esac
 EOF
 chmod +x "$TEST_DIR/readelf"
@@ -81,10 +77,10 @@ cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/valid.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/debug.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/zdebug.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/symtab.so"
-cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/fallback.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-load.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/bad-relro.so"
 cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/no-load.so"
+cp "$TEST_DIR/arm64-v8a.so" "$TEST_DIR/readelf-fail.so"
 
 has_unstripped_sections "$TEST_DIR/debug.so"
 has_unstripped_sections "$TEST_DIR/zdebug.so"
@@ -95,8 +91,7 @@ if has_unstripped_sections "$TEST_DIR/valid.so"; then
 fi
 
 has_16kb_elf_alignment "$TEST_DIR/valid.so"
-has_16kb_elf_alignment "$TEST_DIR/fallback.so"
-for invalid in bad-load bad-relro no-load; do
+for invalid in bad-load bad-relro no-load readelf-fail; do
     if has_16kb_elf_alignment "$TEST_DIR/$invalid.so"; then
         echo "Expected $invalid alignment fixture to fail"
         exit 1

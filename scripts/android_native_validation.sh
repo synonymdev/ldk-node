@@ -67,12 +67,7 @@ has_unstripped_sections() {
 }
 
 readelf_program_headers() {
-    if "$READELF_BIN" -W -l "$1" >/dev/null 2>&1; then
-        "$READELF_BIN" -W -l "$1"
-        return
-    fi
-
-    "$READELF_BIN" -l "$1"
+    "$READELF_BIN" -W -l "$1"
 }
 
 has_16kb_elf_alignment() {
