@@ -478,7 +478,6 @@ val validateReleaseAarNativeLibraries by tasks.registering {
         ZipFile(aar).use { archive ->
             val archiveEntries = archive.entries().asSequence().toList()
             archiveEntries
-                .filterNot { it.isDirectory }
                 .forEach { archive.requireEntryIntegrity(it, aar.path) }
             val nativeEntries = archiveEntries.asSequence()
                 .filter { !it.isDirectory && it.name.startsWith("jni/") && it.name.endsWith(".so") }
