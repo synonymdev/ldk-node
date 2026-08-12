@@ -1552,8 +1552,6 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
-
-
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2005,11 +2003,6 @@ internal interface UniffiLib : Library {
         `headerProvider`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Pointer?
-    fun uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors(
-        `ptr`: Pointer?,
-        `accept`: Byte,
-        uniffiCallStatus: UniffiRustCallStatus,
-    ): Unit
     fun uniffi_ldk_node_fn_method_builder_set_address_type(
         `ptr`: Pointer?,
         `addressType`: RustBufferByValue,
@@ -3267,8 +3260,6 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider(
     ): Short
-    fun uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors(
-    ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_address_type(
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_address_types_to_monitor(
@@ -3792,9 +3783,6 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider() != 9090.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors() != 25727.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_builder_set_address_type() != 647.toShort()) {
@@ -6003,18 +5991,6 @@ open class Builder: Disposable, BuilderInterface {
                 )
             }!!
         })
-    }
-
-    override fun `setAcceptStaleChannelMonitors`(`accept`: kotlin.Boolean) {
-        callWithPointer {
-            uniffiRustCall { uniffiRustCallStatus ->
-                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors(
-                    it,
-                    FfiConverterBoolean.lower(`accept`),
-                    uniffiRustCallStatus,
-                )
-            }
-        }
     }
 
     override fun `setAddressType`(`addressType`: AddressType) {
