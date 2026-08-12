@@ -1,11 +1,3 @@
-# Unreleased (Synonym Fork)
-
-## Security
-
-- Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.
-  Stale channel-monitor mismatches now fail closed with `BuildError::DangerousValue`.
-  Lightning crates come from crates.io `0.2.0` again.
-
 # 0.7.0-rc.62 (Synonym Fork)
 
 ## Bug Fixes
@@ -78,6 +70,9 @@
 
 ## Synonym Fork Additions
 
+- Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.
+  Stale channel-monitor mismatches now fail closed with `BuildError::DangerousValue`.
+  Lightning crates come from crates.io `0.2.0` again.
 - Made explicit peer disconnect atomic with durable peer-store removal so persistence failures remain
   visible and retryable.
 - Added stable GNU build IDs to every Android ABI.
