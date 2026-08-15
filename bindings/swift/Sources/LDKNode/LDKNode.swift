@@ -1567,8 +1567,6 @@ public protocol BuilderProtocol: AnyObject {
 
     func buildWithVssStoreAndHeaderProvider(vssUrl: String, storeId: String, headerProvider: VssHeaderProvider) throws -> Node
 
-    func setAcceptStaleChannelMonitors(accept: Bool)
-
     func setAddressType(addressType: AddressType)
 
     func setAddressTypesToMonitor(addressTypesToMonitor: [AddressType])
@@ -1723,13 +1721,6 @@ open class Builder:
                                                                                        FfiConverterString.lower(storeId),
                                                                                        FfiConverterTypeVssHeaderProvider.lower(headerProvider), $0)
         })
-    }
-
-    open func setAcceptStaleChannelMonitors(accept: Bool) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_accept_stale_channel_monitors(self.uniffiClonePointer(),
-                                                                                FfiConverterBool.lower(accept), $0)
-        }
     }
 
     open func setAddressType(addressType: AddressType) {
@@ -13264,9 +13255,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider() != 9090 {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if uniffi_ldk_node_checksum_method_builder_set_accept_stale_channel_monitors() != 25727 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_builder_set_address_type() != 647 {
