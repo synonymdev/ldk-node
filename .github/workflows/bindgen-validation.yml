@@ -1,0 +1,68 @@
+name: Bindgen Validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    name: Script and manifest checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Check shell script syntax
+        run: |
+          bash -n bindgen.sh
+          bash -n scripts/uniffi_bindgen_generate.sh
+          bash -n scripts/uniffi_bindgen_generate_swift.sh
+          bash -n scripts/uniffi_bindgen_generate_kotlin.sh
+          bash -n scripts/uniffi_bindgen_generate_kotlin_android.sh
+          bash -n scripts/uniffi_bindgen_generate_python.sh
+          bash -n scripts/swift_create_xcframework_archive.sh
+          bash -n scripts/python_create_package.sh
+          bash -n scripts/generate_checksum_files.sh
+          bash -n scripts/format_kotlin.sh
+          bash -n scripts/normalize_generated_whitespace.sh
+
+      - name: Check Cargo metadata
+        run: cargo metadata --locked --format-version 1 --no-deps
+
+      - name: Check root SwiftPM manifest
+        env:
+          CLANG_MODULE_CACHE_PATH: .build/module-cache
+        run: swift package dump-package
+
+      - name: Check local SwiftPM manifest
+        working-directory: bindings/swift
+        env:
+          CLANG_MODULE_CACHE_PATH: .build/module-cache
+        run: swift package dump-package
+
+      - name: Check Android Gradle manifest
+        working-directory: bindings/kotlin/ldk-node-android
+        run: ./gradlew projects --no-daemon
+
+      - name: Check JVM Gradle manifest
+        working-directory: bindings/kotlin/ldk-node-jvm
+        run: ./gradlew projects --no-daemon
+
+      - name: Check Python package metadata
+        run: python3 -c 'from pathlib import Path; data = Path("bindings/python/pyproject.toml").read_text(); assert "[project]" in data and "name = \"ldk_node\"" in data'
