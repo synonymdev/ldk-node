@@ -13,9 +13,12 @@
     <methods>;
 }
 
-# UniFFI 0.28 loads UniffiLib via Native.load; JNA looks up interface methods by name.
--keep,includedescriptorclasses interface org.lightningdevkit.ldknode.UniffiLib {
-    <methods>;
+# Native.register maps remaining native methods by exact C symbol name.
+-keepclasseswithmembers,allowshrinking,includedescriptorclasses class org.lightningdevkit.ldknode.UniffiLib {
+    native <methods>;
+}
+-keepclasseswithmembers,allowshrinking,includedescriptorclasses class org.lightningdevkit.ldknode.IntegrityCheckingUniffiLib {
+    native <methods>;
 }
 
 # JNA reads Structure.FieldOrder at runtime. R8 full mode strips that
@@ -26,6 +29,13 @@
     <fields>;
     <init>(...);
 }
+
+# libjnidispatch looks up Native/Structure/CallbackReference members by JNI name.
+# Subclasses such as com.sun.jna.ptr.IntByReference are kept by the extends rules.
+# See https://github.com/java-native-access/jna/blob/master/www/FrequentlyAskedQuestions.md#jna-on-android
+-keep class com.sun.jna.* { *; }
+-keep class * extends com.sun.jna.* { *; }
+-keepclassmembers class * extends com.sun.jna.* { public *; }
 
 # JNA's AAR references desktop AWT types that are absent on Android.
 -dontwarn java.awt.Component

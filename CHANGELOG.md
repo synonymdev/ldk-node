@@ -1,6 +1,6 @@
 # Unreleased
 
-- Android consumer keep rules now keep the JNA `Structure.FieldOrder` annotation type and annotated UniFFI struct classes through R8 full mode.
+- Add keep consumer rules for JNA types UniFFI needs under R8.
 - The Android AAR now ships targeted R8 consumer keep rules for the UniFFI/JNA FFI surface.
 
 # 0.7.0-rc.64 (Synonym Fork)
