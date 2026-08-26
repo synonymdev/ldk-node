@@ -1,3 +1,13 @@
+# Unreleased
+
+- The Android AAR now ships targeted R8 consumer keep rules for the UniFFI/JNA FFI surface.
+
+# 0.7.0-rc.64 (Synonym Fork)
+
+## Bug Fixes
+
+- The Android AAR now ships targeted R8 consumer keep rules for the UniFFI/JNA FFI surface.
+
 # 0.7.0-rc.63 (Synonym Fork)
 
 ## Bug Fixes
