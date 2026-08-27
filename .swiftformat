@@ -3,8 +3,6 @@
 --disable blankLineAfterImports
 --disable redundantReturn
 --disable opaqueGenericParameters
---disable sortedImports
---importgrouping none
 --binary-grouping none
 --decimal-grouping none
 --hex-grouping none
