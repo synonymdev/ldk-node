@@ -48,11 +48,20 @@ swiftc -module-name LDKNode -emit-library -o "$BINDINGS_DIR"/libldk_node.dylib -
 # Create xcframework from bindings Swift file and libs
 mkdir -p "$BINDINGS_DIR"/Sources/LDKNode || exit 1
 
-# Patch LDKNode.swift with `SystemConfiguration` import.
-sed -i '' '4s/^/import SystemConfiguration\n/' "$BINDINGS_DIR"/LDKNode.swift
-
 mv "$BINDINGS_DIR"/LDKNode.swift "$BINDINGS_DIR"/Sources/LDKNode/LDKNode.swift || exit 1
 ./scripts/format_swift.sh || exit 1
+# After format, keep SystemConfiguration above Foundation (matches committed bindings).
+python3 - <<'PY'
+from pathlib import Path
+p = Path("bindings/swift/Sources/LDKNode/LDKNode.swift")
+text = p.read_text()
+text = text.replace("import SystemConfiguration\n", "", 1)
+needle = "// swiftlint:disable all\n"
+if needle not in text:
+    raise SystemExit("swiftlint disable marker missing")
+text = text.replace(needle, "import SystemConfiguration\n" + needle, 1)
+p.write_text(text)
+PY
 cp "$BINDINGS_DIR"/LDKNodeFFI.h "$BINDINGS_DIR"/LDKNodeFFI.xcframework/ios-arm64/LDKNodeFFI.framework/Headers || exit 1
 cp "$BINDINGS_DIR"/LDKNodeFFI.h "$BINDINGS_DIR"/LDKNodeFFI.xcframework/ios-arm64_x86_64-simulator/LDKNodeFFI.framework/Headers || exit 1
 cp "$BINDINGS_DIR"/LDKNodeFFI.h "$BINDINGS_DIR"/LDKNodeFFI.xcframework/macos-arm64_x86_64/LDKNodeFFI.framework/Headers || exit 1

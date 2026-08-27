@@ -1,9 +1,14 @@
---swiftversion 5.9
+--swiftversion 5.5
 --indent 4
 --disable blankLineAfterImports
+--disable redundantReturn
+--disable opaqueGenericParameters
+--disable sortedImports
+--importgrouping none
 --binary-grouping none
 --decimal-grouping none
 --hex-grouping none
 --octal-grouping none
 --semicolons never
 --wrapparameters before-first
+
