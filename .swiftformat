@@ -1,0 +1,9 @@
+--swiftversion 5.9
+--indent 4
+--disable blankLineAfterImports
+--binary-grouping none
+--decimal-grouping none
+--hex-grouping none
+--octal-grouping none
+--semicolons never
+--wrapparameters before-first

@@ -1,8 +1,3 @@
-# Unreleased
-
-- Add keep consumer rules for JNA types UniFFI needs under R8.
-- The Android AAR now ships targeted R8 consumer keep rules for the UniFFI/JNA FFI surface.
-
 # 0.7.0-rc.65 (Synonym Fork)
 
 ## Bug Fixes
