@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Install gobley-uniffi-bindgen once for all Kotlin scripts
-echo "Installing gobley-uniffi-bindgen fork..."
-cargo install --git https://github.com/ovitrif/gobley.git \
-  --branch fix-v0.2.0 gobley-uniffi-bindgen --force
-export BINDGEN_GOBLEY_INSTALLED=1
+source ./scripts/install_gobley_bindgen.sh
 
 # Standardize on release-smaller for all targets
 export BINDGEN_PROFILE="release-smaller"

@@ -5,11 +5,7 @@ TARGET_DIR="target"
 PROJECT_DIR="ldk-node-jvm"
 JVM_LIB_DIR="$BINDINGS_DIR/$PROJECT_DIR"
 
-# Install gobley-uniffi-bindgen from fork (skip if orchestrator already installed it)
-if [ -z "${BINDGEN_GOBLEY_INSTALLED:-}" ]; then
-	echo "Installing gobley-uniffi-bindgen fork..."
-	cargo install --git https://github.com/ovitrif/gobley.git --branch fix-v0.2.0 gobley-uniffi-bindgen --force
-fi
+source "$(dirname "${BASH_SOURCE[0]}")/install_gobley_bindgen.sh"
 UNIFFI_BINDGEN_BIN="gobley-uniffi-bindgen"
 
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
