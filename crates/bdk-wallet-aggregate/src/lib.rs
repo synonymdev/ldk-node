@@ -1939,6 +1939,68 @@ mod tests {
 		assert!(aggregate.calculate_fee_from_psbt(&psbt).unwrap() > 0);
 	}
 
+	/// A selection returned by `select_utxos` must be accepted by the transaction
+	/// builder for the same target amount and fee rate, for every algorithm.
+	/// Regression test for https://github.com/synonymdev/ldk-node/issues/104.
+	#[test]
+	fn selected_utxos_satisfy_tx_builder_for_all_algorithms() {
+		// The wallet layout from the issue report: 18 P2WPKH UTXOs, 88,900 sats total.
+		let utxo_amounts = [
+			2_000u64, 3_500, 4_200, 5_000, 6_100, 7_800, 2_500, 3_000, 8_900, 4_500, 2_100, 5_500,
+			3_200, 6_700, 9_100, 4_800, 2_700, 7_300,
+		];
+		let target_amount = 35_000u64;
+		let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
+
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		for (index, amount) in utxo_amounts.iter().enumerate() {
+			fund_wallet(&mut wallet, Amount::from_sat(*amount), index as u8 + 1);
+		}
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let drain_script = aggregate
+			.primary_wallet()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+
+		// SingleRandomDraw is intentionally omitted: its randomized selection can
+		// occasionally land on a dust-change result that selection legitimately
+		// rejects, making the test flaky. The invariant under test — a returned
+		// selection must be acceptable to the builder — is exercised
+		// deterministically by the three deterministic algorithms below, including
+		// the changeless BranchAndBound path from issue #104.
+		for algorithm in [
+			CoinSelectionAlgorithm::BranchAndBound,
+			CoinSelectionAlgorithm::LargestFirst,
+			CoinSelectionAlgorithm::OldestFirst,
+		] {
+			let available_utxos = aggregate.list_unspent();
+			let selected = aggregate
+				.select_utxos(
+					target_amount,
+					available_utxos,
+					fee_rate,
+					algorithm,
+					&drain_script,
+					&[],
+				)
+				.unwrap_or_else(|e| panic!("{algorithm:?} selection failed: {e:?}"));
+
+			// Build the spend exactly like the manual-UTXO path of ldk-node's
+			// `build_transaction_psbt` does.
+			let infos = aggregate.prepare_outpoints_for_psbt(&selected).unwrap();
+			let mut builder = aggregate.primary_wallet_mut().build_tx();
+			builder
+				.add_recipient(recipient_script(), Amount::from_sat(target_amount))
+				.fee_rate(fee_rate);
+			utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
+			builder.manually_selected_only();
+			builder.finish().unwrap_or_else(|e| panic!("{algorithm:?} selection rejected: {e:?}"));
+		}
+	}
+
 	#[test]
 	fn only_coin_selection_errors_trigger_the_rbf_fallback() {
 		let insufficient = bdk_wallet::coin_selection::InsufficientFunds {

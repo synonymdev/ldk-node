@@ -26,6 +26,27 @@ use crate::types::{CoinSelectionAlgorithm, Error, UtxoPsbtInfo};
 /// Minimum economical output value (dust limit).
 pub const DUST_LIMIT_SATS: u64 = 546;
 
+/// Weight of the parts of a payment transaction that do not scale with the
+/// number of selected inputs: the transaction overhead (version, segwit
+/// marker/flag, input/output count varints, locktime) plus one recipient
+/// output.
+///
+/// BDK's `CoinSelectionAlgorithm::coin_select` only adds the *per-input*
+/// satisfaction fee on top of `target_amount`; it does not account for this
+/// fixed overhead. The transaction builder, however, pays for the whole
+/// transaction. To make a selection returned here acceptable to the builder
+/// for the same target and fee rate, the selection target must be inflated by
+/// the fee for this fixed overhead. See
+/// https://github.com/synonymdev/ldk-node/issues/104.
+///
+/// Breakdown (conservative, assumes a P2PKH-size recipient output so the
+/// inflation is never too small for other script types):
+/// - tx overhead: 4 (version) + 2 (marker/flag) + ~3 (varints) + 4 (locktime) ~ 13 vB
+/// - recipient output: 34 vB (P2PKH)
+///
+/// Total ~47 vB = 188 WU.
+const BASE_TX_WEIGHT: Weight = Weight::from_wu(188);
+
 /// Calculate the satisfaction weight for a UTXO based on its script type.
 pub fn calculate_utxo_weight(script_pubkey: &ScriptBuf) -> Weight {
 	if script_pubkey.is_p2wpkh() {
@@ -195,7 +216,14 @@ where
 		})
 		.collect();
 
-	let target = Amount::from_sat(target_amount);
+	// Inflate the target by the fee for the fixed transaction overhead
+	// (recipient output + version/locktime/varints), which BDK's coin
+	// selection does not account for but the transaction builder charges.
+	// Without this, a changeless BranchAndBound selection can be accepted here
+	// yet rejected by the builder as insufficient. See issue #104.
+	let base_fee = fee_rate.fee_wu(BASE_TX_WEIGHT).ok_or(Error::InvalidFeeRate)?;
+	let target =
+		Amount::from_sat(target_amount).checked_add(base_fee).ok_or(Error::InvalidFeeRate)?;
 	let mut rng = OsRng;
 
 	let result = match algorithm {

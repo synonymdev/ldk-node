@@ -2548,13 +2548,17 @@ mod cpfp {
 // Coin Selection
 // ---------------------------------------------------------------------------
 mod coin_selection {
-	use bitcoin::FeeRate;
+	use std::collections::HashMap;
+
+	use bitcoin::{FeeRate, Txid};
 	use electrum_client::ElectrumApi;
+	use ldk_node::bitcoin::Amount;
 	use ldk_node::config::AddressType;
+	use serde_json::{json, Value};
 
 	use crate::common::{
-		api_fee_rate, open_channel, setup_bitcoind_and_electrsd, setup_node, wait_for_tx,
-		TestChainSource,
+		api_fee_rate, generate_blocks_and_wait, open_channel, premine_blocks,
+		setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
 	};
 	use crate::helpers::{
 		fund_and_sync, fund_multiple_and_sync, fund_peer_node_and_sync, node_config,
@@ -2851,6 +2855,89 @@ mod coin_selection {
 		assert!(tx.input.len() <= 3, "Should pick optimal UTXOs, got {}", tx.input.len());
 
 		node.stop().unwrap();
+	}
+
+	/// A selection from `select_utxos_with_algorithm` must be accepted by
+	/// `send_to_address` for the same target amount and fee rate, for every
+	/// supported algorithm. Regression test for
+	/// https://github.com/synonymdev/ldk-node/issues/104 (BranchAndBound always failed).
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_selected_utxos_are_accepted_by_send_to_address() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+
+		// The wallet layout from the issue report: 18 P2WPKH UTXOs, 88,900 sats total.
+		let utxo_amounts = [
+			2_000u64, 3_500, 4_200, 5_000, 6_100, 7_800, 2_500, 3_000, 8_900, 4_500, 2_100, 5_500,
+			3_200, 6_700, 9_100, 4_800, 2_700, 7_300,
+		];
+		let algorithms = [
+			ldk_node::CoinSelectionAlgorithm::BranchAndBound,
+			ldk_node::CoinSelectionAlgorithm::LargestFirst,
+			ldk_node::CoinSelectionAlgorithm::OldestFirst,
+			ldk_node::CoinSelectionAlgorithm::SingleRandomDraw,
+		];
+
+		// One node per algorithm, so each send starts from the identical wallet state.
+		let mut nodes = Vec::new();
+		for _ in &algorithms {
+			let config = node_config(AddressType::NativeSegwit, vec![]);
+			nodes.push(setup_node(&chain_source, config, None));
+		}
+
+		// Fund every node with the exact UTXO set from the issue in a single transaction.
+		premine_blocks(&bitcoind.client, &electrsd.client).await;
+		let mut amounts = HashMap::<String, f64>::new();
+		for node in &nodes {
+			for amount in utxo_amounts {
+				let addr = node.onchain_payment().new_address().unwrap();
+				amounts.insert(addr.to_string(), Amount::from_sat(amount).to_btc());
+			}
+		}
+		let funding_txid: Txid = bitcoind
+			.client
+			.call::<Value>("sendmany", &[json!(""), json!(amounts)])
+			.unwrap()
+			.as_str()
+			.unwrap()
+			.parse()
+			.unwrap();
+		wait_for_tx(&electrsd.client, funding_txid).await;
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+		for node in &nodes {
+			node.sync_wallets().unwrap();
+		}
+		std::thread::sleep(std::time::Duration::from_secs(2));
+
+		let target_amount_sats = 35_000;
+		for (node, algorithm) in nodes.iter().zip(algorithms.iter()) {
+			let selected = node
+				.onchain_payment()
+				.select_utxos_with_algorithm(
+					target_amount_sats,
+					Some(api_fee_rate(FeeRate::from_sat_per_kwu(250))),
+					*algorithm,
+					None,
+				)
+				.unwrap_or_else(|e| panic!("{algorithm:?} selection failed: {e:?}"));
+
+			let txid = node
+				.onchain_payment()
+				.send_to_address(
+					&test_recipient(),
+					target_amount_sats,
+					Some(api_fee_rate(FeeRate::from_sat_per_kwu(250))),
+					Some(selected),
+				)
+				.unwrap_or_else(|e| {
+					panic!("{algorithm:?} selection rejected by send_to_address: {e:?}")
+				});
+			wait_for_tx(&electrsd.client, txid).await;
+		}
+
+		for node in &nodes {
+			node.stop().unwrap();
+		}
 	}
 }
 
