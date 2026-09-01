@@ -144,13 +144,17 @@ impl RuntimeControl {
 	}
 
 	fn cancel_all_tasks(&self) {
+		self.cancel_tracked_tasks();
+		if let Some(task) = self.background_processor_task.lock().expect("lock").as_ref() {
+			task.abort();
+		}
+	}
+
+	pub(crate) fn cancel_tracked_tasks(&self) {
 		for tasks in [&self.background_tasks, &self.cancellable_background_tasks] {
 			let tasks = tasks.lock().expect("lock");
 			tasks.close();
 			tasks.cancel();
-		}
-		if let Some(task) = self.background_processor_task.lock().expect("lock").as_ref() {
-			task.abort();
 		}
 	}
 
@@ -195,13 +199,20 @@ impl RuntimeControl {
 		);
 	}
 
-	pub fn spawn_background_processor_task<F>(&self, future: F)
+	pub fn spawn_background_processor_task<F, C>(&self, future: F, on_failure: C)
 	where
 		F: Future<Output = Result<(), LdkIoError>> + Send + 'static,
+		C: FnOnce(&LdkIoError) + Send + 'static,
 	{
 		let mut background_processor_task = self.background_processor_task.lock().expect("lock");
 		debug_assert!(background_processor_task.is_none(), "Expected no background processor task");
-		*background_processor_task = Some(self.handle.spawn(future));
+		*background_processor_task = Some(self.handle.spawn(async move {
+			let result = future.await;
+			if let Err(e) = &result {
+				on_failure(e);
+			}
+			result
+		}));
 	}
 
 	pub fn block_on<F: Future>(&self, future: F) -> F::Output {
@@ -210,14 +221,29 @@ impl RuntimeControl {
 	}
 
 	pub fn abort_cancellable_background_tasks(&self) {
+		self.abort_cancellable_background_tasks_with_timeout(Duration::from_secs(
+			BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECS,
+		));
+	}
+
+	fn abort_cancellable_background_tasks_with_timeout(&self, shutdown_timeout: Duration) {
 		let tasks = {
 			let tasks = self.cancellable_background_tasks.lock().expect("lock");
 			tasks.close();
 			tasks.cancel();
 			tasks.tasks.clone()
 		};
-		self.block_on(tasks.wait());
-		log_debug!(self.logger, "Stopped all cancellable background tasks.");
+		let timed_out = self.block_on(async {
+			tokio::time::timeout(shutdown_timeout, tasks.wait()).await.is_err()
+		});
+		if timed_out {
+			log_error!(
+				self.logger,
+				"Detaching cancellable background tasks after cancellation timed out."
+			);
+		} else {
+			log_debug!(self.logger, "Stopped all cancellable background tasks.");
+		}
 	}
 
 	pub fn wait_on_background_tasks(&self) {
@@ -239,7 +265,13 @@ impl RuntimeControl {
 		if timed_out {
 			log_error!(self.logger, "Stopping background tasks timed out.");
 			cancellation_token.cancel();
-			self.block_on(tasks.wait());
+			let cancellation_timed_out = self.block_on(async {
+				tokio::time::timeout(shutdown_timeout, tasks.wait()).await.is_err()
+			});
+			if cancellation_timed_out {
+				log_error!(self.logger, "Detaching background tasks after cancellation timed out.");
+				return;
+			}
 		}
 		log_debug!(self.logger, "Stopped all background tasks.");
 	}
@@ -268,10 +300,18 @@ impl RuntimeControl {
 				Err(e) => {
 					log_error!(self.logger, "Stopping event handling timed out: {}", e);
 					task.abort();
-					match task.await {
-						Ok(result) => result,
-						Err(e) if e.is_cancelled() => Ok(()),
-						Err(e) => Err(LdkIoError::new(
+					match tokio::time::timeout(shutdown_timeout, task).await {
+						Err(e) => {
+							log_error!(
+								self.logger,
+								"Detaching event processor after cancellation timed out: {}",
+								e
+							);
+							Ok(())
+						},
+						Ok(Ok(result)) => result,
+						Ok(Err(e)) if e.is_cancelled() => Ok(()),
+						Ok(Err(e)) => Err(LdkIoError::new(
 							LdkIoErrorKind::Other,
 							format!("Event processor task failed: {}", e),
 						)),
@@ -393,6 +433,15 @@ mod tests {
 		Runtime::new(Arc::new(Logger::new_log_facade())).unwrap()
 	}
 
+	fn test_runtime_with_workers(worker_threads: usize) -> Runtime {
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(worker_threads)
+			.enable_all()
+			.build()
+			.unwrap();
+		Runtime::with_owned_runtime(runtime, Arc::new(Logger::new_log_facade()))
+	}
+
 	#[test]
 	fn runtime_control_does_not_retain_runtime_owner() {
 		let runtime = test_runtime();
@@ -478,15 +527,60 @@ mod tests {
 	}
 
 	#[test]
+	fn non_cooperative_background_task_does_not_block_shutdown() {
+		let runtime = test_runtime_with_workers(2);
+		let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+		let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+		let (finished_sender, finished_receiver) = std::sync::mpsc::sync_channel(1);
+		runtime.spawn_background_task(async move {
+			started_sender.send(()).unwrap();
+			release_receiver.recv().unwrap();
+			finished_sender.send(()).unwrap();
+		});
+		started_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+
+		let start = std::time::Instant::now();
+		runtime.wait_on_background_tasks_with_timeout(Duration::from_millis(10));
+		assert!(start.elapsed() < Duration::from_secs(1));
+
+		release_sender.send(()).unwrap();
+		finished_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+	}
+
+	#[test]
+	fn non_cooperative_cancellable_task_does_not_block_shutdown() {
+		let runtime = test_runtime_with_workers(2);
+		let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+		let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+		let (finished_sender, finished_receiver) = std::sync::mpsc::sync_channel(1);
+		runtime.spawn_cancellable_background_task(async move {
+			started_sender.send(()).unwrap();
+			release_receiver.recv().unwrap();
+			finished_sender.send(()).unwrap();
+		});
+		started_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+
+		let start = std::time::Instant::now();
+		runtime.abort_cancellable_background_tasks_with_timeout(Duration::from_millis(10));
+		assert!(start.elapsed() < Duration::from_secs(1));
+
+		release_sender.send(()).unwrap();
+		finished_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+	}
+
+	#[test]
 	fn timed_out_event_processor_is_drained_before_shutdown_returns() {
 		let runtime = test_runtime();
 		let (started_sender, started_receiver) = oneshot::channel();
 		let (dropped_sender, dropped_receiver) = oneshot::channel();
-		runtime.spawn_background_processor_task(async move {
-			let _drop_notifier = DropNotifier(Some(dropped_sender));
-			let _ = started_sender.send(());
-			std::future::pending::<Result<(), LdkIoError>>().await
-		});
+		runtime.spawn_background_processor_task(
+			async move {
+				let _drop_notifier = DropNotifier(Some(dropped_sender));
+				let _ = started_sender.send(());
+				std::future::pending::<Result<(), LdkIoError>>().await
+			},
+			|_| {},
+		);
 		runtime.block_on(started_receiver).unwrap();
 
 		runtime.wait_on_background_processor_task_with_timeout(Duration::from_millis(10)).unwrap();
@@ -495,11 +589,42 @@ mod tests {
 	}
 
 	#[test]
+	fn non_cooperative_event_processor_does_not_block_shutdown() {
+		let runtime = test_runtime_with_workers(2);
+		let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+		let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+		let (finished_sender, finished_receiver) = std::sync::mpsc::sync_channel(1);
+		runtime.spawn_background_processor_task(
+			async move {
+				started_sender.send(()).unwrap();
+				release_receiver.recv().unwrap();
+				finished_sender.send(()).unwrap();
+				Ok(())
+			},
+			|_| {},
+		);
+		started_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+
+		let start = std::time::Instant::now();
+		runtime.wait_on_background_processor_task_with_timeout(Duration::from_millis(10)).unwrap();
+		assert!(start.elapsed() < Duration::from_secs(1));
+
+		release_sender.send(()).unwrap();
+		finished_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+	}
+
+	#[test]
 	fn event_processor_persistence_failure_is_returned() {
 		let runtime = test_runtime();
-		runtime.spawn_background_processor_task(async {
-			Err(LdkIoError::new(LdkIoErrorKind::Other, "persistence failed"))
-		});
+		let (failure_sender, failure_receiver) = oneshot::channel();
+		runtime.spawn_background_processor_task(
+			async { Err(LdkIoError::new(LdkIoErrorKind::Other, "persistence failed")) },
+			move |_| {
+				let _ = failure_sender.send(());
+			},
+		);
+
+		runtime.block_on(failure_receiver).unwrap();
 
 		let error = runtime.wait_on_background_processor_task().unwrap_err();
 

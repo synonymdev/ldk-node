@@ -107,7 +107,7 @@ use std::collections::{HashMap, HashSet};
 use std::default::Default;
 use std::net::ToSocketAddrs;
 use std::ops::Deref;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -213,7 +213,10 @@ pub struct Node {
 	peer_store: Arc<PeerStore<Arc<Logger>>>,
 	rgs_peer_recovery_exclusions: Arc<RgsPeerRecoveryExclusions>,
 	payment_store: Arc<PaymentStore>,
+	lifecycle_lock: Mutex<()>,
 	is_running: Arc<RwLock<bool>>,
+	background_processor_failed: Arc<AtomicBool>,
+	background_processor_generation: Arc<AtomicU64>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
 	om_mailbox: Option<Arc<OnionMessageMailbox>>,
 	async_payments_role: Option<AsyncPaymentsRole>,
@@ -222,6 +225,22 @@ pub struct Node {
 	local_rgs_timestamp: Arc<AtomicU32>,
 	// Keep the runtime owner last so all runtime-dependent node fields are dropped first.
 	runtime: Runtime,
+}
+
+fn handle_background_processor_failure(
+	e: &lightning::io::Error, logger: &Arc<Logger>, is_running: &RwLock<bool>,
+	background_processor_failed: &AtomicBool, runtime: &runtime::RuntimeControl,
+	chain_source: &ChainSource, generation: u64, current_generation: &AtomicU64,
+) {
+	if generation != current_generation.load(Ordering::Acquire) {
+		return;
+	}
+	log_error!(logger, "Event processing failed: {}", e);
+	background_processor_failed.store(true, Ordering::Release);
+	*is_running.write().unwrap() = false;
+	runtime.close_task_admission();
+	chain_source.begin_shutdown();
+	runtime.cancel_tracked_tasks();
 }
 
 #[derive(Default)]
@@ -300,10 +319,12 @@ impl Node {
 	/// After this returns, the [`Node`] instance can be controlled via the provided API methods in
 	/// a thread-safe manner.
 	pub fn start(&self) -> Result<(), Error> {
-		// Acquire a run lock and hold it until we're setup.
-		let mut is_running_lock = self.is_running.write().unwrap();
-		if *is_running_lock {
+		let _lifecycle_lock = self.lifecycle_lock.lock().unwrap();
+		if *self.is_running.read().unwrap() {
 			return Err(Error::AlreadyRunning);
+		}
+		if self.background_processor_failed.load(Ordering::Acquire) {
+			return Err(Error::PersistenceFailed);
 		}
 
 		log_info!(
@@ -666,7 +687,16 @@ impl Node {
 		let background_sweeper = Arc::clone(&self.output_sweeper);
 		let background_onion_messenger = Arc::clone(&self.onion_messenger);
 		let background_logger = Arc::clone(&self.logger);
+		let background_error_logger = Arc::clone(&self.logger);
 		let background_scorer = Arc::clone(&self.scorer);
+		let background_is_running = Arc::clone(&self.is_running);
+		let background_processor_failed = Arc::clone(&self.background_processor_failed);
+		let background_processor_generation =
+			self.background_processor_generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+		let current_background_processor_generation =
+			Arc::clone(&self.background_processor_generation);
+		let background_runtime = self.runtime.control();
+		let background_chain_source = Arc::clone(&self.chain_source);
 		let stop_bp = self.background_processor_stop_sender.subscribe();
 		let sleeper_logger = Arc::clone(&self.logger);
 		let sleeper = move |d| {
@@ -688,25 +718,39 @@ impl Node {
 			})
 		};
 
-		self.runtime.spawn_background_processor_task(async move {
-			process_events_async(
-				background_persister,
-				|e| background_event_handler.handle_event(e),
-				background_chain_mon,
-				background_chan_man,
-				Some(background_onion_messenger),
-				background_gossip_sync,
-				background_peer_man,
-				background_liquidity_man_opt,
-				Some(background_sweeper),
-				background_logger,
-				Some(background_scorer),
-				sleeper,
-				true,
-				|| Some(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap()),
-			)
-			.await
-		});
+		self.runtime.spawn_background_processor_task(
+			async move {
+				process_events_async(
+					background_persister,
+					|e| background_event_handler.handle_event(e),
+					background_chain_mon,
+					background_chan_man,
+					Some(background_onion_messenger),
+					background_gossip_sync,
+					background_peer_man,
+					background_liquidity_man_opt,
+					Some(background_sweeper),
+					background_logger,
+					Some(background_scorer),
+					sleeper,
+					true,
+					|| Some(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap()),
+				)
+				.await
+			},
+			move |e| {
+				handle_background_processor_failure(
+					e,
+					&background_error_logger,
+					&background_is_running,
+					&background_processor_failed,
+					&background_runtime,
+					&background_chain_source,
+					background_processor_generation,
+					&current_background_processor_generation,
+				);
+			},
+		);
 
 		if let Some(liquidity_source) = self.liquidity_source.as_ref() {
 			let mut stop_liquidity_handler = self.stop_sender.subscribe();
@@ -729,7 +773,11 @@ impl Node {
 		}
 
 		log_info!(self.logger, "Startup complete.");
-		*is_running_lock = true;
+		*self.is_running.write().unwrap() = true;
+		if self.background_processor_failed.load(Ordering::Acquire) {
+			*self.is_running.write().unwrap() = false;
+			return Err(Error::PersistenceFailed);
+		}
 		Ok(())
 	}
 
@@ -763,10 +811,14 @@ impl Node {
 	///
 	/// After this returns most API methods will return [`Error::NotRunning`].
 	pub fn stop(&self) -> Result<(), Error> {
-		let mut is_running_lock = self.is_running.write().unwrap();
-		if !*is_running_lock {
+		let _lifecycle_lock = self.lifecycle_lock.lock().unwrap();
+		if !*self.is_running.read().unwrap()
+			&& !self.background_processor_failed.load(Ordering::Acquire)
+		{
 			return Err(Error::NotRunning);
 		}
+		*self.is_running.write().unwrap() = false;
+		self.background_processor_generation.fetch_add(1, Ordering::AcqRel);
 
 		log_info!(self.logger, "Shutting down LDK Node with node ID {}...", self.node_id());
 
@@ -826,11 +878,16 @@ impl Node {
 		self.runtime.log_metrics();
 
 		log_info!(self.logger, "Shutdown complete.");
-		*is_running_lock = false;
-		background_processor_result.map_err(|e| {
-			log_error!(self.logger, "Failed to process events during shutdown: {}", e);
-			Error::PersistenceFailed
-		})
+		let background_processor_failed =
+			self.background_processor_failed.swap(false, Ordering::AcqRel);
+		match background_processor_result {
+			Err(e) => {
+				log_error!(self.logger, "Failed to process events during shutdown: {}", e);
+				Err(Error::PersistenceFailed)
+			},
+			Ok(()) if background_processor_failed => Err(Error::PersistenceFailed),
+			Ok(()) => Ok(()),
+		}
 	}
 
 	/// Returns the status of the [`Node`].
@@ -2511,6 +2568,51 @@ mod tests {
 			node_id,
 			address: SocketAddress::from_str(&format!("127.0.0.1:{port}")).unwrap(),
 		}
+	}
+
+	#[test]
+	fn background_processor_failure_marks_node_unhealthy() {
+		let config = Config { network: Network::Regtest, ..Config::default() };
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes([42u8; 64]);
+		builder.set_log_facade_logger();
+		let node = builder.build().unwrap();
+		*node.is_running.write().unwrap() = true;
+		node.background_processor_generation.store(1, Ordering::Release);
+		let error = io::Error::new(io::ErrorKind::Other, "persistence failed");
+
+		handle_background_processor_failure(
+			&error,
+			&node.logger,
+			&node.is_running,
+			&node.background_processor_failed,
+			&node.runtime,
+			&node.chain_source,
+			1,
+			&node.background_processor_generation,
+		);
+
+		assert!(!node.status().is_running);
+		assert!(node.background_processor_failed.load(Ordering::Acquire));
+		assert!(matches!(node.start(), Err(Error::PersistenceFailed)));
+		assert!(matches!(node.stop(), Err(Error::PersistenceFailed)));
+		assert!(!node.background_processor_failed.load(Ordering::Acquire));
+
+		*node.is_running.write().unwrap() = true;
+		handle_background_processor_failure(
+			&error,
+			&node.logger,
+			&node.is_running,
+			&node.background_processor_failed,
+			&node.runtime,
+			&node.chain_source,
+			1,
+			&node.background_processor_generation,
+		);
+		assert!(node.status().is_running);
+		assert!(!node.background_processor_failed.load(Ordering::Acquire));
+		*node.is_running.write().unwrap() = false;
 	}
 
 	#[test]

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::default::Default;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex, Once, RwLock};
 use std::time::SystemTime;
 use std::{fmt, fs};
@@ -2606,7 +2606,10 @@ fn build_with_store_internal(
 		peer_store,
 		rgs_peer_recovery_exclusions: Arc::new(RgsPeerRecoveryExclusions::default()),
 		payment_store,
+		lifecycle_lock: Mutex::new(()),
 		is_running,
+		background_processor_failed: Arc::new(AtomicBool::new(false)),
+		background_processor_generation: Arc::new(AtomicU64::new(0)),
 		node_metrics,
 		om_mailbox,
 		async_payments_role,
