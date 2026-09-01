@@ -989,7 +989,7 @@ where
 		let drain_script =
 			self.primary_wallet().peek_address(KeychainKind::Internal, 0).address.script_pubkey();
 
-		let selected = utxo::select_utxos_with_algorithm(
+		let selected = utxo::select_utxos_for_deficit(
 			deficit.to_sat(),
 			available,
 			new_fee_rate,
@@ -1128,7 +1128,7 @@ where
 		let drain_script =
 			self.primary_wallet().peek_address(KeychainKind::Internal, 0).address.script_pubkey();
 
-		let selected_outpoints = utxo::select_utxos_with_algorithm(
+		let selected_outpoints = utxo::select_utxos_for_deficit(
 			deficit.to_sat(),
 			non_primary,
 			fee_rate,

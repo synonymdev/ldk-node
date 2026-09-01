@@ -39,13 +39,13 @@ pub const DUST_LIMIT_SATS: u64 = 546;
 /// the fee for this fixed overhead. See
 /// https://github.com/synonymdev/ldk-node/issues/104.
 ///
-/// Breakdown (conservative, assumes a P2PKH-size recipient output so the
-/// inflation is never too small for other script types):
+/// Breakdown (conservative for the largest supported standard recipient
+/// outputs, P2TR and P2WSH):
 /// - tx overhead: 4 (version) + 2 (marker/flag) + ~3 (varints) + 4 (locktime) ~ 13 vB
-/// - recipient output: 34 vB (P2PKH)
+/// - recipient output: 43 vB (P2TR/P2WSH)
 ///
-/// Total ~47 vB = 188 WU.
-const BASE_TX_WEIGHT: Weight = Weight::from_wu(188);
+/// Total ~56 vB = 224 WU.
+const BASE_TX_WEIGHT: Weight = Weight::from_wu(224);
 
 /// Calculate the satisfaction weight for a UTXO based on its script type.
 pub fn calculate_utxo_weight(script_pubkey: &ScriptBuf) -> Weight {
@@ -193,6 +193,50 @@ where
 	K: Eq + Hash + Copy + Debug,
 	P: WalletPersister,
 {
+	select_utxos_with_algorithm_inner(
+		target_amount,
+		available_utxos,
+		fee_rate,
+		algorithm,
+		drain_script,
+		excluded_outpoints,
+		wallets,
+		true,
+	)
+}
+
+/// Run coin selection for a precomputed fee deficit, without adding payment
+/// transaction overhead a second time.
+pub(crate) fn select_utxos_for_deficit<K, P>(
+	target_amount: u64, available_utxos: Vec<LocalOutput>, fee_rate: FeeRate,
+	algorithm: CoinSelectionAlgorithm, drain_script: &Script, excluded_outpoints: &[OutPoint],
+	wallets: &HashMap<K, PersistedWallet<P>>,
+) -> Result<Vec<OutPoint>, Error>
+where
+	K: Eq + Hash + Copy + Debug,
+	P: WalletPersister,
+{
+	select_utxos_with_algorithm_inner(
+		target_amount,
+		available_utxos,
+		fee_rate,
+		algorithm,
+		drain_script,
+		excluded_outpoints,
+		wallets,
+		false,
+	)
+}
+
+fn select_utxos_with_algorithm_inner<K, P>(
+	target_amount: u64, available_utxos: Vec<LocalOutput>, fee_rate: FeeRate,
+	algorithm: CoinSelectionAlgorithm, drain_script: &Script, excluded_outpoints: &[OutPoint],
+	wallets: &HashMap<K, PersistedWallet<P>>, include_base_tx_overhead: bool,
+) -> Result<Vec<OutPoint>, Error>
+where
+	K: Eq + Hash + Copy + Debug,
+	P: WalletPersister,
+{
 	let safe_utxos: Vec<LocalOutput> = available_utxos
 		.into_iter()
 		.filter(|utxo| !excluded_outpoints.contains(&utxo.outpoint))
@@ -221,9 +265,12 @@ where
 	// selection does not account for but the transaction builder charges.
 	// Without this, a changeless BranchAndBound selection can be accepted here
 	// yet rejected by the builder as insufficient. See issue #104.
-	let base_fee = fee_rate.fee_wu(BASE_TX_WEIGHT).ok_or(Error::InvalidFeeRate)?;
-	let target =
-		Amount::from_sat(target_amount).checked_add(base_fee).ok_or(Error::InvalidFeeRate)?;
+	let target = if include_base_tx_overhead {
+		let base_fee = fee_rate.fee_wu(BASE_TX_WEIGHT).ok_or(Error::InvalidFeeRate)?;
+		Amount::from_sat(target_amount).checked_add(base_fee).ok_or(Error::InvalidFeeRate)?
+	} else {
+		Amount::from_sat(target_amount)
+	};
 	let mut rng = OsRng;
 
 	let result = match algorithm {

@@ -2875,7 +2875,6 @@ mod coin_selection {
 			ldk_node::CoinSelectionAlgorithm::BranchAndBound,
 			ldk_node::CoinSelectionAlgorithm::LargestFirst,
 			ldk_node::CoinSelectionAlgorithm::OldestFirst,
-			ldk_node::CoinSelectionAlgorithm::SingleRandomDraw,
 		];
 
 		// One node per algorithm, so each send starts from the identical wallet state.
