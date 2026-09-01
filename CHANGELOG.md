@@ -1,7 +1,8 @@
-# 0.7.0-rc.65 (Synonym Fork)
+# 0.7.0-rc.66 (Synonym Fork)
 
 ## Bug Fixes
 
+- Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
 - Add keep consumer rules for JNA types UniFFI needs under R8.
 
 # 0.7.0-rc.64 (Synonym Fork)
