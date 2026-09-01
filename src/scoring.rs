@@ -11,14 +11,14 @@ use crate::config::{
 };
 use crate::io::utils::write_external_pathfinding_scores_to_cache;
 use crate::logger::LdkLogger;
-use crate::runtime::Runtime;
+use crate::runtime::RuntimeControl;
 use crate::{write_node_metrics, DynStore, Logger, NodeMetrics, Scorer};
 
 /// Start a background task that periodically downloads scores via an external url and merges them into the local
 /// pathfinding scores.
 pub fn setup_background_pathfinding_scores_sync(
 	url: String, scorer: Arc<Mutex<crate::types::Scorer>>, node_metrics: Arc<RwLock<NodeMetrics>>,
-	kv_store: Arc<DynStore>, logger: Arc<Logger>, runtime: Arc<Runtime>,
+	kv_store: Arc<DynStore>, logger: Arc<Logger>, runtime: Arc<RuntimeControl>,
 	mut stop_receiver: tokio::sync::watch::Receiver<()>,
 ) {
 	log_info!(logger, "External scores background syncing enabled from {}", url);

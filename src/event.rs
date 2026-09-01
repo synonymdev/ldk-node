@@ -48,7 +48,7 @@ use crate::payment::store::{
 	PaymentDetails, PaymentDetailsUpdate, PaymentDirection, PaymentKind, PaymentStatus,
 };
 use crate::peer_store::persist_missing_channel_peers;
-use crate::runtime::Runtime;
+use crate::runtime::RuntimeControl;
 use crate::types::{CustomTlvRecord, DynStore, OnionMessenger, PaymentStore, Sweeper, Wallet};
 use crate::{
 	hex_utils, BumpTransactionEventHandler, ChannelManager, Error, Graph, PeerStore, UserChannelId,
@@ -1138,7 +1138,7 @@ where
 	liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
 	payment_store: Arc<PaymentStore>,
 	peer_store: Arc<PeerStore<L>>,
-	runtime: Arc<Runtime>,
+	runtime: Arc<RuntimeControl>,
 	logger: L,
 	config: Arc<Config>,
 	static_invoice_store: Option<StaticInvoiceStore>,
@@ -1158,7 +1158,7 @@ where
 		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
 		payment_store: Arc<PaymentStore>, peer_store: Arc<PeerStore<L>>,
 		static_invoice_store: Option<StaticInvoiceStore>, onion_messenger: Arc<OnionMessenger>,
-		om_mailbox: Option<Arc<OnionMessageMailbox>>, runtime: Arc<Runtime>, logger: L,
+		om_mailbox: Option<Arc<OnionMessageMailbox>>, runtime: Arc<RuntimeControl>, logger: L,
 		config: Arc<Config>,
 	) -> Self {
 		Self {

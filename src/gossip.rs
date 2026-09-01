@@ -16,7 +16,7 @@ use lightning_block_sync::gossip::GossipVerifier;
 use crate::chain::ChainSource;
 use crate::config::RGS_SYNC_TIMEOUT_SECS;
 use crate::logger::{log_trace, LdkLogger, Logger};
-use crate::runtime::Runtime;
+use crate::runtime::RuntimeControl;
 use crate::types::{GossipSync, Graph, P2PGossipSync, PeerManager, RapidGossipSync, UtxoLookup};
 use crate::Error;
 
@@ -63,7 +63,7 @@ impl GossipSource {
 
 	pub(crate) fn set_gossip_verifier(
 		&self, chain_source: Arc<ChainSource>, peer_manager: Arc<PeerManager>,
-		runtime: Arc<Runtime>,
+		runtime: Arc<RuntimeControl>,
 	) {
 		match self {
 			Self::P2PNetwork { gossip_sync } => {
@@ -133,11 +133,11 @@ impl GossipSource {
 }
 
 pub(crate) struct RuntimeSpawner {
-	runtime: Arc<Runtime>,
+	runtime: Arc<RuntimeControl>,
 }
 
 impl RuntimeSpawner {
-	pub(crate) fn new(runtime: Arc<Runtime>) -> Self {
+	pub(crate) fn new(runtime: Arc<RuntimeControl>) -> Self {
 		Self { runtime }
 	}
 }

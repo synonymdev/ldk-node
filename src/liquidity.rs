@@ -43,7 +43,7 @@ use crate::builder::BuildError;
 use crate::chain::ChainSource;
 use crate::connection::ConnectionManager;
 use crate::logger::{log_debug, log_error, log_info, LdkLogger, Logger};
-use crate::runtime::Runtime;
+use crate::runtime::RuntimeControl;
 use crate::types::{
 	Broadcaster, ChannelManager, DynStore, KeysManager, LiquidityManager, PeerManager, Wallet,
 };
@@ -1457,20 +1457,22 @@ pub(crate) struct LSPS2BuyResponse {
 /// [`Bolt11Payment::receive_via_jit_channel`]: crate::payment::Bolt11Payment::receive_via_jit_channel
 #[derive(Clone)]
 pub struct LSPS1Liquidity {
-	runtime: Arc<Runtime>,
+	runtime: Arc<RuntimeControl>,
 	wallet: Arc<Wallet>,
 	connection_manager: Arc<ConnectionManager<Arc<Logger>>>,
 	liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
+	is_running: Arc<RwLock<bool>>,
 	logger: Arc<Logger>,
 }
 
 impl LSPS1Liquidity {
 	pub(crate) fn new(
-		runtime: Arc<Runtime>, wallet: Arc<Wallet>,
+		runtime: Arc<RuntimeControl>, wallet: Arc<Wallet>,
 		connection_manager: Arc<ConnectionManager<Arc<Logger>>>,
-		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>, logger: Arc<Logger>,
+		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>, is_running: Arc<RwLock<bool>>,
+		logger: Arc<Logger>,
 	) -> Self {
-		Self { runtime, wallet, connection_manager, liquidity_source, logger }
+		Self { runtime, wallet, connection_manager, liquidity_source, is_running, logger }
 	}
 
 	/// Connects to the configured LSP and places an order for an inbound channel.
@@ -1481,6 +1483,9 @@ impl LSPS1Liquidity {
 		&self, lsp_balance_sat: u64, client_balance_sat: u64, channel_expiry_blocks: u32,
 		announce_channel: bool,
 	) -> Result<LSPS1OrderStatus, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
 		let liquidity_source =
 			self.liquidity_source.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
 
@@ -1519,6 +1524,9 @@ impl LSPS1Liquidity {
 
 	/// Connects to the configured LSP and checks for the status of a previously-placed order.
 	pub fn check_order_status(&self, order_id: LSPS1OrderId) -> Result<LSPS1OrderStatus, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
 		let liquidity_source =
 			self.liquidity_source.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
 

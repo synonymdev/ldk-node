@@ -36,7 +36,7 @@ use crate::payment::store::{
 	PaymentStatus,
 };
 use crate::peer_store::{PeerInfo, PeerStore};
-use crate::runtime::Runtime;
+use crate::runtime::RuntimeControl;
 use crate::types::{ChannelManager, PaymentStore, Router};
 use crate::ProbeHandle;
 #[cfg(not(feature = "uniffi"))]
@@ -56,7 +56,7 @@ type Bolt11InvoiceDescription = crate::ffi::Bolt11InvoiceDescription;
 /// [BOLT 11]: https://github.com/lightning/bolts/blob/master/11-payment-encoding.md
 /// [`Node::bolt11_payment`]: crate::Node::bolt11_payment
 pub struct Bolt11Payment {
-	runtime: Arc<Runtime>,
+	runtime: Arc<RuntimeControl>,
 	channel_manager: Arc<ChannelManager>,
 	connection_manager: Arc<ConnectionManager<Arc<Logger>>>,
 	liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
@@ -70,7 +70,7 @@ pub struct Bolt11Payment {
 
 impl Bolt11Payment {
 	pub(crate) fn new(
-		runtime: Arc<Runtime>, channel_manager: Arc<ChannelManager>,
+		runtime: Arc<RuntimeControl>, channel_manager: Arc<ChannelManager>,
 		connection_manager: Arc<ConnectionManager<Arc<Logger>>>,
 		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
 		payment_store: Arc<PaymentStore>, peer_store: Arc<PeerStore<Arc<Logger>>>,
@@ -728,6 +728,10 @@ impl Bolt11Payment {
 		expiry_secs: u32, max_total_lsp_fee_limit_msat: Option<u64>,
 		max_proportional_lsp_fee_limit_ppm_msat: Option<u64>, payment_hash: Option<PaymentHash>,
 	) -> Result<LdkBolt11Invoice, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+
 		let liquidity_source =
 			self.liquidity_source.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
 

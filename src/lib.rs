@@ -187,7 +187,6 @@ uniffi::include_scaffolding!("ldk_node");
 ///
 /// Needs to be initialized and instantiated through [`Builder::build`].
 pub struct Node {
-	runtime: Arc<Runtime>,
 	stop_sender: tokio::sync::watch::Sender<()>,
 	background_processor_stop_sender: tokio::sync::watch::Sender<()>,
 	config: Arc<Config>,
@@ -221,6 +220,8 @@ pub struct Node {
 	runtime_sync_intervals: Arc<RwLock<RuntimeSyncIntervals>>,
 	/// Shared RGS timestamp used by LocalGraphStore to persist the timestamp alongside the graph.
 	local_rgs_timestamp: Arc<AtomicU32>,
+	// Keep the runtime owner last so all runtime-dependent node fields are dropped first.
+	runtime: Runtime,
 }
 
 #[derive(Default)]
@@ -312,6 +313,8 @@ impl Node {
 			self.config.network
 		);
 
+		self.runtime.allow_task_spawns();
+
 		// Start up any runtime-dependant chain sources (e.g. Electrum)
 		// Electrum needs execution access without owning the runtime lifecycle.
 		let runtime_handle = self.runtime.handle().clone();
@@ -402,7 +405,7 @@ impl Node {
 				Arc::clone(&self.node_metrics),
 				Arc::clone(&self.kv_store),
 				Arc::clone(&self.logger),
-				Arc::clone(&self.runtime),
+				self.runtime.control(),
 				self.stop_sender.subscribe(),
 			);
 		}
@@ -458,7 +461,7 @@ impl Node {
 				let logger = Arc::clone(&listening_logger);
 				let peer_mgr = Arc::clone(&peer_manager_connection_handler);
 				let mut stop_listen = self.stop_sender.subscribe();
-				let runtime = Arc::clone(&self.runtime);
+				let runtime = self.runtime.control();
 				self.runtime.spawn_cancellable_background_task(async move {
 					loop {
 						tokio::select! {
@@ -640,7 +643,7 @@ impl Node {
 			static_invoice_store,
 			Arc::clone(&self.onion_messenger),
 			self.om_mailbox.clone(),
-			Arc::clone(&self.runtime),
+			self.runtime.control(),
 			Arc::clone(&self.logger),
 			Arc::clone(&self.config),
 		));
@@ -663,7 +666,6 @@ impl Node {
 		let background_sweeper = Arc::clone(&self.output_sweeper);
 		let background_onion_messenger = Arc::clone(&self.onion_messenger);
 		let background_logger = Arc::clone(&self.logger);
-		let background_error_logger = Arc::clone(&self.logger);
 		let background_scorer = Arc::clone(&self.scorer);
 		let stop_bp = self.background_processor_stop_sender.subscribe();
 		let sleeper_logger = Arc::clone(&self.logger);
@@ -704,10 +706,6 @@ impl Node {
 				|| Some(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap()),
 			)
 			.await
-			.unwrap_or_else(|e| {
-				log_error!(background_error_logger, "Failed to process events: {}", e);
-				panic!("Failed to process events");
-			});
 		});
 
 		if let Some(liquidity_source) = self.liquidity_source.as_ref() {
@@ -772,6 +770,13 @@ impl Node {
 
 		log_info!(self.logger, "Shutting down LDK Node with node ID {}...", self.node_id());
 
+		// Prevent all task groups from accepting work that could outlive this shutdown generation.
+		self.runtime.close_task_admission();
+
+		// Prevent blocking Electrum syncs from making any further callbacks before persistence
+		// tasks stop accepting work.
+		self.chain_source.begin_shutdown();
+
 		// Stop background tasks.
 		self.stop_sender
 			.send(())
@@ -784,7 +789,6 @@ impl Node {
 					"Failed to send shutdown signal. This should never happen: {}",
 					e
 				);
-				debug_assert!(false);
 			});
 
 		// Cancel cancellable background tasks
@@ -813,18 +817,20 @@ impl Node {
 					"Failed to send shutdown signal. This should never happen: {}",
 					e
 				);
-				debug_assert!(false);
 			});
 
 		// Finally, wait until background processing stopped, at least until a timeout is reached.
-		self.runtime.wait_on_background_processor_task();
+		let background_processor_result = self.runtime.wait_on_background_processor_task();
 
 		#[cfg(tokio_unstable)]
 		self.runtime.log_metrics();
 
 		log_info!(self.logger, "Shutdown complete.");
 		*is_running_lock = false;
-		Ok(())
+		background_processor_result.map_err(|e| {
+			log_error!(self.logger, "Failed to process events during shutdown: {}", e);
+			Error::PersistenceFailed
+		})
 	}
 
 	/// Returns the status of the [`Node`].
@@ -950,7 +956,7 @@ impl Node {
 	#[cfg(not(feature = "uniffi"))]
 	pub fn bolt11_payment(&self) -> Bolt11Payment {
 		Bolt11Payment::new(
-			Arc::clone(&self.runtime),
+			self.runtime.control(),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.connection_manager),
 			self.liquidity_source.clone(),
@@ -969,7 +975,7 @@ impl Node {
 	#[cfg(feature = "uniffi")]
 	pub fn bolt11_payment(&self) -> Arc<Bolt11Payment> {
 		Arc::new(Bolt11Payment::new(
-			Arc::clone(&self.runtime),
+			self.runtime.control(),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.connection_manager),
 			self.liquidity_source.clone(),
@@ -1136,10 +1142,11 @@ impl Node {
 	#[cfg(not(feature = "uniffi"))]
 	pub fn lsps1_liquidity(&self) -> LSPS1Liquidity {
 		LSPS1Liquidity::new(
-			Arc::clone(&self.runtime),
+			self.runtime.control(),
 			Arc::clone(&self.wallet),
 			Arc::clone(&self.connection_manager),
 			self.liquidity_source.clone(),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		)
 	}
@@ -1150,10 +1157,11 @@ impl Node {
 	#[cfg(feature = "uniffi")]
 	pub fn lsps1_liquidity(&self) -> Arc<LSPS1Liquidity> {
 		Arc::new(LSPS1Liquidity::new(
-			Arc::clone(&self.runtime),
+			self.runtime.control(),
 			Arc::clone(&self.wallet),
 			Arc::clone(&self.connection_manager),
 			self.liquidity_source.clone(),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		))
 	}
