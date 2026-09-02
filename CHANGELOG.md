@@ -1,8 +1,14 @@
 # 0.7.0-rc.67 (Synonym Fork)
 ## Bug Fixes
 
+<<<<<<< HEAD
 - Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
 - Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
+=======
+- Explicit on-chain sends now return a transaction ID only after the configured backend accepts
+  the transaction, with distinct errors for rejection, failure, and timeout.
+- Electrum transaction rejections are now logged as failures instead of successful broadcasts.
+>>>>>>> 6967d92 (docs: place broadcast fixes in current changelog)
 - Add keep consumer rules for JNA types UniFFI needs under R8.
 
 # 0.7.0-rc.64 (Synonym Fork)
@@ -83,9 +89,6 @@
 
 ## Synonym Fork Additions
 
-- Explicit on-chain sends now return a transaction ID only after the configured backend accepts
-  the transaction, with distinct errors for rejection, failure, and timeout.
-- Electrum transaction rejections are now logged as failures instead of successful broadcasts.
 - Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.
   Stale channel-monitor mismatches now fail closed with `BuildError::DangerousValue`.
   Lightning crates come from crates.io `0.2.0` again.
