@@ -98,10 +98,9 @@ fn validate_derivation_range(start_index: u32, count: u32) -> Result<(), Error> 
 fn backend_observed_txids(update: &Update) -> HashSet<Txid> {
 	update
 		.tx_update
-		.txs
+		.anchors
 		.iter()
-		.map(|tx| tx.compute_txid())
-		.chain(update.tx_update.anchors.iter().map(|(_, txid)| *txid))
+		.map(|(_, txid)| *txid)
 		.chain(update.tx_update.seen_ats.iter().map(|(txid, _)| *txid))
 		.collect()
 }
