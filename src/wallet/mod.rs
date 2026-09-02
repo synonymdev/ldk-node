@@ -110,6 +110,13 @@ fn additional_input_weight(utxos: &[UtxoPsbtInfo]) -> Result<Weight, Error> {
 	Ok(Weight::from_wu(total))
 }
 
+fn checked_sum<I>(values: I) -> Result<u64, Error>
+where
+	I: IntoIterator<Item = u64>,
+{
+	values.into_iter().try_fold(0, u64::checked_add).ok_or(Error::InsufficientFunds)
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum OnchainSendAmount {
 	ExactRetainingReserve { amount_sats: u64, cur_anchor_reserve_sats: u64 },
@@ -1530,11 +1537,12 @@ impl Wallet {
 			}
 
 			// Calculate total value of selected UTXOs
-			let selected_value: u64 = all_utxos
-				.iter()
-				.filter(|u| outpoints.contains(&u.outpoint))
-				.map(|u| u.txout.value.to_sat())
-				.sum();
+			let selected_value = checked_sum(
+				all_utxos
+					.iter()
+					.filter(|u| outpoints.contains(&u.outpoint))
+					.map(|u| u.txout.value.to_sat()),
+			)?;
 
 			// No fee-buffer precheck here: the transaction builder below charges
 			// for the exact selected inputs and the actual recipient output, and
@@ -2395,7 +2403,7 @@ impl ChangeDestinationSource for WalletKeysManager {
 #[cfg(test)]
 mod tests {
 	use super::{
-		additional_input_weight, map_wallet_account_error, validate_derivation_index,
+		additional_input_weight, checked_sum, map_wallet_account_error, validate_derivation_index,
 		validate_derivation_range, BIP32_MAX_NORMAL_INDEX, MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
 	use crate::config::{AddressType, OnchainWalletAccount};
@@ -2470,5 +2478,10 @@ mod tests {
 			additional_input_weight(&[utxo]).unwrap(),
 			TxIn::default().segwit_weight() + satisfaction_weight
 		);
+	}
+
+	#[test]
+	fn checked_sum_rejects_overflow() {
+		assert_eq!(checked_sum([u64::MAX, 1]), Err(Error::InsufficientFunds));
 	}
 }

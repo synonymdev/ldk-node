@@ -14,12 +14,12 @@ use std::hash::Hash;
 #[allow(deprecated)]
 use bdk_wallet::coin_selection::CoinSelectionAlgorithm as BdkCoinSelectionAlgorithm;
 use bdk_wallet::coin_selection::{
-	BranchAndBoundCoinSelection, Excess, LargestFirstCoinSelection, OldestFirstCoinSelection,
+	BranchAndBoundCoinSelection, LargestFirstCoinSelection, OldestFirstCoinSelection,
 	SingleRandomDraw,
 };
 use bdk_wallet::{LocalOutput, PersistedWallet, WalletPersister, WeightedUtxo};
 use bip39::rand::rngs::OsRng;
-use bitcoin::{psbt, Amount, FeeRate, OutPoint, Script, ScriptBuf, Weight};
+use bitcoin::{psbt, Amount, FeeRate, OutPoint, Script, ScriptBuf, TxOut, Weight};
 
 use crate::types::{CoinSelectionAlgorithm, Error, UtxoPsbtInfo};
 
@@ -39,13 +39,15 @@ pub const DUST_LIMIT_SATS: u64 = 546;
 /// the fee for this fixed overhead. See
 /// https://github.com/synonymdev/ldk-node/issues/104.
 ///
-/// Breakdown (conservative for the largest supported standard recipient
-/// outputs, P2TR and P2WSH):
+/// When the recipient script is available, its exact serialized output weight
+/// is used. APIs without a recipient retain the conservative standard-output
+/// allowance below.
 /// - tx overhead: 4 (version) + 2 (marker/flag) + ~3 (varints) + 4 (locktime) ~ 13 vB
 /// - recipient output: 43 vB (P2TR/P2WSH)
 ///
 /// Total ~56 vB = 224 WU.
-const BASE_TX_WEIGHT: Weight = Weight::from_wu(224);
+const TX_ENVELOPE_WEIGHT: Weight = Weight::from_wu(42);
+const CONSERVATIVE_PAYMENT_OVERHEAD: Weight = Weight::from_wu(224);
 
 /// Calculate the satisfaction weight for a UTXO based on its script type.
 pub fn calculate_utxo_weight(script_pubkey: &ScriptBuf) -> Weight {
@@ -182,27 +184,27 @@ pub fn add_utxos_to_tx_builder<Cs>(
 	Ok(())
 }
 
+pub(crate) struct SelectionRequest<'a, K, P> {
+	pub(crate) target_amount: u64,
+	pub(crate) available_utxos: Vec<LocalOutput>,
+	pub(crate) fee_rate: FeeRate,
+	pub(crate) algorithm: CoinSelectionAlgorithm,
+	pub(crate) drain_script: &'a Script,
+	pub(crate) excluded_outpoints: &'a [OutPoint],
+	pub(crate) wallets: &'a HashMap<K, PersistedWallet<P>>,
+	pub(crate) recipient_script: Option<&'a Script>,
+	pub(crate) include_payment_overhead: bool,
+}
+
 /// Run coin selection across UTXOs from any wallet.
-#[allow(clippy::too_many_arguments)]
-pub fn select_utxos_with_algorithm<K, P>(
-	target_amount: u64, available_utxos: Vec<LocalOutput>, fee_rate: FeeRate,
-	algorithm: CoinSelectionAlgorithm, drain_script: &Script, excluded_outpoints: &[OutPoint],
-	wallets: &HashMap<K, PersistedWallet<P>>,
+pub(crate) fn select_utxos_with_algorithm<K, P>(
+	request: SelectionRequest<'_, K, P>,
 ) -> Result<Vec<OutPoint>, Error>
 where
 	K: Eq + Hash + Copy + Debug,
 	P: WalletPersister,
 {
-	select_utxos_with_algorithm_inner(
-		target_amount,
-		available_utxos,
-		fee_rate,
-		algorithm,
-		drain_script,
-		excluded_outpoints,
-		wallets,
-		true,
-	)
+	select_utxos_with_algorithm_inner(request)
 }
 
 /// Run coin selection for a precomputed fee deficit, without adding payment
@@ -216,7 +218,7 @@ where
 	K: Eq + Hash + Copy + Debug,
 	P: WalletPersister,
 {
-	select_utxos_with_algorithm_inner(
+	select_utxos_with_algorithm_inner(SelectionRequest {
 		target_amount,
 		available_utxos,
 		fee_rate,
@@ -224,19 +226,29 @@ where
 		drain_script,
 		excluded_outpoints,
 		wallets,
-		false,
-	)
+		recipient_script: None,
+		include_payment_overhead: false,
+	})
 }
 
 fn select_utxos_with_algorithm_inner<K, P>(
-	target_amount: u64, available_utxos: Vec<LocalOutput>, fee_rate: FeeRate,
-	algorithm: CoinSelectionAlgorithm, drain_script: &Script, excluded_outpoints: &[OutPoint],
-	wallets: &HashMap<K, PersistedWallet<P>>, include_base_tx_overhead: bool,
+	request: SelectionRequest<'_, K, P>,
 ) -> Result<Vec<OutPoint>, Error>
 where
 	K: Eq + Hash + Copy + Debug,
 	P: WalletPersister,
 {
+	let SelectionRequest {
+		target_amount,
+		available_utxos,
+		fee_rate,
+		algorithm,
+		drain_script,
+		excluded_outpoints,
+		wallets,
+		recipient_script,
+		include_payment_overhead,
+	} = request;
 	let safe_utxos: Vec<LocalOutput> = available_utxos
 		.into_iter()
 		.filter(|utxo| !excluded_outpoints.contains(&utxo.outpoint))
@@ -260,14 +272,14 @@ where
 		})
 		.collect();
 
-	// Inflate the target by the fee for the fixed transaction overhead
-	// (recipient output + version/locktime/varints), which BDK's coin
-	// selection does not account for but the transaction builder charges.
-	// Without this, a changeless BranchAndBound selection can be accepted here
-	// yet rejected by the builder as insufficient. See issue #104.
-	let target = if include_base_tx_overhead {
-		let base_fee = fee_rate.fee_wu(BASE_TX_WEIGHT).ok_or(Error::InvalidFeeRate)?;
-		Amount::from_sat(target_amount).checked_add(base_fee).ok_or(Error::InvalidFeeRate)?
+	// BDK's coin selection accounts for input fees, while the transaction
+	// builder also charges the fixed transaction envelope and recipient output.
+	let target = if include_payment_overhead {
+		let payment_overhead = recipient_script
+			.map(|script| TX_ENVELOPE_WEIGHT + recipient_output_weight(script))
+			.unwrap_or(CONSERVATIVE_PAYMENT_OVERHEAD);
+		let base_fee = fee_rate.fee_wu(payment_overhead).ok_or(Error::InvalidFeeRate)?;
+		Amount::from_sat(target_amount).checked_add(base_fee).ok_or(Error::InsufficientFunds)?
 	} else {
 		Amount::from_sat(target_amount)
 	};
@@ -314,12 +326,6 @@ where
 		Error::CoinSelectionFailed
 	})?;
 
-	if let Excess::Change { amount, .. } = result.excess {
-		if amount.to_sat() > 0 && amount.to_sat() < DUST_LIMIT_SATS {
-			return Err(Error::CoinSelectionFailed);
-		}
-	}
-
 	let selected_outputs: Vec<LocalOutput> = result
 		.selected
 		.into_iter()
@@ -336,4 +342,8 @@ where
 		target_amount,
 	);
 	Ok(selected_outputs.into_iter().map(|u| u.outpoint).collect())
+}
+
+fn recipient_output_weight(recipient_script: &Script) -> Weight {
+	TxOut { value: Amount::ZERO, script_pubkey: recipient_script.to_owned() }.weight()
 }

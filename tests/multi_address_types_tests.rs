@@ -2563,6 +2563,7 @@ mod coin_selection {
 	use electrum_client::ElectrumApi;
 	use ldk_node::bitcoin::Amount;
 	use ldk_node::config::AddressType;
+	use ldk_node::NodeError;
 	use serde_json::{json, Value};
 
 	use crate::common::{
@@ -2571,7 +2572,7 @@ mod coin_selection {
 	};
 	use crate::helpers::{
 		fund_and_sync, fund_multiple_and_sync, fund_peer_node_and_sync, node_config,
-		test_recipient, CHANNEL_PEER_FUNDING_SATS,
+		test_p2tr_recipient, test_recipient, CHANNEL_PEER_FUNDING_SATS,
 	};
 
 	// --- API & fee calculation ---
@@ -2927,12 +2928,22 @@ mod coin_selection {
 		for (node, algorithm) in nodes.iter().zip(algorithms.iter()) {
 			let selected = node
 				.onchain_payment()
-				.select_utxos_with_algorithm(target_amount_sats, Some(fee_rate), *algorithm, None)
+				.select_utxos_with_algorithm(
+					target_amount_sats,
+					Some(fee_rate.clone()),
+					*algorithm,
+					None,
+				)
 				.unwrap_or_else(|e| panic!("{algorithm:?} selection failed: {e:?}"));
 
 			let txid = node
 				.onchain_payment()
-				.send_to_address(&recipient, target_amount_sats, Some(fee_rate), Some(selected))
+				.send_to_address(
+					&recipient,
+					target_amount_sats,
+					Some(fee_rate.clone()),
+					Some(selected),
+				)
 				.unwrap_or_else(|e| {
 					panic!("{algorithm:?} selection rejected by send_to_address: {e:?}")
 				});
@@ -2972,7 +2983,7 @@ mod coin_selection {
 				Some(utxos),
 			)
 			.unwrap_err();
-		assert!(matches!(err, ldk_node::Error::InsufficientFunds), "unexpected error: {err:?}");
+		assert!(matches!(err, NodeError::InsufficientFunds), "unexpected error: {err:?}");
 
 		node.stop().unwrap();
 	}
