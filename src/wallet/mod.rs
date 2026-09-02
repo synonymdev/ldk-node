@@ -1669,13 +1669,22 @@ impl Wallet {
 			return Err(Error::PersistenceFailed);
 		}
 		let confirmed_txid = intent.active_txid();
-		let locked_wallet = self.inner.lock().unwrap();
+		let mut locked_wallet = self.inner.lock().unwrap();
 		if !locked_wallet.transaction_confirmations().contains_key(&confirmed_txid) {
 			drop(locked_wallet);
 			intent.state = BroadcastIntentState::Observing;
 			self.write_broadcast_intent(&intent)?;
 			return self.complete_observation(intent_key, intent);
 		}
+		locked_wallet.persist_all().map_err(|e| {
+			log_error!(
+				self.logger,
+				"Failed to durably persist confirmed broadcast {}: {}",
+				confirmed_txid,
+				e
+			);
+			Error::PersistenceFailed
+		})?;
 		self.update_payment_store(&locked_wallet)?;
 		drop(locked_wallet);
 		if self.payment_store.get(&PaymentId(confirmed_txid.to_byte_array())).is_none() {
@@ -3497,9 +3506,9 @@ mod tests {
 	use crate::builder::NodeBuilder;
 	use crate::config::{AddressType, OnchainWalletAccount};
 	use crate::io::{
-		test_utils::InMemoryStore, ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
-		ONCHAIN_BROADCAST_INTENT_SECONDARY_NAMESPACE, PAYMENT_INFO_PERSISTENCE_PRIMARY_NAMESPACE,
-		PAYMENT_INFO_PERSISTENCE_SECONDARY_NAMESPACE,
+		test_utils::InMemoryStore, BDK_WALLET_TX_GRAPH_PRIMARY_NAMESPACE,
+		ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE, ONCHAIN_BROADCAST_INTENT_SECONDARY_NAMESPACE,
+		PAYMENT_INFO_PERSISTENCE_PRIMARY_NAMESPACE, PAYMENT_INFO_PERSISTENCE_SECONDARY_NAMESPACE,
 	};
 	use crate::payment::{
 		ConfirmationStatus, PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus,
@@ -4238,6 +4247,65 @@ mod tests {
 		assert!(node.wallet.read_all_broadcast_intents().unwrap().is_empty());
 		assert!(node.payment(&PaymentId(original_txid.to_byte_array())).is_none());
 		assert!(node.payment(&PaymentId(replacement_txid.to_byte_array())).is_some());
+	}
+
+	#[test]
+	fn confirmation_transition_survives_bdk_persistence_failure_and_restart() {
+		let concrete_store = Arc::new(NamespaceFailStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = replacement_test_node(Arc::clone(&store));
+		let script_pubkey = node.onchain_payment().new_address().unwrap().script_pubkey();
+		let mut original = replacement_test_transaction(36);
+		original.input[0].previous_output.vout = 1;
+		original
+			.output
+			.push(TxOut { value: Amount::from_sat(10_000), script_pubkey: script_pubkey.clone() });
+		let mut replacement = replacement_test_transaction(37);
+		replacement.input[0].previous_output.vout = 1;
+		replacement.output.push(TxOut { value: Amount::from_sat(9_000), script_pubkey });
+		let original_txid = original.compute_txid();
+		let replacement_txid = replacement.compute_txid();
+		let intent = BroadcastIntent::replacement(None, original, replacement.clone()).unwrap();
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+		node.wallet.clear_broadcast_intent(&replacement_txid).unwrap();
+		node.payment_store.insert(replacement_test_payment(replacement_txid)).unwrap();
+		node.wallet.resolve_broadcast_intents([(original_txid, original_txid, false)]).unwrap();
+		assert!(node.payment(&PaymentId(replacement_txid.to_byte_array())).is_none());
+
+		node.wallet
+			.stage_broadcast_resolutions(&[(original_txid, replacement_txid, true)])
+			.unwrap();
+		let block = replacement_test_confirmation_block(replacement.clone());
+		concrete_store.fail_next_write_in(BDK_WALLET_TX_GRAPH_PRIMARY_NAMESPACE);
+		assert!(node.wallet.inner.lock().unwrap().apply_block(&block, 1).is_err());
+		assert!(node
+			.wallet
+			.inner
+			.lock()
+			.unwrap()
+			.transaction_confirmations()
+			.contains_key(&replacement_txid));
+
+		concrete_store.fail_next_write_in(BDK_WALLET_TX_GRAPH_PRIMARY_NAMESPACE);
+		assert_eq!(node.wallet.complete_broadcast_transitions(), Err(Error::PersistenceFailed));
+		let (_, confirming_intent) =
+			node.wallet.find_broadcast_intent_by_active_txid(&replacement_txid).unwrap();
+		assert_eq!(confirming_intent.state, BroadcastIntentState::Confirming);
+		assert!(node.payment(&PaymentId(replacement_txid.to_byte_array())).is_none());
+		drop(node);
+
+		let restarted = replacement_test_node(store);
+		let (_, accepted_intent) =
+			restarted.wallet.find_broadcast_intent_by_active_txid(&replacement_txid).unwrap();
+		assert_eq!(accepted_intent.state, BroadcastIntentState::Accepted);
+		assert_eq!(accepted_intent.transactions.len(), 2);
+		let payment = restarted.payment(&PaymentId(replacement_txid.to_byte_array())).unwrap();
+		assert!(matches!(
+			payment.kind,
+			PaymentKind::Onchain { txid, status: ConfirmationStatus::Unconfirmed }
+				if txid == replacement_txid
+		));
+		assert!(restarted.payment(&PaymentId(original_txid.to_byte_array())).is_none());
 	}
 
 	#[test]
