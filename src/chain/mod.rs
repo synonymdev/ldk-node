@@ -1295,7 +1295,7 @@ impl ChainSource {
 	pub(crate) async fn continuously_process_broadcast_queue(
 		&self, mut stop_tx_bcast_receiver: tokio::sync::watch::Receiver<()>,
 	) {
-		let mut receiver = self.tx_broadcaster.get_broadcast_queue().await;
+		let mut receivers = self.tx_broadcaster.get_broadcast_queue_receivers().await;
 		loop {
 			let tx_bcast_logger = Arc::clone(&self.logger);
 			tokio::select! {
@@ -1306,7 +1306,7 @@ impl ChainSource {
 					);
 					return;
 				}
-				Some(request) = receiver.recv() => {
+				Some(request) = receivers.recv() => {
 					let package = request.package;
 					let result_sender = request.result_sender;
 					let result = match &self.kind {
