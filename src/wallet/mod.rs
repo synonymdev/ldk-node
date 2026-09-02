@@ -1444,11 +1444,10 @@ impl Wallet {
 			.find_broadcast_intent_by_active_txid(replacement_txid)
 			.ok_or(Error::TransactionNotFound)?;
 		let rejected_tx = intent.transactions.pop().ok_or(Error::TransactionNotFound)?;
-		let restored_tx = intent.has_pending_transaction().then(|| {
-			intent.transactions.last().expect("a pending broadcast intent is non-empty").clone()
-		});
+		let predecessor_tx = intent.transactions.last().cloned();
+		let restored_pending = intent.has_pending_transaction();
 
-		if restored_tx.is_some() {
+		if restored_pending {
 			self.write_broadcast_intent(&intent)?;
 		}
 
@@ -1465,11 +1464,12 @@ impl Wallet {
 				Error::PersistenceFailed
 			},
 		)?;
-		if let Some(restored_tx) = restored_tx {
-			let restored_txid = restored_tx.compute_txid();
+		if let Some(predecessor_tx) = predecessor_tx {
+			let restored_txid = predecessor_tx.compute_txid();
 			let restored_at = Self::next_broadcast_timestamp(&locked_wallet, &[restored_txid])?;
-			locked_wallet.apply_mempool_txs(vec![(restored_tx, restored_at)], Vec::new()).map_err(
-				|e| {
+			locked_wallet
+				.apply_mempool_txs(vec![(predecessor_tx, restored_at)], Vec::new())
+				.map_err(|e| {
 					log_error!(
 						self.logger,
 						"Failed to restore superseded transaction {}: {}",
@@ -1477,13 +1477,12 @@ impl Wallet {
 						e
 					);
 					Error::PersistenceFailed
-				},
-			)?;
+				})?;
 			self.update_payment_store(&locked_wallet)?;
 		}
 		drop(locked_wallet);
 		self.payment_store.remove(&PaymentId(replacement_txid.to_byte_array()))?;
-		if !intent.has_pending_transaction() {
+		if !restored_pending {
 			self.remove_broadcast_intent(&intent_key)?;
 		}
 		Ok(())
@@ -1675,6 +1674,25 @@ impl Wallet {
 			}
 		}
 
+		// Only the canonical member of an unresolved replacement chain is user-visible. Keeping the
+		// other raw transactions in the intent is necessary for backend reconciliation, but keeping
+		// their payment records would expose one logical payment more than once.
+		self.remove_noncanonical_broadcast_payments(&seen_txids)?;
+
+		Ok(())
+	}
+
+	fn remove_noncanonical_broadcast_payments(
+		&self, canonical_txids: &HashSet<Txid>,
+	) -> Result<(), Error> {
+		for (_, intent) in self.read_all_broadcast_intents()? {
+			for tx in intent.transactions {
+				let txid = tx.compute_txid();
+				if !canonical_txids.contains(&txid) {
+					self.payment_store.remove(&PaymentId(txid.to_byte_array()))?;
+				}
+			}
+		}
 		Ok(())
 	}
 
@@ -3026,16 +3044,23 @@ mod tests {
 	use crate::config::{AddressType, OnchainWalletAccount};
 	use crate::io::{
 		test_utils::InMemoryStore, ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
-		ONCHAIN_BROADCAST_INTENT_SECONDARY_NAMESPACE,
+		ONCHAIN_BROADCAST_INTENT_SECONDARY_NAMESPACE, PAYMENT_INFO_PERSISTENCE_PRIMARY_NAMESPACE,
+		PAYMENT_INFO_PERSISTENCE_SECONDARY_NAMESPACE,
+	};
+	use crate::payment::{
+		ConfirmationStatus, PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus,
 	};
 	use crate::types::DynStore;
 	use crate::Error;
 	use bdk_wallet_aggregate::UtxoPsbtInfo;
 	use bitcoin::absolute::LockTime;
 	use bitcoin::consensus::serialize;
+	use bitcoin::hashes::Hash;
 	use bitcoin::transaction::Version;
 	use bitcoin::{psbt, Network, OutPoint, Transaction, TxIn, Weight};
+	use lightning::ln::channelmanager::PaymentId;
 	use lightning::util::persist::KVStoreSync;
+	use std::collections::HashSet;
 	use std::sync::Arc;
 
 	fn replacement_test_transaction(lock_time: u32) -> Transaction {
@@ -3054,6 +3079,17 @@ mod tests {
 		builder.set_entropy_seed_bytes([44u8; 64]);
 		builder.set_log_facade_logger();
 		builder.build_with_store(store).unwrap()
+	}
+
+	fn replacement_test_payment(txid: bitcoin::Txid) -> PaymentDetails {
+		PaymentDetails::new(
+			PaymentId(txid.to_byte_array()),
+			PaymentKind::Onchain { txid, status: ConfirmationStatus::Unconfirmed },
+			Some(1_000),
+			Some(100),
+			PaymentDirection::Outbound,
+			PaymentStatus::Pending,
+		)
 	}
 
 	#[test]
@@ -3215,6 +3251,43 @@ mod tests {
 		node.wallet.reject_rbf_broadcast(&replacement_txid).unwrap();
 
 		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+	}
+
+	#[test]
+	fn rbf_payment_history_persists_only_the_canonical_replacement() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(Arc::clone(&store));
+		let original = replacement_test_transaction(12);
+		let replacement = replacement_test_transaction(13);
+		let original_txid = original.compute_txid();
+		let replacement_txid = replacement.compute_txid();
+		let intent = BroadcastIntent::replacement(None, original, replacement).unwrap();
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+		node.payment_store.insert(replacement_test_payment(original_txid)).unwrap();
+		node.payment_store.insert(replacement_test_payment(replacement_txid)).unwrap();
+
+		node.wallet
+			.remove_noncanonical_broadcast_payments(&HashSet::from([replacement_txid]))
+			.unwrap();
+
+		assert!(node.payment(&PaymentId(original_txid.to_byte_array())).is_none());
+		assert!(node.payment(&PaymentId(replacement_txid.to_byte_array())).is_some());
+		let original_key = crate::hex_utils::to_string(&original_txid.to_byte_array());
+		let replacement_key = crate::hex_utils::to_string(&replacement_txid.to_byte_array());
+		assert!(KVStoreSync::read(
+			&*store,
+			PAYMENT_INFO_PERSISTENCE_PRIMARY_NAMESPACE,
+			PAYMENT_INFO_PERSISTENCE_SECONDARY_NAMESPACE,
+			&original_key
+		)
+		.is_err());
+		assert!(KVStoreSync::read(
+			&*store,
+			PAYMENT_INFO_PERSISTENCE_PRIMARY_NAMESPACE,
+			PAYMENT_INFO_PERSISTENCE_SECONDARY_NAMESPACE,
+			&replacement_key
+		)
+		.is_ok());
 	}
 
 	#[test]
