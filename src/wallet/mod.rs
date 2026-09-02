@@ -1243,8 +1243,7 @@ impl Wallet {
 		}
 		let txids = intent.transactions.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
 		let mut locked_wallet = self.inner.lock().unwrap();
-		let abandoned_at = Self::next_broadcast_timestamp(&locked_wallet, &txids)?;
-		locked_wallet.abandon_txs(&intent.transactions, abandoned_at).map_err(|e| {
+		locked_wallet.abandon_txs(&intent.transactions).map_err(|e| {
 			log_error!(
 				self.logger,
 				"Failed to abandon pending transaction {}: {}",
@@ -1909,18 +1908,10 @@ impl Wallet {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		let lineage_txids =
 			intent.transactions.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
-		let rejected_at = Self::next_broadcast_timestamp(&locked_wallet, &lineage_txids)?;
-		locked_wallet.abandon_txs(std::slice::from_ref(&rejected_tx), rejected_at).map_err(
-			|e| {
-				log_error!(
-					self.logger,
-					"Failed to reject RBF replacement {}: {}",
-					rejected_txid,
-					e
-				);
-				Error::PersistenceFailed
-			},
-		)?;
+		locked_wallet.abandon_txs(std::slice::from_ref(&rejected_tx)).map_err(|e| {
+			log_error!(self.logger, "Failed to reject RBF replacement {}: {}", rejected_txid, e);
+			Error::PersistenceFailed
+		})?;
 		let restored_txid = predecessor_tx.compute_txid();
 		let restored_at = Self::next_broadcast_timestamp(&locked_wallet, &lineage_txids)?;
 		locked_wallet.apply_mempool_txs(vec![(predecessor_tx, restored_at)], Vec::new()).map_err(
