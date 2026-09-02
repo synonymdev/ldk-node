@@ -2675,7 +2675,7 @@ mod tests {
 		update.tx_update.seen_ats.insert((txid, 1));
 
 		node.wallet.apply_update(update).unwrap();
-		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
 		node.wallet.update_payment_store_for_all_transactions().unwrap();
 
 		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());

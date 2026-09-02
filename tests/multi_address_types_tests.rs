@@ -1887,7 +1887,6 @@ mod rbf {
 
 		wait_for_tx(&electrsd.client, initial_txid).await;
 		node.sync_wallets().unwrap();
-		std::thread::sleep(std::time::Duration::from_secs(1));
 
 		let total_before_rbf = node.list_balances().total_onchain_balance_sats;
 
