@@ -1114,6 +1114,7 @@ impl Filter for ElectrumRuntimeClient {
 
 #[cfg(test)]
 mod tests {
+	use std::io::{BufRead, BufReader, Write};
 	use std::net::TcpListener;
 	use std::panic::{catch_unwind, AssertUnwindSafe};
 	use std::process::Command;
@@ -1123,6 +1124,9 @@ mod tests {
 	use std::time::Instant;
 
 	use bitcoin::blockdata::constants::genesis_block;
+
+	use bitcoin::absolute::LockTime;
+	use bitcoin::transaction::Version;
 
 	use super::*;
 	use crate::runtime::Runtime;
@@ -1253,6 +1257,49 @@ mod tests {
 			),
 			Err(TxBroadcastError::Failed)
 		);
+	}
+
+	#[test]
+	fn electrum_protocol_rejection_propagates_through_broadcast_worker() {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let server_url = format!("tcp://{}", listener.local_addr().unwrap());
+		let server_thread = thread::spawn(move || {
+			let (broadcast_stream, _) = listener.accept().unwrap();
+			let (_sync_stream, _) = listener.accept().unwrap();
+			let mut reader = BufReader::new(broadcast_stream.try_clone().unwrap());
+			let mut request_line = String::new();
+			reader.read_line(&mut request_line).unwrap();
+			let request: serde_json::Value = serde_json::from_str(&request_line).unwrap();
+			assert_eq!(request["method"], "blockchain.transaction.broadcast");
+
+			let response = serde_json::json!({
+				"jsonrpc": "2.0",
+				"id": request["id"],
+				"error": { "code": -26, "message": "non-final" },
+			});
+			let mut response_stream = broadcast_stream;
+			writeln!(response_stream, "{}", response).unwrap();
+		});
+
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
+		let client = ElectrumRuntimeClient::new(
+			server_url,
+			runtime.handle().clone(),
+			Arc::new(Config::default()),
+			logger,
+			1,
+		)
+		.unwrap();
+		let tx = Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::ZERO,
+			input: vec![],
+			output: vec![],
+		};
+
+		assert_eq!(runtime.block_on(client.broadcast(tx)), Err(TxBroadcastError::Rejected));
+		server_thread.join().unwrap();
 	}
 
 	#[test]
