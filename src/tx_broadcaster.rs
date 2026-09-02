@@ -8,7 +8,7 @@
 use std::ops::Deref;
 use std::time::Duration;
 
-use bitcoin::Transaction;
+use bitcoin::{Transaction, Txid};
 use lightning::chain::chaininterface::BroadcasterInterface;
 use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
 
@@ -23,6 +23,68 @@ pub(crate) enum TxBroadcastError {
 	Rejected,
 	Failed,
 	Timeout,
+}
+
+pub(crate) fn classify_rpc_broadcast_error(
+	code: Option<i64>, message: &str,
+) -> Result<(), TxBroadcastError> {
+	let normalized_message = message.to_ascii_lowercase();
+	let compact_message = normalized_message
+		.chars()
+		.filter(|character| !character.is_ascii_whitespace())
+		.collect::<String>();
+	let contains_code = |candidate| {
+		code == Some(candidate)
+			|| compact_message.contains(&format!("\"code\":{}", candidate))
+			|| normalized_message.contains(&format!("rpc error {}", candidate))
+	};
+
+	if contains_code(-27)
+		|| [
+			"already in block chain",
+			"already in blockchain",
+			"already in mempool",
+			"transaction already known",
+			"txn-already-known",
+		]
+		.iter()
+		.any(|marker| normalized_message.contains(marker))
+	{
+		return Ok(());
+	}
+
+	if contains_code(-25)
+		|| contains_code(-26)
+		|| [
+			"bad-txns-",
+			"dust",
+			"insufficient fee",
+			"mandatory-script-verify-flag-failed",
+			"mempool min fee not met",
+			"min relay fee not met",
+			"missing inputs",
+			"non-bip68-final",
+			"non-final",
+			"non-mandatory-script-verify-flag",
+			"txn-mempool-conflict",
+		]
+		.iter()
+		.any(|marker| normalized_message.contains(marker))
+	{
+		return Err(TxBroadcastError::Rejected);
+	}
+
+	Err(TxBroadcastError::Failed)
+}
+
+pub(crate) fn validate_broadcast_txid(
+	expected_txid: Txid, returned_txid: Txid,
+) -> Result<(), TxBroadcastError> {
+	if returned_txid == expected_txid {
+		Ok(())
+	} else {
+		Err(TxBroadcastError::Failed)
+	}
 }
 
 impl From<TxBroadcastError> for Error {
@@ -108,7 +170,7 @@ mod tests {
 	use lightning::chain::chaininterface::BroadcasterInterface;
 	use lightning::util::test_utils::TestLogger;
 
-	use super::{TransactionBroadcaster, TxBroadcastError};
+	use super::{classify_rpc_broadcast_error, TransactionBroadcaster, TxBroadcastError};
 	use crate::Error;
 
 	fn test_transaction() -> Transaction {
@@ -118,6 +180,26 @@ mod tests {
 			input: vec![],
 			output: vec![],
 		}
+	}
+
+	#[test]
+	fn rpc_broadcast_errors_distinguish_known_rejections_and_ambiguous_failures() {
+		assert_eq!(
+			classify_rpc_broadcast_error(Some(-27), "Transaction already in block chain"),
+			Ok(())
+		);
+		assert_eq!(
+			classify_rpc_broadcast_error(None, r#"sendrawtransaction: {"code": -26}"#),
+			Err(TxBroadcastError::Rejected)
+		);
+		assert_eq!(
+			classify_rpc_broadcast_error(None, "non-final"),
+			Err(TxBroadcastError::Rejected)
+		);
+		assert_eq!(
+			classify_rpc_broadcast_error(Some(-28), "Loading block index"),
+			Err(TxBroadcastError::Failed)
+		);
 	}
 
 	#[tokio::test]
