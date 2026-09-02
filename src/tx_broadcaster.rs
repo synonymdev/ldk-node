@@ -16,7 +16,7 @@ use crate::config::TX_BROADCAST_TIMEOUT_SECS;
 use crate::error::Error;
 use crate::logger::{log_error, LdkLogger};
 
-const BCAST_PACKAGE_QUEUE_SIZE: usize = 50;
+const EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE: usize = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TxBroadcastError {
@@ -102,12 +102,30 @@ pub(crate) struct BroadcastRequest {
 	pub(crate) result_sender: Option<oneshot::Sender<Result<(), TxBroadcastError>>>,
 }
 
+/// Separate receivers for safety-critical LDK traffic and bounded explicit user sends.
+pub(crate) struct BroadcastQueueReceivers {
+	ldk_receiver: mpsc::UnboundedReceiver<BroadcastRequest>,
+	explicit_receiver: mpsc::Receiver<BroadcastRequest>,
+}
+
+impl BroadcastQueueReceivers {
+	/// Returns the next request, prioritizing LDK traffic when both queues are ready.
+	pub(crate) async fn recv(&mut self) -> Option<BroadcastRequest> {
+		tokio::select! {
+			biased;
+			request = self.ldk_receiver.recv() => request,
+			request = self.explicit_receiver.recv() => request,
+		}
+	}
+}
+
 pub(crate) struct TransactionBroadcaster<L: Deref>
 where
 	L::Target: LdkLogger,
 {
-	queue_sender: mpsc::Sender<BroadcastRequest>,
-	queue_receiver: Mutex<mpsc::Receiver<BroadcastRequest>>,
+	ldk_sender: mpsc::UnboundedSender<BroadcastRequest>,
+	explicit_sender: mpsc::Sender<BroadcastRequest>,
+	queue_receivers: Mutex<BroadcastQueueReceivers>,
 	logger: L,
 }
 
@@ -116,14 +134,17 @@ where
 	L::Target: LdkLogger,
 {
 	pub(crate) fn new(logger: L) -> Self {
-		let (queue_sender, queue_receiver) = mpsc::channel(BCAST_PACKAGE_QUEUE_SIZE);
-		Self { queue_sender, queue_receiver: Mutex::new(queue_receiver), logger }
+		let (ldk_sender, ldk_receiver) = mpsc::unbounded_channel();
+		let (explicit_sender, explicit_receiver) = mpsc::channel(EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE);
+		let queue_receivers =
+			Mutex::new(BroadcastQueueReceivers { ldk_receiver, explicit_receiver });
+		Self { ldk_sender, explicit_sender, queue_receivers, logger }
 	}
 
-	pub(crate) async fn get_broadcast_queue(
+	pub(crate) async fn get_broadcast_queue_receivers(
 		&self,
-	) -> MutexGuard<'_, mpsc::Receiver<BroadcastRequest>> {
-		self.queue_receiver.lock().await
+	) -> MutexGuard<'_, BroadcastQueueReceivers> {
+		self.queue_receivers.lock().await
 	}
 
 	pub(crate) async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), Error> {
@@ -136,12 +157,11 @@ where
 	) -> Result<(), Error> {
 		let (result_sender, result_receiver) = oneshot::channel();
 		let request = BroadcastRequest { package: vec![tx], result_sender: Some(result_sender) };
-		let result = tokio::time::timeout(timeout, async {
-			self.queue_sender.send(request).await.map_err(|_| TxBroadcastError::Failed)?;
-			result_receiver.await.map_err(|_| TxBroadcastError::Failed)?
-		})
-		.await
-		.map_err(|_| TxBroadcastError::Timeout)?;
+		self.explicit_sender.try_send(request).map_err(|_| TxBroadcastError::Failed)?;
+		let result = tokio::time::timeout(timeout, result_receiver)
+			.await
+			.map_err(|_| TxBroadcastError::Timeout)?
+			.map_err(|_| TxBroadcastError::Failed)?;
 		result.map_err(Into::into)
 	}
 }
@@ -153,7 +173,7 @@ where
 	fn broadcast_transactions(&self, txs: &[&Transaction]) {
 		let package = txs.iter().map(|&t| t.clone()).collect::<Vec<Transaction>>();
 		let request = BroadcastRequest { package, result_sender: None };
-		self.queue_sender.try_send(request).unwrap_or_else(|e| {
+		self.ldk_sender.send(request).unwrap_or_else(|e| {
 			log_error!(self.logger, "Failed to broadcast transactions: {}", e);
 		});
 	}
@@ -170,7 +190,10 @@ mod tests {
 	use lightning::chain::chaininterface::BroadcasterInterface;
 	use lightning::util::test_utils::TestLogger;
 
-	use super::{classify_rpc_broadcast_error, TransactionBroadcaster, TxBroadcastError};
+	use super::{
+		classify_rpc_broadcast_error, BroadcastRequest, TransactionBroadcaster, TxBroadcastError,
+		EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE,
+	};
 	use crate::Error;
 
 	fn test_transaction() -> Transaction {
@@ -207,8 +230,8 @@ mod tests {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
 		let broadcast_fut = broadcaster.broadcast_transaction(test_transaction());
 		let process_fut = async {
-			let mut receiver = broadcaster.get_broadcast_queue().await;
-			let request = receiver.recv().await.unwrap();
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
 			request.result_sender.unwrap().send(Ok(())).unwrap();
 		};
 
@@ -221,8 +244,8 @@ mod tests {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
 		let broadcast_fut = broadcaster.broadcast_transaction(test_transaction());
 		let process_fut = async {
-			let mut receiver = broadcaster.get_broadcast_queue().await;
-			let request = receiver.recv().await.unwrap();
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
 			request.result_sender.unwrap().send(Err(TxBroadcastError::Rejected)).unwrap();
 		};
 
@@ -235,8 +258,8 @@ mod tests {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
 		let broadcast_fut = broadcaster.broadcast_transaction(test_transaction());
 		let process_fut = async {
-			let mut receiver = broadcaster.get_broadcast_queue().await;
-			let request = receiver.recv().await.unwrap();
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
 			request.result_sender.unwrap().send(Err(TxBroadcastError::Failed)).unwrap();
 		};
 
@@ -250,8 +273,8 @@ mod tests {
 		let broadcast_fut = broadcaster
 			.broadcast_transaction_with_timeout(test_transaction(), Duration::from_millis(10));
 		let process_fut = async {
-			let mut receiver = broadcaster.get_broadcast_queue().await;
-			let request = receiver.recv().await.unwrap();
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
 			tokio::time::sleep(Duration::from_millis(20)).await;
 			drop(request);
 		};
@@ -266,9 +289,39 @@ mod tests {
 		let tx = test_transaction();
 		broadcaster.broadcast_transactions(&[&tx]);
 
-		let mut receiver = broadcaster.get_broadcast_queue().await;
-		let request = receiver.recv().await.unwrap();
+		let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
 		assert_eq!(request.package, vec![tx]);
+		assert!(request.result_sender.is_none());
+	}
+
+	#[tokio::test]
+	async fn ldk_broadcast_is_not_dropped_when_explicit_queue_is_saturated() {
+		let broadcaster = TransactionBroadcaster::new(Arc::new(TestLogger::new()));
+		for _ in 0..EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE {
+			let (result_sender, _result_receiver) = tokio::sync::oneshot::channel();
+			broadcaster
+				.explicit_sender
+				.try_send(BroadcastRequest {
+					package: vec![test_transaction()],
+					result_sender: Some(result_sender),
+				})
+				.unwrap();
+		}
+
+		assert_eq!(
+			broadcaster
+				.broadcast_transaction_with_timeout(test_transaction(), Duration::from_secs(1))
+				.await,
+			Err(Error::OnchainTxBroadcastFailed)
+		);
+
+		let ldk_tx = test_transaction();
+		broadcaster.broadcast_transactions(&[&ldk_tx]);
+
+		let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		assert_eq!(request.package, vec![ldk_tx]);
 		assert!(request.result_sender.is_none());
 	}
 }
