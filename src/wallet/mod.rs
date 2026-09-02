@@ -1536,26 +1536,12 @@ impl Wallet {
 				.map(|u| u.txout.value.to_sat())
 				.sum();
 
-			// For exact amounts, ensure we have enough value
-			if let OnchainSendAmount::ExactRetainingReserve { amount_sats, .. } = send_amount {
-				// Calculate a fee buffer based on fee rate
-				// Assume a typical tx with 1 input and 2 outputs (~200 vbytes)
-				let typical_tx_weight = Weight::from_vb(200).expect("Valid weight");
-				let fee_buffer =
-					fee_rate.fee_wu(typical_tx_weight).expect("Valid fee calculation").to_sat();
-				// Use at least 1000 sats as minimum buffer
-				let min_fee_buffer = fee_buffer.max(1000);
-				let min_required = amount_sats.saturating_add(min_fee_buffer);
-				if selected_value < min_required {
-					log_error!(
-						self.logger,
-						"Selected UTXOs have insufficient value. Have: {}sats, Need at least: {}sats",
-						selected_value,
-						min_required
-					);
-					return Err(Error::InsufficientFunds);
-				}
-			}
+			// No fee-buffer precheck here: the transaction builder below charges
+			// for the exact selected inputs and the actual recipient output, and
+			// returns `InsufficientFunds` if they cannot fund the payment. A
+			// heuristic estimate (e.g. clamping to a fixed minimum buffer) can
+			// reject selections the builder would accept, see the review
+			// discussion on https://github.com/synonymdev/ldk-node/pull/109.
 
 			log_debug!(
 				self.logger,

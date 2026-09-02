@@ -2938,6 +2938,39 @@ mod coin_selection {
 			node.stop().unwrap();
 		}
 	}
+
+	/// A manually selected UTXO set that cannot cover the amount plus the
+	/// actual transaction fee must be rejected with `InsufficientFunds` by the
+	/// transaction builder, now that the fee-buffer precheck is gone.
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_insufficient_manual_selection_is_rejected() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+
+		let addr = node.onchain_payment().new_address().unwrap();
+		fund_and_sync(&bitcoind, &electrsd, &node, addr, 35_050).await;
+
+		let utxos = node.onchain_payment().list_spendable_outputs().unwrap();
+		assert_eq!(utxos.len(), 1);
+
+		// 35,050 sats covers the 35,000-sat payment but not the fee for
+		// spending the input at this fee rate, so the builder must reject it.
+		let err = node
+			.onchain_payment()
+			.send_to_address(
+				&test_recipient(),
+				35_000,
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(250))),
+				Some(utxos),
+			)
+			.unwrap_err();
+		assert!(matches!(err, ldk_node::Error::InsufficientFunds), "unexpected error: {err:?}");
+
+		node.stop().unwrap();
+	}
 }
 
 // ---------------------------------------------------------------------------
