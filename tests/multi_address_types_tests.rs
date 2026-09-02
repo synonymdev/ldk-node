@@ -38,6 +38,15 @@ mod helpers {
 			.unwrap()
 	}
 
+	/// Standard regtest P2TR recipient address (43-byte output).
+	pub fn test_p2tr_recipient() -> Address {
+		let secp = bitcoin::secp256k1::Secp256k1::new();
+		let secret = bitcoin::secp256k1::SecretKey::from_slice(&[0x01; 32]).unwrap();
+		let keypair = bitcoin::secp256k1::Keypair::from_secret_key(&secp, &secret);
+		let (xonly, _) = keypair.x_only_public_key();
+		Address::p2tr(&secp, xonly, None, bitcoin::Network::Regtest)
+	}
+
 	/// Fund a single address, mine 6 blocks, sync the node, and sleep.
 	pub async fn fund_and_sync(
 		bitcoind: &BitcoinD, electrsd: &ElectrsD, node: &Node, addr: Address, amount: u64,
@@ -2861,16 +2870,20 @@ mod coin_selection {
 	/// `send_to_address` for the same target amount and fee rate, for every
 	/// supported algorithm. Regression test for
 	/// https://github.com/synonymdev/ldk-node/issues/104 (BranchAndBound always failed).
+	///
+	/// Boundary fixture: at 1,000 sat/kwu (1 sat/vB), 10,470 sats covers the
+	/// 10,000-sat target + 1 input fee (271 sats) + 188 WU base fee (188 sats),
+	/// so a 188-WU allowance selects only the 10,470-sat UTXO. However, spending
+	/// 1 P2WPKH input to a 43 vB P2TR output needs 485 sats fee (10,485 total),
+	/// making 10,470 sats insufficient for TxBuilder. The 224-WU allowance
+	/// targets 10,495 sats, correctly forcing selection of the second (500 sat)
+	/// UTXO, which TxBuilder accepts (756 sat fee, 10,756 total needed <= 10,970).
 	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 	async fn test_selected_utxos_are_accepted_by_send_to_address() {
 		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 		let chain_source = TestChainSource::Esplora(&electrsd);
 
-		// The wallet layout from the issue report: 18 P2WPKH UTXOs, 88,900 sats total.
-		let utxo_amounts = [
-			2_000u64, 3_500, 4_200, 5_000, 6_100, 7_800, 2_500, 3_000, 8_900, 4_500, 2_100, 5_500,
-			3_200, 6_700, 9_100, 4_800, 2_700, 7_300,
-		];
+		let utxo_amounts = [10_470u64, 500];
 		let algorithms = [
 			ldk_node::CoinSelectionAlgorithm::BranchAndBound,
 			ldk_node::CoinSelectionAlgorithm::LargestFirst,
@@ -2884,7 +2897,6 @@ mod coin_selection {
 			nodes.push(setup_node(&chain_source, config, None));
 		}
 
-		// Fund every node with the exact UTXO set from the issue in a single transaction.
 		premine_blocks(&bitcoind.client, &electrsd.client).await;
 		let mut amounts = HashMap::<String, f64>::new();
 		for node in &nodes {
@@ -2908,26 +2920,19 @@ mod coin_selection {
 		}
 		std::thread::sleep(std::time::Duration::from_secs(2));
 
-		let target_amount_sats = 35_000;
+		let target_amount_sats = 10_000;
+		let fee_rate = api_fee_rate(FeeRate::from_sat_per_kwu(1_000));
+		let recipient = test_p2tr_recipient();
+
 		for (node, algorithm) in nodes.iter().zip(algorithms.iter()) {
 			let selected = node
 				.onchain_payment()
-				.select_utxos_with_algorithm(
-					target_amount_sats,
-					Some(api_fee_rate(FeeRate::from_sat_per_kwu(250))),
-					*algorithm,
-					None,
-				)
+				.select_utxos_with_algorithm(target_amount_sats, Some(fee_rate), *algorithm, None)
 				.unwrap_or_else(|e| panic!("{algorithm:?} selection failed: {e:?}"));
 
 			let txid = node
 				.onchain_payment()
-				.send_to_address(
-					&test_recipient(),
-					target_amount_sats,
-					Some(api_fee_rate(FeeRate::from_sat_per_kwu(250))),
-					Some(selected),
-				)
+				.send_to_address(&recipient, target_amount_sats, Some(fee_rate), Some(selected))
 				.unwrap_or_else(|e| {
 					panic!("{algorithm:?} selection rejected by send_to_address: {e:?}")
 				});

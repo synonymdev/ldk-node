@@ -2096,14 +2096,19 @@ mod tests {
 	/// The conservative base-overhead allowance (43 vB recipient output) must
 	/// keep selector/builder agreement for the largest standard recipient
 	/// scripts, P2TR and P2WSH, not just P2WPKH.
+	///
+	/// Boundary fixture: at 1,000 sat/kwu (1 sat/vB), 10,470 sats covers the
+	/// 10,000-sat target + 1 input fee (271 sats) + 188 WU base fee (188 sats),
+	/// so a 188-WU allowance selects only the 10,470-sat UTXO. However, spending
+	/// 1 P2WPKH input to a 43 vB output needs 485 sats fee (10,485 total),
+	/// making 10,470 sats insufficient for TxBuilder. The 224-WU allowance
+	/// targets 10,495 sats, correctly forcing selection of the second (500 sat)
+	/// UTXO, which TxBuilder accepts (756 sat fee, 10,756 total needed <= 10,970).
 	#[test]
 	fn selection_is_accepted_for_p2tr_and_p2wsh_recipients() {
-		let utxo_amounts = [
-			2_000u64, 3_500, 4_200, 5_000, 6_100, 7_800, 2_500, 3_000, 8_900, 4_500, 2_100, 5_500,
-			3_200, 6_700, 9_100, 4_800, 2_700, 7_300,
-		];
-		let target_amount = 35_000u64;
-		let fee_rate = FeeRate::from_sat_per_kwu(250);
+		let utxo_amounts = [10_470u64, 500];
+		let target_amount = 10_000u64;
+		let fee_rate = FeeRate::from_sat_per_kwu(1_000);
 
 		for recipient in [p2tr_recipient_script(), p2wsh_recipient_script()] {
 			let mut persister = NoopPersister;
