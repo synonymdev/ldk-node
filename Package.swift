@@ -15,6 +15,7 @@ let tag = "v0.7.0-rc.67"
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 let checksum = "2bb344a67eccd18708677190104e7769b26e603695f61318e47a794010f29905"
 >>>>>>> 049b116 (fix: classify broadcast backend results)
 =======
@@ -26,6 +27,9 @@ let checksum = "61565a56ecf33a1e8634de5e3be7d388f0579565161b1237c56756cc8b6638ce
 =======
 let checksum = "42bf21b752b53c02267abf68ef38ba2327a3be8662e391121ff6febac1509a97"
 >>>>>>> 262ffd0 (Regenerate UniFFI bindings)
+=======
+let checksum = "d6ccac3a6a013fbb5313d49faf4d3373b14053ede91923e9a1cd4f3230c6848c"
+>>>>>>> 833215c (Refresh bindings after abandonment fix)
 let url = "https://github.com/synonymdev/ldk-node/releases/download/\(tag)/LDKNodeFFI.xcframework.zip"
 
 let package = Package(
