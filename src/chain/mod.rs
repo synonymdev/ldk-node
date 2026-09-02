@@ -565,6 +565,28 @@ where
 			},
 		}
 	}
+
+	for txid in wallet.take_locally_applied_unconfirmed_txids() {
+		if !seen_received_txids.insert(txid) {
+			continue;
+		}
+		let details =
+			get_transaction_details(&txid, wallet, channel_manager).unwrap_or_else(|| {
+				log_error!(logger, "Transaction {} not found in wallet", txid);
+				TransactionDetails { amount_sats: 0, inputs: Vec::new(), outputs: Vec::new() }
+			});
+		log_info!(
+			logger,
+			"New unconfirmed transaction {} detected in mempool (amount: {} sats)",
+			txid,
+			details.amount_sats
+		);
+		let event = Event::OnchainTransactionReceived { txid, details };
+		event_queue.add_event(event).await.map_err(|e| {
+			log_error!(logger, "Failed to push onchain event to queue: {}", e);
+			e
+		})?;
+	}
 	Ok(())
 }
 

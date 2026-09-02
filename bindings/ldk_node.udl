@@ -389,7 +389,7 @@ interface OnchainPayment {
     [Throws=NodeError]
     Txid rebroadcast_transaction([ByRef]Txid txid);
     [Throws=NodeError]
-    sequence<Txid> list_pending_broadcasts();
+    sequence<PendingBroadcastInfo> list_pending_broadcasts();
     [Throws=NodeError]
     void abandon_pending_broadcast([ByRef]Txid txid);
     [Throws=NodeError]
@@ -409,6 +409,11 @@ enum CoinSelectionAlgorithm {
 	"LargestFirst",
 	"OldestFirst",
 	"SingleRandomDraw",
+};
+
+dictionary PendingBroadcastInfo {
+    Txid txid;
+    sequence<Txid> lineage;
 };
 
 dictionary SpendableUtxo {
