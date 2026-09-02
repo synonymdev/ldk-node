@@ -1300,6 +1300,7 @@ impl ChainSource {
 			let tx_bcast_logger = Arc::clone(&self.logger);
 			tokio::select! {
 				_ = stop_tx_bcast_receiver.changed() => {
+					receivers.fail_queued_explicit_requests();
 					log_debug!(
 						tx_bcast_logger,
 						"Stopping broadcasting transactions.",

@@ -158,10 +158,14 @@ pub enum Error {
 	InvalidSeedBytes,
 	/// The configured chain backend rejected an on-chain transaction.
 	OnchainTxBroadcastRejected,
-	/// Broadcasting an on-chain transaction failed before backend acceptance was known.
+	/// Broadcasting failed after dispatch; backend acceptance is unknown and the transaction remains
+	/// persisted for reconciliation or exact rebroadcast.
 	OnchainTxBroadcastFailed,
-	/// Broadcasting an on-chain transaction timed out before backend acceptance was known.
+	/// Broadcasting timed out after dispatch; backend acceptance is unknown and the transaction
+	/// remains persisted for reconciliation or exact rebroadcast.
 	OnchainTxBroadcastTimeout,
+	/// The on-chain transaction was not handed to the configured backend.
+	OnchainTxBroadcastNotDispatched,
 }
 
 impl fmt::Display for Error {
@@ -274,10 +278,13 @@ impl fmt::Display for Error {
 				write!(f, "The on-chain transaction was rejected by the configured chain backend.")
 			},
 			Self::OnchainTxBroadcastFailed => {
-				write!(f, "Failed to broadcast the on-chain transaction.")
+				write!(f, "On-chain broadcast acceptance is unknown after a backend failure.")
 			},
 			Self::OnchainTxBroadcastTimeout => {
-				write!(f, "Broadcasting the on-chain transaction timed out.")
+				write!(f, "On-chain broadcast acceptance is unknown after a backend timeout.")
+			},
+			Self::OnchainTxBroadcastNotDispatched => {
+				write!(f, "The on-chain transaction was not dispatched to the chain backend.")
 			},
 		}
 	}

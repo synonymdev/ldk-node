@@ -16,6 +16,7 @@ use crate::error::Error;
 use crate::fee_estimator::ConfirmationTarget;
 use crate::logger::{log_info, LdkLogger, Logger};
 use crate::runtime::Runtime;
+use crate::tx_broadcaster::TxBroadcastError;
 use crate::types::{Broadcaster, ChannelManager, SpendableUtxo, Wallet};
 use crate::wallet::{CoinSelectionAlgorithm, OnchainSendAmount};
 
@@ -114,6 +115,21 @@ impl OnchainPayment {
 		logger: Arc<Logger>,
 	) -> Self {
 		Self { wallet, tx_broadcaster, runtime, channel_manager, config, is_running, logger }
+	}
+
+	fn dispatch_prepared_transaction(&self, tx: bitcoin::Transaction) -> Result<Txid, Error> {
+		let txid = tx.compute_txid();
+		self.wallet.persist_pending_broadcast(&tx)?;
+		match self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx.clone())) {
+			Ok(()) => Ok(txid),
+			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
+				self.wallet.abandon_pending_broadcast(&tx)?;
+				Err(error.into())
+			},
+			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
+				Err(error.into())
+			},
+		}
 	}
 
 	/// Retrieve a new on-chain/funding address.
@@ -542,9 +558,13 @@ impl OnchainPayment {
 	/// If `fee_rate` is set it will be used on the resulting transaction. Otherwise we'll retrieve
 	/// a reasonable estimate from the configured chain source.
 	///
-	/// Returns the transaction ID only after the configured chain backend accepts the transaction.
-	/// A rejection, transport failure, or timeout is returned as an error. For transport failures
-	/// and timeouts, backend acceptance remains unknown and callers must not present success.
+	/// Returns the transaction ID only after the configured backend accepts the transaction.
+	/// The signed transaction is persisted before dispatch. If the backend result is unknown, the
+	/// pending on-chain payment remains available through [`crate::Node::list_payments`] for reconciliation
+	/// and exact-transaction retry with [`Self::rebroadcast_transaction`]. Callers must not create a
+	/// new transaction for the same payment intent after [`Error::OnchainTxBroadcastFailed`] or
+	/// [`Error::OnchainTxBroadcastTimeout`]. [`Error::OnchainTxBroadcastNotDispatched`] guarantees
+	/// that the backend was not invoked and permits a fresh send.
 	///
 	/// [`BalanceDetails::total_anchor_channels_reserve_sats`]: crate::BalanceDetails::total_anchor_channels_reserve_sats
 	pub fn send_to_address(
@@ -568,9 +588,7 @@ impl OnchainPayment {
 			outpoints,
 			&self.channel_manager,
 		)?;
-		let txid = tx.compute_txid();
-		self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx))?;
-		Ok(txid)
+		self.dispatch_prepared_transaction(tx)
 	}
 
 	/// Send an on-chain payment to the given address, draining the available funds.
@@ -589,9 +607,13 @@ impl OnchainPayment {
 	/// If `fee_rate` is set it will be used on the resulting transaction. Otherwise a reasonable
 	/// we'll retrieve an estimate from the configured chain source.
 	///
-	/// Returns the transaction ID only after the configured chain backend accepts the transaction.
-	/// A rejection, transport failure, or timeout is returned as an error. For transport failures
-	/// and timeouts, backend acceptance remains unknown and callers must not present success.
+	/// Returns the transaction ID only after the configured backend accepts the transaction.
+	/// The signed transaction is persisted before dispatch. If the backend result is unknown, the
+	/// pending on-chain payment remains available through [`crate::Node::list_payments`] for reconciliation
+	/// and exact-transaction retry with [`Self::rebroadcast_transaction`]. Callers must not create a
+	/// new transaction for the same payment intent after [`Error::OnchainTxBroadcastFailed`] or
+	/// [`Error::OnchainTxBroadcastTimeout`]. [`Error::OnchainTxBroadcastNotDispatched`] guarantees
+	/// that the backend was not invoked and permits a fresh send.
 	///
 	/// [`calculate_send_all_fee`]: Self::calculate_send_all_fee
 	/// [`BalanceDetails::spendable_onchain_balance_sats`]: crate::balance::BalanceDetails::spendable_onchain_balance_sats
@@ -618,9 +640,25 @@ impl OnchainPayment {
 			None,
 			&self.channel_manager,
 		)?;
-		let txid = tx.compute_txid();
-		self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx))?;
-		Ok(txid)
+		self.dispatch_prepared_transaction(tx)
+	}
+
+	/// Rebroadcast a previously prepared on-chain transaction without creating a new spend.
+	///
+	/// Use this after recovering an acceptance-unknown transaction ID from
+	/// [`crate::Node::list_payments`].
+	/// The exact persisted transaction is reused, so retrying cannot create a second payment
+	/// transaction. On success, the same transaction ID is returned.
+	///
+	/// Returns [`Error::NotRunning`] if the node is stopped and [`Error::TransactionNotFound`] if the
+	/// transaction is not available in the wallet's persistent transaction graph.
+	pub fn rebroadcast_transaction(&self, txid: &Txid) -> Result<Txid, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+
+		let tx = self.wallet.find_transaction(txid).ok_or(Error::TransactionNotFound)?;
+		self.dispatch_prepared_transaction(tx)
 	}
 
 	/// Bumps the fee of an existing transaction using Replace-By-Fee (RBF).

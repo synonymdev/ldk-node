@@ -625,6 +625,23 @@ where
 		Ok(())
 	}
 
+	/// Mark a locally prepared transaction as no longer intended for broadcast.
+	///
+	/// The transaction is evicted from the active graph and its inputs are released for a new send.
+	pub fn abandon_tx(&mut self, tx: &Transaction, last_seen: u64) -> Result<(), Error> {
+		let txid = tx.compute_txid();
+		for (key, wallet) in self.wallets.iter_mut() {
+			wallet.apply_evicted_txs([(txid, last_seen)]);
+			wallet.cancel_tx(tx);
+			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
+			wallet.persist(persister).map_err(|e| {
+				log::error!("Failed to persist wallet {:?}: {}", key, e);
+				Error::PersistenceFailed
+			})?;
+		}
+		Ok(())
+	}
+
 	/// Cancel a dry-run transaction on the primary wallet without persisting.
 	///
 	/// Unmarks change addresses that were marked "used" by `finish()`, so
@@ -1859,6 +1876,56 @@ mod tests {
 			.values()
 			.flat_map(|wallet| wallet.transactions())
 			.all(|wallet_tx| wallet_tx.tx_node.txid != txid));
+	}
+
+	#[test]
+	fn pending_broadcast_is_recoverable_until_abandoned() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let txid = tx.compute_txid();
+
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+		assert_eq!(aggregate.find_tx(txid), Some(tx.clone()));
+		assert!(aggregate.unconfirmed_txids().contains(&txid));
+
+		aggregate.abandon_tx(&tx, 1).unwrap();
+		assert_eq!(aggregate.find_tx(txid), None);
+		assert!(!aggregate.unconfirmed_txids().contains(&txid));
+		assert!(aggregate
+			.list_unspent()
+			.iter()
+			.any(|output| output.outpoint == tx.input[0].previous_output));
+	}
+
+	#[test]
+	fn pending_broadcast_survives_wallet_reload_for_exact_rebroadcast() {
+		let mut persister = MemoryPersister::default();
+		let mut wallet = create_empty_wallet(&mut persister);
+		fund_wallet(&mut wallet, Amount::from_sat(100_000), 0x01);
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let txid = tx.compute_txid();
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+
+		let mut reload_persister = aggregate.persisters().get(&0).unwrap().clone();
+		drop(aggregate);
+		let reloaded_wallet = load_empty_wallet(&mut reload_persister);
+		let reloaded = AggregateWallet::new(reloaded_wallet, reload_persister, 0u8, vec![]);
+
+		assert_eq!(reloaded.find_tx(txid), Some(tx));
+		assert!(reloaded.unconfirmed_txids().contains(&txid));
 	}
 
 	#[test]

@@ -387,6 +387,8 @@ interface OnchainPayment {
     [Throws=NodeError]
     Txid send_all_to_address([ByRef]Address address, boolean retain_reserve, FeeRate? fee_rate);
     [Throws=NodeError]
+    Txid rebroadcast_transaction([ByRef]Txid txid);
+    [Throws=NodeError]
     Txid bump_fee_by_rbf([ByRef]Txid txid, FeeRate fee_rate);
     [Throws=NodeError]
     Txid accelerate_by_cpfp([ByRef]Txid txid, FeeRate? fee_rate, Address? destination_address);
@@ -507,6 +509,7 @@ enum NodeError {
 	"OnchainTxBroadcastRejected",
 	"OnchainTxBroadcastFailed",
 	"OnchainTxBroadcastTimeout",
+	"OnchainTxBroadcastNotDispatched",
 };
 
 dictionary NodeStatus {
