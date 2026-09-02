@@ -2663,6 +2663,24 @@ mod tests {
 		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
 	}
 
+	#[test]
+	fn electrum_cached_transaction_without_backend_evidence_preserves_broadcast_intent() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(451);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		let mut update = bdk_wallet::Update::default();
+		update.tx_update.txs.push(Arc::new(tx.clone()));
+		update.tx_update.evicted_ats.insert((txid, 1));
+
+		node.wallet.apply_update(update).unwrap();
+		node.wallet.update_payment_store_for_all_transactions().unwrap();
+
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx));
+	}
+
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn exact_rebroadcast_retains_unknown_retry_and_clears_on_acceptance() {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
