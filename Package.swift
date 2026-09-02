@@ -12,8 +12,12 @@ let checksum = "3d4ed7123281235353cc7558317c3c15f94e0ff9adcab5fbb1fe35d572662f3d
 >>>>>>> 8fe28e1 (fix: wait for on-chain broadcast results)
 =======
 let tag = "v0.7.0-rc.67"
+<<<<<<< HEAD
 let checksum = "2bb344a67eccd18708677190104e7769b26e603695f61318e47a794010f29905"
 >>>>>>> 049b116 (fix: classify broadcast backend results)
+=======
+let checksum = "ddbf716ae6d1bdaad8b10fa78abab7af4011956e4eb4d4b002f229dcb94f6c8c"
+>>>>>>> d7f3bfc (chore: refresh broadcast result artifacts)
 let url = "https://github.com/synonymdev/ldk-node/releases/download/\(tag)/LDKNodeFFI.xcframework.zip"
 
 let package = Package(
