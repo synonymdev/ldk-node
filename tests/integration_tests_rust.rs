@@ -3063,32 +3063,22 @@ async fn onchain_transaction_evicted_event() {
 	// Sync to detect the unconfirmed transaction
 	node.sync_wallets().unwrap();
 
-	let mut found_received_event = false;
-	for _ in 0..10 {
-		if let Some(event) = node.next_event() {
-			match event {
-				Event::OnchainTransactionReceived { txid: event_txid, .. } => {
-					if event_txid == txid {
-						found_received_event = true;
-						println!("Received OnchainTransactionReceived event for {}", txid);
-						node.event_handled().unwrap();
-						break;
-					}
-					node.event_handled().unwrap();
-				},
-				_ => {
-					node.event_handled().unwrap();
-				},
-			}
-		}
-		thread::sleep(Duration::from_millis(100));
-	}
-
+	let payment = node.payment(&PaymentId(txid.to_byte_array())).unwrap();
+	assert_eq!(payment.direction, PaymentDirection::Outbound);
+	assert_eq!(payment.status, PaymentStatus::Pending);
+	assert!(matches!(
+		payment.kind,
+		PaymentKind::Onchain { txid: payment_txid, status: ConfirmationStatus::Unconfirmed }
+			if payment_txid == txid
+	));
 	assert!(
-		found_received_event,
-		"Should have received OnchainTransactionReceived event for transaction {}",
+		node.onchain_payment().list_pending_broadcasts().unwrap().is_empty(),
+		"Accepted transaction {} must not remain pending backend reconciliation",
 		txid
 	);
+	while node.next_event().is_some() {
+		node.event_handled().unwrap();
+	}
 
 	// Remove the transaction from bitcoind's mempool to simulate eviction
 	let txid_hex = format!("{:x}", txid);
