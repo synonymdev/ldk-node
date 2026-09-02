@@ -97,28 +97,30 @@ where
 	}
 
 	pub(crate) fn remove(&self, id: &SO::Id) -> Result<(), Error> {
-		let removed = self.objects.lock().unwrap().remove(id).is_some();
-		if removed {
-			let store_key = id.encode_to_hex_str();
-			KVStoreSync::remove(
-				&*self.kv_store,
+		let mut locked_objects = self.objects.lock().unwrap();
+		if !locked_objects.contains_key(id) {
+			return Ok(());
+		}
+		let store_key = id.encode_to_hex_str();
+		KVStoreSync::remove(
+			&*self.kv_store,
+			&self.primary_namespace,
+			&self.secondary_namespace,
+			&store_key,
+			false,
+		)
+		.map_err(|e| {
+			log_error!(
+				self.logger,
+				"Removing object data for key {}/{}/{} failed due to: {}",
 				&self.primary_namespace,
 				&self.secondary_namespace,
-				&store_key,
-				false,
-			)
-			.map_err(|e| {
-				log_error!(
-					self.logger,
-					"Removing object data for key {}/{}/{} failed due to: {}",
-					&self.primary_namespace,
-					&self.secondary_namespace,
-					store_key,
-					e
-				);
-				Error::PersistenceFailed
-			})?;
-		}
+				store_key,
+				e
+			);
+			Error::PersistenceFailed
+		})?;
+		locked_objects.remove(id);
 		Ok(())
 	}
 
@@ -173,12 +175,94 @@ where
 
 #[cfg(test)]
 mod tests {
+	use std::future::Future;
+	use std::pin::Pin;
+	use std::sync::atomic::{AtomicBool, Ordering};
+
 	use lightning::impl_writeable_tlv_based;
+	use lightning::io;
+	use lightning::util::persist::KVStore;
 	use lightning::util::test_utils::{TestLogger, TestStore};
 
 	use super::*;
 	use crate::hex_utils;
 	use crate::io::test_utils::InMemoryStore;
+
+	struct FailNextRemoveStore {
+		inner: InMemoryStore,
+		fail_next_remove: AtomicBool,
+	}
+
+	impl FailNextRemoveStore {
+		fn new() -> Self {
+			Self { inner: InMemoryStore::new(), fail_next_remove: AtomicBool::new(true) }
+		}
+
+		fn remove_result(&self) -> io::Result<()> {
+			if self.fail_next_remove.swap(false, Ordering::Relaxed) {
+				Err(io::Error::new(io::ErrorKind::Other, "Injected remove failure"))
+			} else {
+				Ok(())
+			}
+		}
+	}
+
+	impl KVStore for FailNextRemoveStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> Pin<Box<dyn Future<Output = io::Result<Vec<u8>>> + Send + 'static>> {
+			KVStore::read(&self.inner, primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'static>> {
+			KVStore::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'static>> {
+			let result = self.remove_result();
+			if result.is_err() {
+				return Box::pin(async move { result });
+			}
+			KVStore::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> Pin<Box<dyn Future<Output = io::Result<Vec<String>>> + Send + 'static>> {
+			KVStore::list(&self.inner, primary_namespace, secondary_namespace)
+		}
+	}
+
+	impl KVStoreSync for FailNextRemoveStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> io::Result<Vec<u8>> {
+			KVStoreSync::read(&self.inner, primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> io::Result<()> {
+			KVStoreSync::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> io::Result<()> {
+			self.remove_result()?;
+			KVStoreSync::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> io::Result<Vec<String>> {
+			KVStoreSync::list(&self.inner, primary_namespace, secondary_namespace)
+		}
+	}
 
 	#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 	struct TestObjectId {
@@ -323,5 +407,45 @@ mod tests {
 		assert_eq!(Err(Error::PersistenceFailed), data_store.insert_or_update(new_object));
 		assert_eq!(None, data_store.get(&new_id));
 		assert_eq!(Err(Error::PersistenceFailed), data_store.insert_or_update(new_object));
+	}
+
+	#[test]
+	fn remove_remains_retryable_after_persistence_failure() {
+		let concrete_store = Arc::new(FailNextRemoveStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let logger = Arc::new(TestLogger::new());
+		let primary_namespace = "datastore_remove_retry_primary".to_string();
+		let secondary_namespace = "datastore_remove_retry_secondary".to_string();
+		let data_store = DataStore::new(
+			Vec::new(),
+			primary_namespace.clone(),
+			secondary_namespace.clone(),
+			store,
+			logger,
+		);
+		let id = TestObjectId { id: [42u8; 4] };
+		let object = TestObject { id, data: [1u8; 3] };
+		let store_key = id.encode_to_hex_str();
+		data_store.insert(object).unwrap();
+
+		assert_eq!(data_store.remove(&id), Err(Error::PersistenceFailed));
+		assert_eq!(data_store.get(&id), Some(object));
+		assert!(KVStoreSync::read(
+			&*concrete_store,
+			&primary_namespace,
+			&secondary_namespace,
+			&store_key
+		)
+		.is_ok());
+
+		data_store.remove(&id).unwrap();
+		assert_eq!(data_store.get(&id), None);
+		assert!(KVStoreSync::read(
+			&*concrete_store,
+			&primary_namespace,
+			&secondary_namespace,
+			&store_key
+		)
+		.is_err());
 	}
 }

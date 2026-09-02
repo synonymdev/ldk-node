@@ -1805,6 +1805,7 @@ mod rbf {
 	use bitcoin::FeeRate;
 	use electrum_client::ElectrumApi;
 	use ldk_node::config::AddressType;
+	use ldk_node::payment::PaymentKind;
 
 	use crate::common::{
 		api_fee_rate, setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
@@ -1903,6 +1904,18 @@ mod rbf {
 
 		// Confirm replacement; balance check after confirm avoids sync timing flakiness.
 		confirm_and_sync(&bitcoind, &electrsd, 1, &[&node]).await;
+		let replacement_history = node.list_payments_with_filter(|payment| {
+			matches!(
+				payment.kind,
+				PaymentKind::Onchain { txid, .. }
+					if txid == initial_txid || txid == rbf_txid
+			)
+		});
+		assert_eq!(replacement_history.len(), 1);
+		assert!(matches!(
+			replacement_history[0].kind,
+			PaymentKind::Onchain { txid, .. } if txid == rbf_txid
+		));
 
 		let total_after_rbf = node.list_balances().total_onchain_balance_sats;
 		assert!(
