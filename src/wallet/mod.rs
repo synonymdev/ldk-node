@@ -154,6 +154,7 @@ pub(crate) struct Wallet {
 	inner: Mutex<AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>>,
 	// Serializes raw-intent persistence with wallet reservation and backend reconciliation.
 	broadcast_intent_lock: Mutex<()>,
+	broadcast_intents: Mutex<HashMap<Txid, Transaction>>,
 	backend_observed_broadcasts: Mutex<HashSet<Txid>>,
 	// Serializes account membership, primary selection, and account reloads.
 	operation_lock: Mutex<()>,
@@ -196,6 +197,7 @@ impl Wallet {
 		Self {
 			inner,
 			broadcast_intent_lock: Mutex::new(()),
+			broadcast_intents: Mutex::new(HashMap::new()),
 			backend_observed_broadcasts: Mutex::new(HashSet::new()),
 			operation_lock,
 			account_generation: AtomicU64::new(0),
@@ -370,7 +372,17 @@ impl Wallet {
 		&self, account: OnchainWalletAccount, block: &bitcoin::Block, height: u32,
 	) -> Result<(), Error> {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
-		let observed_txids = block.txdata.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
+		let pending_txids = self
+			.read_all_broadcast_intents()?
+			.into_iter()
+			.map(|tx| tx.compute_txid())
+			.collect::<HashSet<_>>();
+		let observed_txids = block
+			.txdata
+			.iter()
+			.map(|tx| tx.compute_txid())
+			.filter(|txid| pending_txids.contains(txid))
+			.collect::<Vec<_>>();
 		let mut locked = self.inner.lock().unwrap();
 		self.payment_store_update_pending.store(true, Ordering::Release);
 		locked.apply_block_to(&account, block, height).map_err(|e| {
@@ -798,9 +810,14 @@ impl Wallet {
 	) -> Result<Vec<WalletEvent>, Error> {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
 		let update = update.into();
-		let observed_txids = backend_observed_txids(&update);
-		let unresolved_txs = self
-			.read_all_broadcast_intents()?
+		let authoritative_txids = backend_observed_txids(&update);
+		let pending_txs = self.read_all_broadcast_intents()?;
+		let observed_txids = pending_txs
+			.iter()
+			.map(|tx| tx.compute_txid())
+			.filter(|txid| authoritative_txids.contains(txid))
+			.collect::<HashSet<_>>();
+		let unresolved_txs = pending_txs
 			.into_iter()
 			.filter(|tx| !observed_txids.contains(&tx.compute_txid()))
 			.collect::<Vec<_>>();
@@ -831,9 +848,14 @@ impl Wallet {
 		let _op = self.operation_lock.lock().unwrap();
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
 		let update = update.into();
-		let observed_txids = backend_observed_txids(&update);
-		let unresolved_txs = self
-			.read_all_broadcast_intents()?
+		let authoritative_txids = backend_observed_txids(&update);
+		let pending_txs = self.read_all_broadcast_intents()?;
+		let observed_txids = pending_txs
+			.iter()
+			.map(|tx| tx.compute_txid())
+			.filter(|txid| authoritative_txids.contains(txid))
+			.collect::<HashSet<_>>();
+		let unresolved_txs = pending_txs
 			.into_iter()
 			.filter(|tx| !observed_txids.contains(&tx.compute_txid()))
 			.collect::<Vec<_>>();
@@ -868,10 +890,15 @@ impl Wallet {
 		&self, unconfirmed_txs: Vec<(Transaction, u64)>, evicted_txids: Vec<(Txid, u64)>,
 	) -> Result<(), Error> {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
-		let observed_txids =
+		let authoritative_txids =
 			unconfirmed_txs.iter().map(|(tx, _)| tx.compute_txid()).collect::<HashSet<_>>();
-		let unresolved_txs = self
-			.read_all_broadcast_intents()?
+		let pending_txs = self.read_all_broadcast_intents()?;
+		let observed_txids = pending_txs
+			.iter()
+			.map(|tx| tx.compute_txid())
+			.filter(|txid| authoritative_txids.contains(txid))
+			.collect::<HashSet<_>>();
+		let unresolved_txs = pending_txs
 			.into_iter()
 			.filter(|tx| !observed_txids.contains(&tx.compute_txid()))
 			.collect::<Vec<_>>();
@@ -958,7 +985,11 @@ impl Wallet {
 	/// Restore unresolved intent reservations after loading the wallet from persistent storage.
 	pub(crate) fn restore_pending_broadcasts(&self) -> Result<(), Error> {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
-		let pending_txs = self.read_all_broadcast_intents()?;
+		let pending_txs = self.load_broadcast_intents_from_store()?;
+		self.broadcast_intents
+			.lock()
+			.unwrap()
+			.extend(pending_txs.iter().cloned().map(|tx| (tx.compute_txid(), tx)));
 		if pending_txs.is_empty() {
 			return Ok(());
 		}
@@ -966,14 +997,19 @@ impl Wallet {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		let confirmed_txids =
 			locked_wallet.transaction_confirmations().keys().copied().collect::<HashSet<_>>();
+		let confirmed_pending_txids = pending_txs
+			.iter()
+			.map(|tx| tx.compute_txid())
+			.filter(|txid| confirmed_txids.contains(txid))
+			.collect::<HashSet<_>>();
 		let unresolved_txs = pending_txs
 			.into_iter()
-			.filter(|tx| !confirmed_txids.contains(&tx.compute_txid()))
+			.filter(|tx| !confirmed_pending_txids.contains(&tx.compute_txid()))
 			.collect::<Vec<_>>();
 		self.reapply_unresolved_broadcasts(&mut locked_wallet, unresolved_txs)?;
 		self.update_payment_store(&locked_wallet)?;
 		drop(locked_wallet);
-		self.remove_broadcast_intents(confirmed_txids)
+		self.remove_broadcast_intents(confirmed_pending_txids)
 	}
 
 	fn reapply_unresolved_broadcasts(
@@ -1005,10 +1041,16 @@ impl Wallet {
 		.map_err(|e| {
 			log_error!(self.logger, "Failed to persist broadcast intent {}: {}", txid, e);
 			Error::PersistenceFailed
-		})
+		})?;
+		self.broadcast_intents.lock().unwrap().insert(txid, tx.clone());
+		Ok(())
 	}
 
 	fn read_broadcast_intent(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
+		Ok(self.broadcast_intents.lock().unwrap().get(txid).cloned())
+	}
+
+	fn read_broadcast_intent_from_store(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
 		let bytes = match KVStoreSync::read(
 			&*self.kv_store,
 			ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
@@ -1039,6 +1081,13 @@ impl Wallet {
 	}
 
 	fn read_all_broadcast_intents(&self) -> Result<Vec<Transaction>, Error> {
+		let mut transactions =
+			self.broadcast_intents.lock().unwrap().values().cloned().collect::<Vec<_>>();
+		transactions.sort_unstable_by_key(|tx| tx.compute_txid());
+		Ok(transactions)
+	}
+
+	fn load_broadcast_intents_from_store(&self) -> Result<Vec<Transaction>, Error> {
 		let mut keys = KVStoreSync::list(
 			&*self.kv_store,
 			ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
@@ -1055,7 +1104,7 @@ impl Wallet {
 					log_error!(self.logger, "Invalid broadcast intent key {}: {}", key, e);
 					Error::PersistenceFailed
 				})?;
-				self.read_broadcast_intent(&txid)?.ok_or(Error::PersistenceFailed)
+				self.read_broadcast_intent_from_store(&txid)?.ok_or(Error::PersistenceFailed)
 			})
 			.collect()
 	}
@@ -1071,7 +1120,9 @@ impl Wallet {
 		.map_err(|e| {
 			log_error!(self.logger, "Failed to remove broadcast intent {}: {}", txid, e);
 			Error::PersistenceFailed
-		})
+		})?;
+		self.broadcast_intents.lock().unwrap().remove(txid);
+		Ok(())
 	}
 
 	fn remove_broadcast_intents(&self, txids: impl IntoIterator<Item = Txid>) -> Result<(), Error> {
@@ -2415,7 +2466,25 @@ impl Listen for Wallet {
 
 	fn block_connected(&self, block: &bitcoin::Block, height: u32) {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
-		let observed_txids = block.txdata.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
+		let pending_txids = match self.read_all_broadcast_intents() {
+			Ok(transactions) => {
+				transactions.into_iter().map(|tx| tx.compute_txid()).collect::<HashSet<_>>()
+			},
+			Err(e) => {
+				log_error!(
+					self.logger,
+					"Failed to read broadcast intents before block update: {}",
+					e
+				);
+				return;
+			},
+		};
+		let observed_txids = block
+			.txdata
+			.iter()
+			.map(|tx| tx.compute_txid())
+			.filter(|txid| pending_txids.contains(txid))
+			.collect::<Vec<_>>();
 		let mut locked_wallet = self.inner.lock().unwrap();
 
 		let pre_checkpoint = locked_wallet.latest_checkpoint();

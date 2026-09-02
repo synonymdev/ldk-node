@@ -2478,13 +2478,14 @@ mod tests {
 	use std::future::Future;
 	use std::pin::Pin;
 	use std::str::FromStr;
-	use std::sync::atomic::{AtomicBool, Ordering};
+	use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 	use std::sync::Arc;
 	use std::time::Duration;
 
 	use bitcoin::absolute::LockTime;
+	use bitcoin::hashes::Hash;
 	use bitcoin::transaction::Version;
-	use bitcoin::{Network, Transaction};
+	use bitcoin::{Network, Transaction, Txid};
 	use lightning::io;
 	use lightning::util::persist::{KVStore, KVStoreSync};
 
@@ -2496,15 +2497,30 @@ mod tests {
 	struct FailNextWriteStore {
 		inner: InMemoryStore,
 		fail_next_write: AtomicBool,
+		broadcast_intent_removes: AtomicUsize,
 	}
 
 	impl FailNextWriteStore {
 		fn new() -> Self {
-			Self { inner: InMemoryStore::new(), fail_next_write: AtomicBool::new(false) }
+			Self {
+				inner: InMemoryStore::new(),
+				fail_next_write: AtomicBool::new(false),
+				broadcast_intent_removes: AtomicUsize::new(0),
+			}
 		}
 
 		fn fail_next_write(&self) {
 			self.fail_next_write.store(true, Ordering::Relaxed);
+		}
+
+		fn broadcast_intent_remove_count(&self) -> usize {
+			self.broadcast_intent_removes.load(Ordering::Relaxed)
+		}
+
+		fn count_broadcast_intent_remove(&self, primary_namespace: &str) {
+			if primary_namespace == crate::io::ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE {
+				self.broadcast_intent_removes.fetch_add(1, Ordering::Relaxed);
+			}
 		}
 	}
 
@@ -2529,6 +2545,7 @@ mod tests {
 		fn remove(
 			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
 		) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'static + Send>> {
+			self.count_broadcast_intent_remove(primary_namespace);
 			KVStore::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
 		}
 
@@ -2558,6 +2575,7 @@ mod tests {
 		fn remove(
 			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
 		) -> io::Result<()> {
+			self.count_broadcast_intent_remove(primary_namespace);
 			KVStoreSync::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
 		}
 
@@ -2679,6 +2697,34 @@ mod tests {
 
 		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
 		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx));
+	}
+
+	#[test]
+	fn reconciliation_removes_only_observed_pending_intents() {
+		let concrete_store = Arc::new(FailNextWriteStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let tx = test_broadcast_transaction(452);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		let mut update = bdk_wallet::Update::default();
+		update.tx_update.txs.push(Arc::new(tx));
+		update.tx_update.seen_ats.insert((txid, 1));
+		for byte in 1..=16 {
+			update.tx_update.seen_ats.insert((Txid::from_byte_array([byte; 32]), 1));
+		}
+
+		node.wallet.apply_update(update).unwrap();
+		node.wallet.update_payment_store_for_all_transactions().unwrap();
+
+		assert_eq!(concrete_store.broadcast_intent_remove_count(), 1);
+		let mut unrelated_update = bdk_wallet::Update::default();
+		for byte in 17..=32 {
+			unrelated_update.tx_update.seen_ats.insert((Txid::from_byte_array([byte; 32]), 2));
+		}
+		node.wallet.apply_update(unrelated_update).unwrap();
+		node.wallet.update_payment_store_for_all_transactions().unwrap();
+		assert_eq!(concrete_store.broadcast_intent_remove_count(), 1);
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
