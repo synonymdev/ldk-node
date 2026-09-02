@@ -14,7 +14,7 @@ use bitcoin::{Address, Txid};
 use crate::config::{AddressType, Config, OnchainWalletAccount};
 use crate::error::Error;
 use crate::fee_estimator::ConfirmationTarget;
-use crate::logger::{log_info, LdkLogger, Logger};
+use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::runtime::Runtime;
 use crate::tx_broadcaster::TxBroadcastError;
 use crate::types::{Broadcaster, ChannelManager, SpendableUtxo, Wallet};
@@ -119,16 +119,46 @@ impl OnchainPayment {
 
 	fn dispatch_prepared_transaction(&self, tx: bitcoin::Transaction) -> Result<Txid, Error> {
 		let txid = tx.compute_txid();
-		self.wallet.persist_pending_broadcast(&tx)?;
+		self.wallet.prepare_pending_broadcast(&tx)?;
 		match self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx.clone())) {
-			Ok(()) => Ok(txid),
+			Ok(()) => {
+				if let Err(e) = self.wallet.clear_broadcast_intent(&txid) {
+					log_error!(
+						self.logger,
+						"Failed to clear accepted broadcast intent {}: {}",
+						txid,
+						e
+					);
+				}
+				Ok(txid)
+			},
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
-				self.wallet.abandon_pending_broadcast(&tx)?;
-				Err(error.into())
+				if self.wallet.abandon_broadcast_intent(&tx).is_err() {
+					return Err(Error::OnchainTxBroadcastFailed { txid });
+				}
+				Err(Self::initial_broadcast_error(error, txid))
 			},
 			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
-				Err(error.into())
+				Err(Self::initial_broadcast_error(error, txid))
 			},
+		}
+	}
+
+	fn initial_broadcast_error(error: TxBroadcastError, txid: Txid) -> Error {
+		match error {
+			TxBroadcastError::Rejected => Error::OnchainTxBroadcastRejected { txid },
+			TxBroadcastError::NotDispatched => Error::OnchainTxBroadcastNotDispatched { txid },
+			TxBroadcastError::Failed => Error::OnchainTxBroadcastFailed { txid },
+			TxBroadcastError::Timeout => Error::OnchainTxBroadcastTimeout { txid },
+		}
+	}
+
+	fn rebroadcast_error(error: TxBroadcastError, txid: Txid) -> Error {
+		match error {
+			TxBroadcastError::Timeout => Error::OnchainTxBroadcastTimeout { txid },
+			TxBroadcastError::Rejected
+			| TxBroadcastError::NotDispatched
+			| TxBroadcastError::Failed => Error::OnchainTxBroadcastFailed { txid },
 		}
 	}
 
@@ -559,12 +589,13 @@ impl OnchainPayment {
 	/// a reasonable estimate from the configured chain source.
 	///
 	/// Returns the transaction ID only after the configured backend accepts the transaction.
-	/// The signed transaction is persisted before dispatch. If the backend result is unknown, the
-	/// pending on-chain payment remains available through [`crate::Node::list_payments`] for reconciliation
-	/// and exact-transaction retry with [`Self::rebroadcast_transaction`]. Callers must not create a
-	/// new transaction for the same payment intent after [`Error::OnchainTxBroadcastFailed`] or
+	/// The signed transaction is persisted before dispatch. Broadcast errors carry its transaction
+	/// ID. If backend acceptance is unknown, the transaction remains available through
+	/// [`Self::list_pending_broadcasts`] for reconciliation and exact-transaction retry with
+	/// [`Self::rebroadcast_transaction`]. Callers must not create a new transaction for the same
+	/// payment intent after [`Error::OnchainTxBroadcastFailed`] or
 	/// [`Error::OnchainTxBroadcastTimeout`]. [`Error::OnchainTxBroadcastNotDispatched`] guarantees
-	/// that the backend was not invoked and permits a fresh send.
+	/// that the backend was not invoked and cleanup completed, permitting a fresh send.
 	///
 	/// [`BalanceDetails::total_anchor_channels_reserve_sats`]: crate::BalanceDetails::total_anchor_channels_reserve_sats
 	pub fn send_to_address(
@@ -608,12 +639,13 @@ impl OnchainPayment {
 	/// we'll retrieve an estimate from the configured chain source.
 	///
 	/// Returns the transaction ID only after the configured backend accepts the transaction.
-	/// The signed transaction is persisted before dispatch. If the backend result is unknown, the
-	/// pending on-chain payment remains available through [`crate::Node::list_payments`] for reconciliation
-	/// and exact-transaction retry with [`Self::rebroadcast_transaction`]. Callers must not create a
-	/// new transaction for the same payment intent after [`Error::OnchainTxBroadcastFailed`] or
+	/// The signed transaction is persisted before dispatch. Broadcast errors carry its transaction
+	/// ID. If backend acceptance is unknown, the transaction remains available through
+	/// [`Self::list_pending_broadcasts`] for reconciliation and exact-transaction retry with
+	/// [`Self::rebroadcast_transaction`]. Callers must not create a new transaction for the same
+	/// payment intent after [`Error::OnchainTxBroadcastFailed`] or
 	/// [`Error::OnchainTxBroadcastTimeout`]. [`Error::OnchainTxBroadcastNotDispatched`] guarantees
-	/// that the backend was not invoked and permits a fresh send.
+	/// that the backend was not invoked and cleanup completed, permitting a fresh send.
 	///
 	/// [`calculate_send_all_fee`]: Self::calculate_send_all_fee
 	/// [`BalanceDetails::spendable_onchain_balance_sats`]: crate::balance::BalanceDetails::spendable_onchain_balance_sats
@@ -646,19 +678,43 @@ impl OnchainPayment {
 	/// Rebroadcast a previously prepared on-chain transaction without creating a new spend.
 	///
 	/// Use this after recovering an acceptance-unknown transaction ID from
-	/// [`crate::Node::list_payments`].
+	/// [`Self::list_pending_broadcasts`] or a transaction-keyed broadcast error.
 	/// The exact persisted transaction is reused, so retrying cannot create a second payment
-	/// transaction. On success, the same transaction ID is returned.
+	/// transaction. On success, the same transaction ID is returned. Any retry error preserves the
+	/// original unresolved intent; a retry rejection or not-dispatched outcome therefore maps to
+	/// [`Error::OnchainTxBroadcastFailed`] rather than permitting a fresh send.
 	///
 	/// Returns [`Error::NotRunning`] if the node is stopped and [`Error::TransactionNotFound`] if the
-	/// transaction is not available in the wallet's persistent transaction graph.
+	/// transaction is not available in the durable broadcast-intent store.
 	pub fn rebroadcast_transaction(&self, txid: &Txid) -> Result<Txid, Error> {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
-		let tx = self.wallet.find_transaction(txid).ok_or(Error::TransactionNotFound)?;
-		self.dispatch_prepared_transaction(tx)
+		let tx = self.wallet.recover_pending_broadcast(txid)?.ok_or(Error::TransactionNotFound)?;
+		match self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx)) {
+			Ok(()) => {
+				if let Err(e) = self.wallet.clear_broadcast_intent(txid) {
+					log_error!(
+						self.logger,
+						"Failed to clear accepted rebroadcast intent {}: {}",
+						txid,
+						e
+					);
+				}
+				Ok(*txid)
+			},
+			Err(error) => Err(Self::rebroadcast_error(error, *txid)),
+		}
+	}
+
+	/// List explicit transaction IDs whose backend acceptance is still unresolved.
+	///
+	/// Entries survive process restart and ordinary mempool eviction. A transaction is removed only
+	/// after a conclusive initial rejection/not-dispatched result, successful explicit broadcast, or
+	/// observation by the configured backend.
+	pub fn list_pending_broadcasts(&self) -> Result<Vec<Txid>, Error> {
+		self.wallet.list_pending_broadcasts()
 	}
 
 	/// Bumps the fee of an existing transaction using Replace-By-Fee (RBF).
@@ -785,5 +841,107 @@ impl OnchainPayment {
 		{
 			Ok(Arc::new(fee_rate))
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Arc;
+
+	use bitcoin::absolute::LockTime;
+	use bitcoin::hashes::Hash;
+	use bitcoin::transaction::Version;
+	use bitcoin::{Network, Transaction, Txid};
+
+	use super::OnchainPayment;
+	use crate::builder::NodeBuilder;
+	use crate::config::Config;
+	use crate::error::Error;
+	use crate::io::test_utils::InMemoryStore;
+	use crate::tx_broadcaster::TxBroadcastError;
+	use crate::types::DynStore;
+	use crate::Node;
+
+	fn test_node(store: Arc<DynStore>) -> Node {
+		let config = Config { network: Network::Regtest, ..Config::default() };
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes([43u8; 64]);
+		builder.set_log_facade_logger();
+		builder.build_with_store(store).unwrap()
+	}
+
+	fn test_transaction() -> Transaction {
+		Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::from_consensus(47),
+			input: vec![],
+			output: vec![],
+		}
+	}
+
+	#[test]
+	fn rebroadcast_errors_preserve_the_original_unknown_outcome() {
+		let txid = Txid::all_zeros();
+		for error in
+			[TxBroadcastError::Rejected, TxBroadcastError::NotDispatched, TxBroadcastError::Failed]
+		{
+			assert_eq!(
+				OnchainPayment::rebroadcast_error(error, txid),
+				Error::OnchainTxBroadcastFailed { txid }
+			);
+		}
+		assert_eq!(
+			OnchainPayment::rebroadcast_error(TxBroadcastError::Timeout, txid),
+			Error::OnchainTxBroadcastTimeout { txid }
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn failed_send_survives_eviction_restart_and_retry_until_accepted() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_transaction();
+		let txid = tx.compute_txid();
+		let node = test_node(Arc::clone(&store));
+		let payment = node.onchain_payment();
+		let send_tx = tx.clone();
+		let initial_call =
+			tokio::task::spawn_blocking(move || payment.dispatch_prepared_transaction(send_tx));
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let initial_request = receivers.recv().await.unwrap();
+		assert_eq!(initial_request.package, vec![tx.clone()]);
+		initial_request.result_sender.unwrap().send(Err(TxBroadcastError::Failed)).unwrap();
+		drop(receivers);
+		assert_eq!(initial_call.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		node.wallet.apply_mempool_txs(Vec::new(), vec![(txid, 1)]).unwrap();
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		drop(node);
+
+		let restarted_node = test_node(store);
+		assert_eq!(restarted_node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		*restarted_node.is_running.write().unwrap() = true;
+
+		let payment = restarted_node.onchain_payment();
+		let retry_call =
+			tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
+		let mut receivers = restarted_node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let retry_request = receivers.recv().await.unwrap();
+		assert_eq!(retry_request.package, vec![tx.clone()]);
+		retry_request.result_sender.unwrap().send(Err(TxBroadcastError::NotDispatched)).unwrap();
+		drop(receivers);
+		assert_eq!(retry_call.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		assert_eq!(restarted_node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+
+		let payment = restarted_node.onchain_payment();
+		let accepted_call =
+			tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
+		let mut receivers = restarted_node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let accepted_request = receivers.recv().await.unwrap();
+		assert_eq!(accepted_request.package, vec![tx]);
+		accepted_request.result_sender.unwrap().send(Ok(())).unwrap();
+		drop(receivers);
+		assert_eq!(accepted_call.await.unwrap(), Ok(txid));
+		assert!(restarted_node.wallet.list_pending_broadcasts().unwrap().is_empty());
+		*restarted_node.is_running.write().unwrap() = false;
 	}
 }

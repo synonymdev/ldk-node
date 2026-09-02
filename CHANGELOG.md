@@ -6,9 +6,10 @@
 - Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
 =======
 - Explicit on-chain sends now return a transaction ID only after the configured backend accepts
-  the transaction. Rejected, not-dispatched, acceptance-unknown failure, and acceptance-unknown
-  timeout outcomes are distinct; uncertain signed transactions persist for exact-tx reconciliation
-  and rebroadcast after restart.
+  the transaction. Transaction-keyed rejected, not-dispatched, acceptance-unknown failure, and
+  acceptance-unknown timeout outcomes are distinct. Uncertain signed transactions remain reserved
+  in a durable intent store for enumeration, exact-byte rebroadcast, sync reconciliation, and
+  recovery after restart.
 - Electrum transaction rejections are now logged as failures instead of successful broadcasts.
 >>>>>>> 6967d92 (docs: place broadcast fixes in current changelog)
 - Add keep consumer rules for JNA types UniFFI needs under R8.

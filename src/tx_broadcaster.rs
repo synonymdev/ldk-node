@@ -15,7 +15,6 @@ use lightning::chain::chaininterface::BroadcasterInterface;
 use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
 
 use crate::config::TX_BROADCAST_TIMEOUT_SECS;
-use crate::error::Error;
 use crate::logger::{log_error, LdkLogger};
 
 const EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE: usize = 50;
@@ -87,17 +86,6 @@ pub(crate) fn validate_broadcast_txid(
 		Ok(())
 	} else {
 		Err(TxBroadcastError::Failed)
-	}
-}
-
-impl From<TxBroadcastError> for Error {
-	fn from(error: TxBroadcastError) -> Self {
-		match error {
-			TxBroadcastError::Rejected => Error::OnchainTxBroadcastRejected,
-			TxBroadcastError::NotDispatched => Error::OnchainTxBroadcastNotDispatched,
-			TxBroadcastError::Failed => Error::OnchainTxBroadcastFailed,
-			TxBroadcastError::Timeout => Error::OnchainTxBroadcastTimeout,
-		}
 	}
 }
 
@@ -220,6 +208,7 @@ where
 	ldk_sender: mpsc::UnboundedSender<BroadcastRequest>,
 	explicit_sender: mpsc::Sender<BroadcastRequest>,
 	queue_receivers: Mutex<BroadcastQueueReceivers>,
+	explicit_broadcasts_enabled: std::sync::Mutex<bool>,
 	logger: L,
 }
 
@@ -232,7 +221,29 @@ where
 		let (explicit_sender, explicit_receiver) = mpsc::channel(EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE);
 		let queue_receivers =
 			Mutex::new(BroadcastQueueReceivers { ldk_receiver, explicit_receiver });
-		Self { ldk_sender, explicit_sender, queue_receivers, logger }
+		Self {
+			ldk_sender,
+			explicit_sender,
+			queue_receivers,
+			explicit_broadcasts_enabled: std::sync::Mutex::new(true),
+			logger,
+		}
+	}
+
+	/// Allows explicit broadcasts for a new node run after the prior queue was drained.
+	pub(crate) fn resume_explicit_broadcasts(&self) {
+		*self.explicit_broadcasts_enabled.lock().unwrap() = true;
+	}
+
+	/// Prevents new explicit broadcasts from entering the current run's queue.
+	pub(crate) fn pause_explicit_broadcasts(&self) {
+		*self.explicit_broadcasts_enabled.lock().unwrap() = false;
+	}
+
+	/// Completes every queued explicit request after new enqueue operations have been fenced.
+	pub(crate) async fn drain_explicit_broadcasts(&self) {
+		let mut receivers = self.queue_receivers.lock().await;
+		receivers.fail_queued_explicit_requests();
 	}
 
 	pub(crate) async fn get_broadcast_queue_receivers(
@@ -253,7 +264,13 @@ where
 	) -> Result<(), TxBroadcastError> {
 		let (result_sender, result_receiver) = oneshot::channel();
 		let (request, explicit_claim) = BroadcastRequest::explicit(vec![tx], result_sender);
-		self.explicit_sender.try_send(request).map_err(|_| TxBroadcastError::NotDispatched)?;
+		{
+			let enabled = self.explicit_broadcasts_enabled.lock().unwrap();
+			if !*enabled {
+				return Err(TxBroadcastError::NotDispatched);
+			}
+			self.explicit_sender.try_send(request).map_err(|_| TxBroadcastError::NotDispatched)?;
+		}
 		let _cancel_on_drop = CancelExplicitBroadcastOnDrop { claim: Arc::clone(&explicit_claim) };
 		let mut result_receiver = result_receiver;
 		let receiver_result = match tokio::time::timeout(timeout, &mut result_receiver).await {
@@ -450,6 +467,34 @@ mod tests {
 
 		let (result, ()) = tokio::join!(broadcast_fut, stop_fut);
 		assert_eq!(result, Err(TxBroadcastError::NotDispatched));
+	}
+
+	#[tokio::test]
+	async fn stopped_queue_rejects_new_requests_and_does_not_replay_them_after_restart() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		broadcaster.pause_explicit_broadcasts();
+		broadcaster.drain_explicit_broadcasts().await;
+
+		assert_eq!(
+			broadcaster
+				.broadcast_transaction_with_timeout(test_transaction(), Duration::from_secs(1))
+				.await,
+			Err(TxBroadcastError::NotDispatched)
+		);
+
+		broadcaster.resume_explicit_broadcasts();
+		let live_tx = test_transaction_with_lock_time(1);
+		let broadcast_fut =
+			broadcaster.broadcast_transaction_with_timeout(live_tx.clone(), Duration::from_secs(1));
+		let process_fut = async {
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			assert_eq!(request.package, vec![live_tx]);
+			request.result_sender.unwrap().send(Ok(())).unwrap();
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
+		assert_eq!(result, Ok(()));
 	}
 
 	#[tokio::test]

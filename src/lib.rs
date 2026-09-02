@@ -356,6 +356,7 @@ impl Node {
 
 		// Set event queue for onchain event emission
 		self.chain_source.set_event_queue(Arc::clone(&self.event_queue));
+		self.tx_broadcaster.resume_explicit_broadcasts();
 
 		self.spawn_chain_sync_task();
 
@@ -827,6 +828,7 @@ impl Node {
 		self.background_processor_generation.fetch_add(1, Ordering::AcqRel);
 
 		log_info!(self.logger, "Shutting down LDK Node with node ID {}...", self.node_id());
+		self.tx_broadcaster.pause_explicit_broadcasts();
 
 		// Prevent all task groups from accepting work that could outlive this shutdown generation.
 		self.runtime.close_task_admission();
@@ -851,6 +853,7 @@ impl Node {
 
 		// Cancel cancellable background tasks
 		self.runtime.abort_cancellable_background_tasks();
+		self.runtime.block_on(self.tx_broadcaster.drain_explicit_broadcasts());
 
 		// Disconnect all peers.
 		self.peer_manager.disconnect_all_peers();
@@ -2479,7 +2482,9 @@ mod tests {
 	use std::sync::Arc;
 	use std::time::Duration;
 
-	use bitcoin::Network;
+	use bitcoin::absolute::LockTime;
+	use bitcoin::transaction::Version;
+	use bitcoin::{Network, Transaction};
 	use lightning::io;
 	use lightning::util::persist::{KVStore, KVStoreSync};
 
@@ -2578,6 +2583,121 @@ mod tests {
 			node_id,
 			address: SocketAddress::from_str(&format!("127.0.0.1:{port}")).unwrap(),
 		}
+	}
+
+	fn test_wallet_node(store: Arc<DynStore>) -> Node {
+		let config = Config { network: Network::Regtest, ..Config::default() };
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes([42u8; 64]);
+		builder.set_log_facade_logger();
+		builder.build_with_store(store).unwrap()
+	}
+
+	fn test_broadcast_transaction(lock_time: u32) -> Transaction {
+		Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::from_consensus(lock_time),
+			input: vec![],
+			output: vec![],
+		}
+	}
+
+	#[test]
+	fn pending_broadcast_survives_restart_with_exact_transaction_bytes() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(42);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(Arc::clone(&store));
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx.clone()));
+		drop(node);
+
+		let restarted_node = test_wallet_node(store);
+		assert_eq!(restarted_node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(restarted_node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx));
+	}
+
+	#[test]
+	fn backend_mempool_eviction_preserves_unresolved_broadcast() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(43);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+
+		node.wallet.apply_mempool_txs(Vec::new(), vec![(txid, 1)]).unwrap();
+
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx));
+	}
+
+	#[test]
+	fn backend_mempool_observation_resolves_broadcast_intent() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(44);
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+
+		node.wallet.apply_mempool_txs(vec![(tx, 1)], Vec::new()).unwrap();
+
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+	}
+
+	#[test]
+	fn backend_wallet_sync_observation_resolves_broadcast_intent() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(45);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		let mut update = bdk_wallet::Update::default();
+		update.tx_update.txs.push(Arc::new(tx));
+		update.tx_update.seen_ats.insert((txid, 1));
+
+		node.wallet.apply_update(update).unwrap();
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		node.wallet.update_payment_store_for_all_transactions().unwrap();
+
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn exact_rebroadcast_retains_unknown_retry_and_clears_on_acceptance() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(46);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		*node.is_running.write().unwrap() = true;
+
+		let payment = node.onchain_payment();
+		let first_call =
+			tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let first_request = receivers.recv().await.unwrap();
+		assert_eq!(first_request.package, vec![tx.clone()]);
+		first_request
+			.result_sender
+			.unwrap()
+			.send(Err(crate::tx_broadcaster::TxBroadcastError::NotDispatched))
+			.unwrap();
+		drop(receivers);
+		assert_eq!(first_call.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+
+		let payment = node.onchain_payment();
+		let second_call =
+			tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let second_request = receivers.recv().await.unwrap();
+		assert_eq!(second_request.package, vec![tx]);
+		second_request.result_sender.unwrap().send(Ok(())).unwrap();
+		drop(receivers);
+		assert_eq!(second_call.await.unwrap(), Ok(txid));
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+		*node.is_running.write().unwrap() = false;
 	}
 
 	#[test]
