@@ -32,7 +32,7 @@ use crate::config::{
 	AddressTypeRuntimeConfig, Config, ElectrumSyncConfig, BDK_CLIENT_STOP_GAP,
 	BDK_ELECTRUM_CLIENT_BATCH_SIZE, BDK_WALLET_SYNC_TIMEOUT_SECS,
 	DEFAULT_ELECTRUM_CONNECTION_TIMEOUT_SECS, FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS,
-	LDK_WALLET_SYNC_TIMEOUT_SECS, TX_BROADCAST_TIMEOUT_SECS,
+	LDK_WALLET_SYNC_TIMEOUT_SECS,
 };
 use crate::error::Error;
 use crate::fee_estimator::{
@@ -849,73 +849,46 @@ impl ElectrumRuntimeClient {
 
 		let spawn_fut =
 			self.runtime_handle.spawn_blocking(move || electrum_client.transaction_broadcast(&tx));
-		let timeout_fut =
-			tokio::time::timeout(Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS), spawn_fut);
 
-		match timeout_fut.await {
-			Ok(res) => match res {
-				Ok(broadcast_result) => {
-					let result = classify_electrum_broadcast_result(txid, &broadcast_result);
-					match (&broadcast_result, &result) {
-						(Ok(_), Ok(())) => {
-							log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
-						},
-						(Err(_), Ok(())) => {
-							log_trace!(
-								self.logger,
-								"Transaction {} is already known by backend",
-								txid
-							);
-						},
-						(Ok(id), Err(_)) => {
-							log_error!(
-								self.logger,
-								"Backend returned transaction ID {} for submitted transaction {}",
-								id,
-								txid
-							);
-						},
-						(Err(e), Err(_)) => {
-							log_error!(
-								self.logger,
-								"Failed to broadcast transaction {}: {}",
-								txid,
-								e
-							);
-						},
-					}
-					if result.is_err() {
-						log_trace!(
+		match spawn_fut.await {
+			Ok(broadcast_result) => {
+				let result = classify_electrum_broadcast_result(txid, &broadcast_result);
+				match (&broadcast_result, &result) {
+					(Ok(_), Ok(())) => {
+						log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+					},
+					(Err(_), Ok(())) => {
+						log_trace!(self.logger, "Transaction {} is already known by backend", txid);
+					},
+					(Ok(id), Err(_)) => {
+						log_error!(
 							self.logger,
-							"Failed broadcast transaction bytes: {}",
-							log_bytes!(tx_bytes)
+							"Backend returned transaction ID {} for submitted transaction {}",
+							id,
+							txid
 						);
-					}
-					result
-				},
-				Err(e) => {
-					log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
+					},
+					(Err(e), Err(_)) => {
+						log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
+					},
+				}
+				if result.is_err() {
 					log_trace!(
 						self.logger,
 						"Failed broadcast transaction bytes: {}",
 						log_bytes!(tx_bytes)
 					);
-					Err(TxBroadcastError::Failed)
-				},
+				}
+				result
 			},
 			Err(e) => {
-				log_error!(
-					self.logger,
-					"Failed to broadcast transaction due to timeout {}: {}",
-					txid,
-					e
-				);
+				log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
 				log_trace!(
 					self.logger,
 					"Failed broadcast transaction bytes: {}",
 					log_bytes!(tx_bytes)
 				);
-				Err(TxBroadcastError::Timeout)
+				Err(TxBroadcastError::Failed)
 			},
 		}
 	}

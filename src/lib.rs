@@ -155,7 +155,7 @@ use liquidity::{LSPS1Liquidity, LiquiditySource};
 use logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use payment::asynchronous::om_mailbox::OnionMessageMailbox;
 use payment::asynchronous::static_invoice_store::StaticInvoiceStore;
-pub use payment::{AddressInfo, KeychainKind};
+pub use payment::{AddressInfo, KeychainKind, PendingBroadcastInfo};
 use payment::{
 	Bolt11Payment, Bolt12Payment, OnchainPayment, PaymentDetails, SpontaneousPayment,
 	UnifiedQrPayment,
@@ -1116,7 +1116,7 @@ impl Node {
 		OnchainPayment::new(
 			Arc::clone(&self.wallet),
 			Arc::clone(&self.tx_broadcaster),
-			Arc::clone(&self.runtime),
+			self.runtime.control(),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.config),
 			Arc::clone(&self.is_running),
@@ -1130,7 +1130,7 @@ impl Node {
 		Arc::new(OnchainPayment::new(
 			Arc::clone(&self.wallet),
 			Arc::clone(&self.tx_broadcaster),
-			Arc::clone(&self.runtime),
+			self.runtime.control(),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.config),
 			Arc::clone(&self.is_running),

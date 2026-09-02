@@ -374,15 +374,18 @@ fn observed_broadcast_intents(
 			{
 				return Some((*key, txid, true));
 			}
-			intent
-				.transactions
-				.iter()
-				.rev()
-				.map(|tx| tx.compute_txid())
-				.find(|txid| observed_txids.contains(txid))
-				.map(|txid| (*key, txid, false))
+			let active_txid = intent.active_txid();
+			observed_txids.contains(&active_txid).then_some((*key, active_txid, false))
 		})
 		.collect()
+}
+
+fn clamp_external_timestamp(timestamp: u64, now: u64) -> u64 {
+	if timestamp > u32::MAX as u64 {
+		now
+	} else {
+		timestamp
+	}
 }
 
 fn map_wallet_account_error(
@@ -451,6 +454,7 @@ pub(crate) struct Wallet {
 	node_metrics: Arc<RwLock<NodeMetrics>>,
 	logger: Arc<Logger>,
 	derived_account_lookahead: u32,
+	locally_applied_unconfirmed_txids: Mutex<Vec<Txid>>,
 }
 
 impl Wallet {
@@ -492,6 +496,7 @@ impl Wallet {
 			node_metrics,
 			logger,
 			derived_account_lookahead,
+			locally_applied_unconfirmed_txids: Mutex::new(Vec::new()),
 		}
 	}
 
@@ -1174,6 +1179,15 @@ impl Wallet {
 	) -> Result<(), Error> {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
 		self.complete_broadcast_transitions()?;
+		let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+		let unconfirmed_txs = unconfirmed_txs
+			.into_iter()
+			.map(|(tx, timestamp)| (tx, clamp_external_timestamp(timestamp, now)))
+			.collect::<Vec<_>>();
+		let evicted_txids = evicted_txids
+			.into_iter()
+			.map(|(txid, timestamp)| (txid, clamp_external_timestamp(timestamp, now)))
+			.collect::<Vec<_>>();
 		let authoritative_txids =
 			unconfirmed_txs.iter().map(|(tx, _)| tx.compute_txid()).collect::<HashSet<_>>();
 		let pending_intents = self.read_all_broadcast_intents()?;
@@ -1218,6 +1232,7 @@ impl Wallet {
 			log_error!(self.logger, "Failed to index pending transaction {}: {}", txid, e);
 			return Err(Error::OnchainTxBroadcastFailed { txid });
 		}
+		self.note_locally_applied_unconfirmed(txid);
 		Ok(())
 	}
 
@@ -1253,9 +1268,10 @@ impl Wallet {
 			Error::PersistenceFailed
 		})?;
 		drop(locked_wallet);
-		for intent_txid in txids {
+		for intent_txid in &txids {
 			self.payment_store.remove(&PaymentId(intent_txid.to_byte_array()))?;
 		}
+		self.forget_locally_applied_unconfirmed(&txids);
 		self.remove_broadcast_intent(&intent_key)
 	}
 
@@ -1275,29 +1291,63 @@ impl Wallet {
 		let lineage_txids =
 			intent.transactions.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
 		let mut locked_wallet = self.inner.lock().unwrap();
-		let last_seen = Self::next_broadcast_timestamp(&locked_wallet, &lineage_txids)?;
-		self.payment_store_update_pending.store(true, Ordering::Release);
-		if let Err(e) = locked_wallet.apply_mempool_txs(vec![(tx.clone(), last_seen)], Vec::new()) {
-			log_error!(self.logger, "Failed to restore pending transaction {}: {}", txid, e);
-			return Err(Error::OnchainTxBroadcastFailed { txid: *txid });
-		}
-		if let Err(e) = self.update_payment_store(&locked_wallet) {
-			log_error!(self.logger, "Failed to restore payment index for {}: {}", txid, e);
-			return Err(Error::OnchainTxBroadcastFailed { txid: *txid });
+		match Self::next_broadcast_timestamp(&locked_wallet, &lineage_txids) {
+			Ok(last_seen) => {
+				self.payment_store_update_pending.store(true, Ordering::Release);
+				if let Err(e) =
+					locked_wallet.apply_mempool_txs(vec![(tx.clone(), last_seen)], Vec::new())
+				{
+					log_error!(
+						self.logger,
+						"Failed to restore pending transaction {}: {}",
+						txid,
+						e
+					);
+					return Err(Error::OnchainTxBroadcastFailed { txid: *txid });
+				}
+				if let Err(e) = self.update_payment_store(&locked_wallet) {
+					log_error!(self.logger, "Failed to restore payment index for {}: {}", txid, e);
+					return Err(Error::OnchainTxBroadcastFailed { txid: *txid });
+				}
+			},
+			Err(_) if locked_wallet.find_tx(*txid).is_some() => {},
+			Err(_) => return Err(Error::OnchainTxBroadcastFailed { txid: *txid }),
 		}
 		Ok(Some(tx))
 	}
 
 	/// List transaction IDs whose backend acceptance still requires reconciliation.
+	#[cfg(test)]
 	pub(crate) fn list_pending_broadcasts(&self) -> Result<Vec<Txid>, Error> {
+		Ok(self.list_pending_broadcast_infos()?.into_iter().map(|(txid, _)| txid).collect())
+	}
+
+	pub(crate) fn list_pending_broadcast_infos(&self) -> Result<Vec<(Txid, Vec<Txid>)>, Error> {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
 		self.complete_broadcast_transitions()?;
 		Ok(self
 			.read_all_broadcast_intents()?
 			.into_iter()
 			.filter(|(_, intent)| intent.has_pending_transaction())
-			.map(|(_, intent)| intent.active_txid())
+			.map(|(_, intent)| {
+				(
+					intent.active_txid(),
+					intent.transactions.iter().map(|tx| tx.compute_txid()).collect(),
+				)
+			})
 			.collect())
+	}
+
+	pub(crate) fn take_locally_applied_unconfirmed_txids(&self) -> Vec<Txid> {
+		std::mem::take(&mut *self.locally_applied_unconfirmed_txids.lock().unwrap())
+	}
+
+	fn note_locally_applied_unconfirmed(&self, txid: Txid) {
+		self.locally_applied_unconfirmed_txids.lock().unwrap().push(txid);
+	}
+
+	fn forget_locally_applied_unconfirmed(&self, txids: &[Txid]) {
+		self.locally_applied_unconfirmed_txids.lock().unwrap().retain(|txid| !txids.contains(txid));
 	}
 
 	/// Resolve an accepted broadcast while retaining multi-hop RBF lineage until confirmation.
@@ -1368,7 +1418,11 @@ impl Wallet {
 		for intent in intents {
 			let lineage_txids =
 				intent.transactions.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
-			let last_seen = Self::next_broadcast_timestamp(locked_wallet, &lineage_txids)?;
+			let last_seen = match Self::next_broadcast_timestamp(locked_wallet, &lineage_txids) {
+				Ok(last_seen) => last_seen,
+				Err(_) if locked_wallet.find_tx(intent.active_txid()).is_some() => continue,
+				Err(e) => return Err(e),
+			};
 			unconfirmed_txs.push((intent.active_transaction().clone(), last_seen));
 		}
 		locked_wallet.apply_mempool_txs(unconfirmed_txs, Vec::new()).map_err(|e| {
@@ -1398,7 +1452,11 @@ impl Wallet {
 			})
 			.max()
 			.unwrap_or(0);
-		now.max(latest_seen).max(latest_evicted).checked_add(1).ok_or(Error::WalletOperationFailed)
+		now.max(latest_seen)
+			.max(latest_evicted)
+			.checked_add(1)
+			.filter(|&timestamp| timestamp < u64::MAX)
+			.ok_or(Error::WalletOperationFailed)
 	}
 
 	fn write_broadcast_intent(&self, intent: &BroadcastIntent) -> Result<(), Error> {
@@ -1858,6 +1916,7 @@ impl Wallet {
 			log_error!(self.logger, "Failed to index RBF replacement {}: {}", new_txid, e);
 			return Err(Error::OnchainTxBroadcastFailed { txid: new_txid });
 		}
+		self.note_locally_applied_unconfirmed(new_txid);
 
 		// Calculate and log the actual fee increase achieved
 		let new_fee = locked_wallet.calculate_tx_fee(&tx).unwrap_or(Amount::ZERO);
@@ -3489,8 +3548,9 @@ impl ChangeDestinationSource for WalletKeysManager {
 #[cfg(test)]
 mod tests {
 	use super::{
-		additional_input_weight, map_wallet_account_error, validate_derivation_index,
-		validate_derivation_range, BroadcastIntent, BroadcastIntentState, BIP32_MAX_NORMAL_INDEX,
+		additional_input_weight, map_wallet_account_error, observed_broadcast_intents,
+		validate_derivation_index, validate_derivation_range, BroadcastIntent,
+		BroadcastIntentState, BIP32_MAX_NORMAL_INDEX,
 		LEGACY_ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION,
 		LEGACY_RESOLVED_BROADCAST_INTENT_SERIALIZATION_VERSION, MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
@@ -3926,15 +3986,73 @@ mod tests {
 	}
 
 	#[test]
-	fn observing_an_rbf_predecessor_resolves_the_active_replacement_intent() {
+	fn observing_an_rbf_predecessor_keeps_the_active_replacement_pending() {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		let node = replacement_test_node(store);
 		let original = replacement_test_transaction(5);
 		let replacement = replacement_test_transaction(6);
-		let intent = BroadcastIntent::replacement(None, original.clone(), replacement).unwrap();
+		let replacement_txid = replacement.compute_txid();
+		let intent =
+			BroadcastIntent::replacement(None, original.clone(), replacement.clone()).unwrap();
 		node.wallet.write_broadcast_intent(&intent).unwrap();
 
 		node.wallet.apply_mempool_txs(vec![(original, 1)], Vec::new()).unwrap();
+
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![replacement_txid]);
+		assert_eq!(
+			node.wallet.list_pending_broadcast_infos().unwrap(),
+			vec![(replacement_txid, vec![intent.key(), replacement_txid])]
+		);
+	}
+
+	#[test]
+	fn terminal_last_seen_does_not_persist_max_or_fail_restart() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(Arc::clone(&store));
+		let script_pubkey = node.onchain_payment().new_address().unwrap().script_pubkey();
+		let mut original = replacement_test_transaction(29);
+		original.input[0].previous_output.vout = 1;
+		original.output.push(TxOut { value: Amount::from_sat(10_000), script_pubkey });
+		let txid = original.compute_txid();
+		node.wallet.prepare_pending_broadcast(&original).unwrap();
+		node.wallet
+			.inner
+			.lock()
+			.unwrap()
+			.apply_mempool_txs(vec![(original.clone(), u64::MAX - 1)], Vec::new())
+			.unwrap();
+		{
+			let wallet = node.wallet.inner.lock().unwrap();
+			assert_eq!(
+				super::Wallet::next_broadcast_timestamp(&wallet, &[txid]),
+				Err(Error::WalletOperationFailed)
+			);
+		}
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		drop(node);
+
+		let restarted = replacement_test_node(store);
+		assert_eq!(restarted.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(restarted.wallet.recover_pending_broadcast(&txid).unwrap(), Some(original));
+	}
+
+	#[test]
+	fn confirming_an_rbf_predecessor_resolves_the_active_replacement_intent() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(store);
+		let original = replacement_test_transaction(5);
+		let replacement = replacement_test_transaction(6);
+		let original_txid = original.compute_txid();
+		let intent = BroadcastIntent::replacement(None, original.clone(), replacement).unwrap();
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+
+		node.wallet
+			.resolve_broadcast_intents(observed_broadcast_intents(
+				&[(intent.key(), intent)],
+				&HashSet::new(),
+				&HashSet::from([original_txid]),
+			))
+			.unwrap();
 
 		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
 	}
