@@ -16,7 +16,7 @@ use crate::error::Error;
 use crate::fee_estimator::ConfirmationTarget;
 use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::runtime::Runtime;
-use crate::tx_broadcaster::TxBroadcastError;
+use crate::tx_broadcaster::{ExplicitBroadcastAdmission, TxBroadcastError};
 use crate::types::{Broadcaster, ChannelManager, SpendableUtxo, Wallet};
 use crate::wallet::{CoinSelectionAlgorithm, OnchainSendAmount};
 
@@ -117,10 +117,19 @@ impl OnchainPayment {
 		Self { wallet, tx_broadcaster, runtime, channel_manager, config, is_running, logger }
 	}
 
-	fn dispatch_prepared_transaction(&self, tx: bitcoin::Transaction) -> Result<Txid, Error> {
+	fn begin_explicit_broadcast(&self) -> Result<ExplicitBroadcastAdmission, Error> {
+		self.tx_broadcaster.begin_explicit_broadcast().map_err(|_| Error::NotRunning)
+	}
+
+	fn dispatch_prepared_transaction(
+		&self, admission: ExplicitBroadcastAdmission, tx: bitcoin::Transaction,
+	) -> Result<Txid, Error> {
 		let txid = tx.compute_txid();
 		self.wallet.prepare_pending_broadcast(&tx)?;
-		match self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx.clone())) {
+		match self
+			.runtime
+			.block_on(self.tx_broadcaster.broadcast_transaction(admission, tx.clone()))
+		{
 			Ok(()) => {
 				if let Err(e) = self.wallet.clear_broadcast_intent(&txid) {
 					log_error!(
@@ -480,7 +489,6 @@ impl OnchainPayment {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
-
 		let cur_anchor_reserve_sats =
 			crate::total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
 
@@ -605,6 +613,7 @@ impl OnchainPayment {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
+		let admission = self.begin_explicit_broadcast()?;
 
 		let cur_anchor_reserve_sats =
 			crate::total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
@@ -619,7 +628,7 @@ impl OnchainPayment {
 			outpoints,
 			&self.channel_manager,
 		)?;
-		self.dispatch_prepared_transaction(tx)
+		self.dispatch_prepared_transaction(admission, tx)
 	}
 
 	/// Send an on-chain payment to the given address, draining the available funds.
@@ -655,6 +664,7 @@ impl OnchainPayment {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
+		let admission = self.begin_explicit_broadcast()?;
 
 		let send_amount = if retain_reserves {
 			let cur_anchor_reserve_sats =
@@ -672,7 +682,7 @@ impl OnchainPayment {
 			None,
 			&self.channel_manager,
 		)?;
-		self.dispatch_prepared_transaction(tx)
+		self.dispatch_prepared_transaction(admission, tx)
 	}
 
 	/// Rebroadcast a previously prepared on-chain transaction without creating a new spend.
@@ -682,7 +692,9 @@ impl OnchainPayment {
 	/// The exact persisted transaction is reused, so retrying cannot create a second payment
 	/// transaction. On success, the same transaction ID is returned. Any retry error preserves the
 	/// original unresolved intent; a retry rejection or not-dispatched outcome therefore maps to
-	/// [`Error::OnchainTxBroadcastFailed`] rather than permitting a fresh send.
+	/// [`Error::OnchainTxBroadcastFailed`] rather than permitting a fresh send. After external
+	/// reconciliation proves the transaction absent, [`Self::abandon_pending_broadcast`] provides
+	/// the explicit terminal transition that releases its inputs.
 	///
 	/// Returns [`Error::NotRunning`] if the node is stopped and [`Error::TransactionNotFound`] if the
 	/// transaction is not available in the durable broadcast-intent store.
@@ -690,9 +702,10 @@ impl OnchainPayment {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
+		let admission = self.begin_explicit_broadcast()?;
 
 		let tx = self.wallet.recover_pending_broadcast(txid)?.ok_or(Error::TransactionNotFound)?;
-		match self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx)) {
+		match self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(admission, tx)) {
 			Ok(()) => {
 				if let Err(e) = self.wallet.clear_broadcast_intent(txid) {
 					log_error!(
@@ -710,11 +723,49 @@ impl OnchainPayment {
 
 	/// List explicit transaction IDs whose backend acceptance is still unresolved.
 	///
-	/// Entries survive process restart and ordinary mempool eviction. A transaction is removed only
-	/// after a conclusive initial rejection/not-dispatched result, successful explicit broadcast, or
-	/// observation by the configured backend.
+	/// Entries survive process restart and ordinary mempool eviction. RBF supersession atomically
+	/// changes the active transaction ID while preserving predecessor transactions for backend
+	/// reconciliation. An entry is removed only after a conclusive initial rejection/not-dispatched
+	/// result, successful explicit broadcast, backend observation, or explicit reconciled abandon.
 	pub fn list_pending_broadcasts(&self) -> Result<Vec<Txid>, Error> {
 		self.wallet.list_pending_broadcasts()
+	}
+
+	/// Abandon an unresolved explicit broadcast after conclusive external reconciliation.
+	///
+	/// Call this only after independently verifying that the transaction and every replacement for
+	/// the same payment intent are absent from the mempool and chain and will not be rebroadcast by
+	/// another process. This releases their reserved inputs and removes their pending payment
+	/// records. If the active transaction is later observed, ordinary wallet sync will record it
+	/// again.
+	///
+	/// Returns [`Error::NotRunning`] if the node is stopped and [`Error::TransactionNotFound`] if
+	/// `txid` is not the active transaction returned by [`Self::list_pending_broadcasts`].
+	///
+	/// # Safety and trust boundary
+	///
+	/// No Rust memory-safety preconditions apply. The caller must treat the configured backend as
+	/// insufficient evidence on its own after an acceptance-unknown result and reconcile against an
+	/// independent authoritative mempool/chain source before abandoning.
+	///
+	/// # Example
+	///
+	/// ```
+	/// # use bitcoin::Txid;
+	/// # use ldk_node::payment::OnchainPayment;
+	/// # use ldk_node::NodeError;
+	/// # fn abandon_reconciled(
+	/// #     payment: &OnchainPayment,
+	/// #     txid: &Txid,
+	/// # ) -> Result<(), NodeError> {
+	/// payment.abandon_pending_broadcast(txid)
+	/// # }
+	/// ```
+	pub fn abandon_pending_broadcast(&self, txid: &Txid) -> Result<(), Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+		self.wallet.abandon_broadcast_intent_by_txid(txid)
 	}
 
 	/// Bumps the fee of an existing transaction using Replace-By-Fee (RBF).
@@ -732,7 +783,7 @@ impl OnchainPayment {
 	///
 	/// # Returns
 	///
-	/// The transaction ID of the new transaction if successful.
+	/// The replacement transaction ID after the configured backend accepts it.
 	///
 	/// # Errors
 	///
@@ -742,10 +793,15 @@ impl OnchainPayment {
 	/// * [`Error::CannotRbfFundingTransaction`] - If the transaction is a channel funding transaction
 	/// * [`Error::InvalidFeeRate`] - If the new fee rate is not higher than the original
 	/// * [`Error::OnchainTxCreationFailed`] - If the new transaction couldn't be created
+	/// * [`Error::OnchainTxBroadcastRejected`] - If the backend conclusively rejects the replacement
+	/// * [`Error::OnchainTxBroadcastNotDispatched`] - If the replacement did not reach the backend
+	/// * [`Error::OnchainTxBroadcastFailed`] - If replacement acceptance is unknown
+	/// * [`Error::OnchainTxBroadcastTimeout`] - If replacement acceptance timed out
 	pub fn bump_fee_by_rbf(&self, txid: &Txid, fee_rate: FeeRate) -> Result<Txid, Error> {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
+		let admission = self.begin_explicit_broadcast()?;
 
 		// Pass through to the wallet implementation
 		#[cfg(not(feature = "uniffi"))]
@@ -753,7 +809,34 @@ impl OnchainPayment {
 		#[cfg(feature = "uniffi")]
 		let fee_rate_param = *fee_rate;
 
-		self.wallet.bump_fee_by_rbf(txid, fee_rate_param, &self.channel_manager)
+		let replacement =
+			self.wallet.prepare_rbf_broadcast(txid, fee_rate_param, &self.channel_manager)?;
+		let replacement_txid = replacement.compute_txid();
+		match self
+			.runtime
+			.block_on(self.tx_broadcaster.broadcast_transaction(admission, replacement))
+		{
+			Ok(()) => {
+				if let Err(e) = self.wallet.clear_broadcast_intent(&replacement_txid) {
+					log_error!(
+						self.logger,
+						"Failed to clear accepted RBF broadcast intent {}: {}",
+						replacement_txid,
+						e
+					);
+				}
+				Ok(replacement_txid)
+			},
+			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
+				if self.wallet.reject_rbf_broadcast(&replacement_txid).is_err() {
+					return Err(Error::OnchainTxBroadcastFailed { txid: replacement_txid });
+				}
+				Err(Self::initial_broadcast_error(error, replacement_txid))
+			},
+			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
+				Err(Self::initial_broadcast_error(error, replacement_txid))
+			},
+		}
 	}
 
 	/// Accelerates confirmation of a transaction using Child-Pays-For-Parent (CPFP).
@@ -846,12 +929,16 @@ impl OnchainPayment {
 
 #[cfg(test)]
 mod tests {
-	use std::sync::Arc;
+	use std::future::Future;
+	use std::pin::Pin;
+	use std::sync::{Arc, Condvar, Mutex};
 
 	use bitcoin::absolute::LockTime;
 	use bitcoin::hashes::Hash;
 	use bitcoin::transaction::Version;
 	use bitcoin::{Network, Transaction, Txid};
+	use lightning::io;
+	use lightning::util::persist::{KVStore, KVStoreSync};
 
 	use super::OnchainPayment;
 	use crate::builder::NodeBuilder;
@@ -861,6 +948,116 @@ mod tests {
 	use crate::tx_broadcaster::TxBroadcastError;
 	use crate::types::DynStore;
 	use crate::Node;
+
+	#[derive(Default)]
+	struct BroadcastWriteState {
+		armed: bool,
+		blocked: bool,
+		released: bool,
+	}
+
+	struct BlockingBroadcastIntentStore {
+		inner: InMemoryStore,
+		state: Mutex<BroadcastWriteState>,
+		state_changed: Condvar,
+	}
+
+	impl BlockingBroadcastIntentStore {
+		fn new() -> Self {
+			Self {
+				inner: InMemoryStore::new(),
+				state: Mutex::new(BroadcastWriteState::default()),
+				state_changed: Condvar::new(),
+			}
+		}
+
+		fn block_next_broadcast_intent_write(&self) {
+			let mut state = self.state.lock().unwrap();
+			*state = BroadcastWriteState { armed: true, blocked: false, released: false };
+		}
+
+		fn wait_until_broadcast_intent_write_is_blocked(&self) {
+			let mut state = self.state.lock().unwrap();
+			while !state.blocked {
+				state = self.state_changed.wait(state).unwrap();
+			}
+		}
+
+		fn release_broadcast_intent_write(&self) {
+			let mut state = self.state.lock().unwrap();
+			state.released = true;
+			self.state_changed.notify_all();
+		}
+
+		fn maybe_block_broadcast_intent_write(&self, primary_namespace: &str) {
+			if primary_namespace != crate::io::ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE {
+				return;
+			}
+			let mut state = self.state.lock().unwrap();
+			if !state.armed {
+				return;
+			}
+			state.blocked = true;
+			self.state_changed.notify_all();
+			while !state.released {
+				state = self.state_changed.wait(state).unwrap();
+			}
+			state.armed = false;
+		}
+	}
+
+	impl KVStore for BlockingBroadcastIntentStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, io::Error>> + 'static + Send>> {
+			KVStore::read(&self.inner, primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'static + Send>> {
+			KVStore::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'static + Send>> {
+			KVStore::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, io::Error>> + 'static + Send>> {
+			KVStore::list(&self.inner, primary_namespace, secondary_namespace)
+		}
+	}
+
+	impl KVStoreSync for BlockingBroadcastIntentStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> io::Result<Vec<u8>> {
+			KVStoreSync::read(&self.inner, primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> io::Result<()> {
+			self.maybe_block_broadcast_intent_write(primary_namespace);
+			KVStoreSync::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> io::Result<()> {
+			KVStoreSync::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> io::Result<Vec<String>> {
+			KVStoreSync::list(&self.inner, primary_namespace, secondary_namespace)
+		}
+	}
 
 	fn test_node(store: Arc<DynStore>) -> Node {
 		let config = Config { network: Network::Regtest, ..Config::default() };
@@ -905,8 +1102,10 @@ mod tests {
 		let node = test_node(Arc::clone(&store));
 		let payment = node.onchain_payment();
 		let send_tx = tx.clone();
-		let initial_call =
-			tokio::task::spawn_blocking(move || payment.dispatch_prepared_transaction(send_tx));
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		let initial_call = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, send_tx)
+		});
 		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let initial_request = receivers.recv().await.unwrap();
 		assert_eq!(initial_request.package, vec![tx.clone()]);
@@ -943,5 +1142,65 @@ mod tests {
 		assert_eq!(accepted_call.await.unwrap(), Ok(txid));
 		assert!(restarted_node.wallet.list_pending_broadcasts().unwrap().is_empty());
 		*restarted_node.is_running.write().unwrap() = false;
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn retry_rejection_can_be_conclusively_abandoned() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_transaction();
+		let txid = tx.compute_txid();
+		let node = test_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		*node.is_running.write().unwrap() = true;
+
+		let payment = node.onchain_payment();
+		let retry = tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		request.result_sender.unwrap().send(Err(TxBroadcastError::Rejected)).unwrap();
+		drop(receivers);
+
+		assert_eq!(retry.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		node.onchain_payment().abandon_pending_broadcast(&txid).unwrap();
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), None);
+		*node.is_running.write().unwrap() = false;
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn pre_stop_admission_cannot_enqueue_after_restart_when_prepare_stalls() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let tx = test_transaction();
+		let txid = tx.compute_txid();
+		let node = test_node(store);
+		*node.is_running.write().unwrap() = true;
+		let payment = node.onchain_payment();
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		concrete_store.block_next_broadcast_intent_write();
+
+		let dispatch = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, tx)
+		});
+		let blocking_store = Arc::clone(&concrete_store);
+		tokio::task::spawn_blocking(move || {
+			blocking_store.wait_until_broadcast_intent_write_is_blocked()
+		})
+		.await
+		.unwrap();
+
+		node.tx_broadcaster.pause_explicit_broadcasts();
+		node.tx_broadcaster.drain_explicit_broadcasts().await;
+		node.tx_broadcaster.resume_explicit_broadcasts();
+		concrete_store.release_broadcast_intent_write();
+
+		assert_eq!(dispatch.await.unwrap(), Err(Error::OnchainTxBroadcastNotDispatched { txid }));
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		assert!(tokio::time::timeout(std::time::Duration::from_millis(20), receivers.recv())
+			.await
+			.is_err());
+		*node.is_running.write().unwrap() = false;
 	}
 }

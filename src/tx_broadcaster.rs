@@ -208,9 +208,14 @@ where
 	ldk_sender: mpsc::UnboundedSender<BroadcastRequest>,
 	explicit_sender: mpsc::Sender<BroadcastRequest>,
 	queue_receivers: Mutex<BroadcastQueueReceivers>,
-	explicit_broadcasts_enabled: std::sync::Mutex<bool>,
+	explicit_broadcast_run: std::sync::Mutex<Option<Arc<ExplicitBroadcastRun>>>,
 	logger: L,
 }
+
+struct ExplicitBroadcastRun;
+
+#[derive(Clone)]
+pub(crate) struct ExplicitBroadcastAdmission(Arc<ExplicitBroadcastRun>);
 
 impl<L: Deref> TransactionBroadcaster<L>
 where
@@ -225,19 +230,32 @@ where
 			ldk_sender,
 			explicit_sender,
 			queue_receivers,
-			explicit_broadcasts_enabled: std::sync::Mutex::new(true),
+			explicit_broadcast_run: std::sync::Mutex::new(Some(Arc::new(ExplicitBroadcastRun))),
 			logger,
 		}
 	}
 
-	/// Allows explicit broadcasts for a new node run after the prior queue was drained.
+	/// Starts a new explicit-broadcast run after the prior queue was drained.
 	pub(crate) fn resume_explicit_broadcasts(&self) {
-		*self.explicit_broadcasts_enabled.lock().unwrap() = true;
+		*self.explicit_broadcast_run.lock().unwrap() = Some(Arc::new(ExplicitBroadcastRun));
 	}
 
-	/// Prevents new explicit broadcasts from entering the current run's queue.
+	/// Invalidates every admission captured for the current run.
 	pub(crate) fn pause_explicit_broadcasts(&self) {
-		*self.explicit_broadcasts_enabled.lock().unwrap() = false;
+		*self.explicit_broadcast_run.lock().unwrap() = None;
+	}
+
+	/// Captures the current run before transaction creation or durable preparation begins.
+	pub(crate) fn begin_explicit_broadcast(
+		&self,
+	) -> Result<ExplicitBroadcastAdmission, TxBroadcastError> {
+		self.explicit_broadcast_run
+			.lock()
+			.unwrap()
+			.as_ref()
+			.cloned()
+			.map(ExplicitBroadcastAdmission)
+			.ok_or(TxBroadcastError::NotDispatched)
 	}
 
 	/// Completes every queued explicit request after new enqueue operations have been fenced.
@@ -253,20 +271,25 @@ where
 	}
 
 	pub(crate) async fn broadcast_transaction(
-		&self, tx: Transaction,
+		&self, admission: ExplicitBroadcastAdmission, tx: Transaction,
 	) -> Result<(), TxBroadcastError> {
-		self.broadcast_transaction_with_timeout(tx, Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS))
-			.await
+		self.broadcast_transaction_with_timeout(
+			admission,
+			tx,
+			Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
+		)
+		.await
 	}
 
 	async fn broadcast_transaction_with_timeout(
-		&self, tx: Transaction, timeout: Duration,
+		&self, admission: ExplicitBroadcastAdmission, tx: Transaction, timeout: Duration,
 	) -> Result<(), TxBroadcastError> {
 		let (result_sender, result_receiver) = oneshot::channel();
 		let (request, explicit_claim) = BroadcastRequest::explicit(vec![tx], result_sender);
 		{
-			let enabled = self.explicit_broadcasts_enabled.lock().unwrap();
-			if !*enabled {
+			let active_run = self.explicit_broadcast_run.lock().unwrap();
+			if !active_run.as_ref().is_some_and(|active_run| Arc::ptr_eq(active_run, &admission.0))
+			{
 				return Err(TxBroadcastError::NotDispatched);
 			}
 			self.explicit_sender.try_send(request).map_err(|_| TxBroadcastError::NotDispatched)?;
@@ -349,7 +372,8 @@ mod tests {
 	#[tokio::test]
 	async fn explicit_broadcast_returns_after_backend_acceptance() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
-		let broadcast_fut = broadcaster.broadcast_transaction(test_transaction());
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction());
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
@@ -363,7 +387,8 @@ mod tests {
 	#[tokio::test]
 	async fn explicit_broadcast_propagates_backend_rejection() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
-		let broadcast_fut = broadcaster.broadcast_transaction(test_transaction());
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction());
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
@@ -377,7 +402,8 @@ mod tests {
 	#[tokio::test]
 	async fn explicit_broadcast_propagates_backend_failure() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
-		let broadcast_fut = broadcaster.broadcast_transaction(test_transaction());
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction());
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
@@ -391,8 +417,12 @@ mod tests {
 	#[tokio::test]
 	async fn claimed_explicit_broadcast_waits_for_backend_result_after_queue_timeout() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
-		let broadcast_fut = broadcaster
-			.broadcast_transaction_with_timeout(test_transaction(), Duration::from_millis(10));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			test_transaction(),
+			Duration::from_millis(10),
+		);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
@@ -407,14 +437,23 @@ mod tests {
 	#[tokio::test]
 	async fn queued_explicit_broadcast_is_cancelled_before_backend_claim() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
 		let cancelled_result = broadcaster
-			.broadcast_transaction_with_timeout(test_transaction(), Duration::from_millis(10))
+			.broadcast_transaction_with_timeout(
+				admission,
+				test_transaction(),
+				Duration::from_millis(10),
+			)
 			.await;
 		assert_eq!(cancelled_result, Err(TxBroadcastError::NotDispatched));
 
 		let live_tx = test_transaction_with_lock_time(1);
-		let broadcast_fut =
-			broadcaster.broadcast_transaction_with_timeout(live_tx.clone(), Duration::from_secs(1));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			live_tx.clone(),
+			Duration::from_secs(1),
+		);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
@@ -431,8 +470,13 @@ mod tests {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
 		let cancelled_broadcaster = Arc::clone(&broadcaster);
 		let cancelled_task = tokio::spawn(async move {
+			let admission = cancelled_broadcaster.begin_explicit_broadcast().unwrap();
 			cancelled_broadcaster
-				.broadcast_transaction_with_timeout(test_transaction(), Duration::from_secs(1))
+				.broadcast_transaction_with_timeout(
+					admission,
+					test_transaction(),
+					Duration::from_secs(1),
+				)
 				.await
 		});
 		tokio::task::yield_now().await;
@@ -441,8 +485,12 @@ mod tests {
 		assert!(cancelled_task.await.unwrap_err().is_cancelled());
 
 		let live_tx = test_transaction_with_lock_time(1);
-		let broadcast_fut =
-			broadcaster.broadcast_transaction_with_timeout(live_tx.clone(), Duration::from_secs(1));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			live_tx.clone(),
+			Duration::from_secs(1),
+		);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
@@ -457,8 +505,12 @@ mod tests {
 	#[tokio::test]
 	async fn stopping_worker_fails_queued_explicit_broadcast_without_dispatch() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
-		let broadcast_fut = broadcaster
-			.broadcast_transaction_with_timeout(test_transaction(), Duration::from_secs(1));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			test_transaction(),
+			Duration::from_secs(1),
+		);
 		let stop_fut = async {
 			tokio::task::yield_now().await;
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
@@ -472,20 +524,34 @@ mod tests {
 	#[tokio::test]
 	async fn stopped_queue_rejects_new_requests_and_does_not_replay_them_after_restart() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let stale_admission = broadcaster.begin_explicit_broadcast().unwrap();
 		broadcaster.pause_explicit_broadcasts();
 		broadcaster.drain_explicit_broadcasts().await;
 
 		assert_eq!(
+			broadcaster.begin_explicit_broadcast().err(),
+			Some(TxBroadcastError::NotDispatched)
+		);
+
+		broadcaster.resume_explicit_broadcasts();
+		assert_eq!(
 			broadcaster
-				.broadcast_transaction_with_timeout(test_transaction(), Duration::from_secs(1))
+				.broadcast_transaction_with_timeout(
+					stale_admission,
+					test_transaction(),
+					Duration::from_secs(1),
+				)
 				.await,
 			Err(TxBroadcastError::NotDispatched)
 		);
 
-		broadcaster.resume_explicit_broadcasts();
 		let live_tx = test_transaction_with_lock_time(1);
-		let broadcast_fut =
-			broadcaster.broadcast_transaction_with_timeout(live_tx.clone(), Duration::from_secs(1));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			live_tx.clone(),
+			Duration::from_secs(1),
+		);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
@@ -521,7 +587,11 @@ mod tests {
 
 		assert_eq!(
 			broadcaster
-				.broadcast_transaction_with_timeout(test_transaction(), Duration::from_secs(1))
+				.broadcast_transaction_with_timeout(
+					broadcaster.begin_explicit_broadcast().unwrap(),
+					test_transaction(),
+					Duration::from_secs(1),
+				)
 				.await,
 			Err(TxBroadcastError::NotDispatched)
 		);

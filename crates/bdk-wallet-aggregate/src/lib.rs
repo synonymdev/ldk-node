@@ -629,10 +629,20 @@ where
 	///
 	/// The transaction is evicted from the active graph and its inputs are released for a new send.
 	pub fn abandon_tx(&mut self, tx: &Transaction, last_seen: u64) -> Result<(), Error> {
-		let txid = tx.compute_txid();
+		self.abandon_txs(std::slice::from_ref(tx), last_seen)
+	}
+
+	/// Mark a transaction and all of its locally prepared replacements as abandoned.
+	///
+	/// Every transaction is evicted and cancelled before each wallet is persisted, so conflicting
+	/// replacements cannot leave the same input reserved after explicit reconciliation.
+	pub fn abandon_txs(&mut self, txs: &[Transaction], last_seen: u64) -> Result<(), Error> {
+		let evicted_txs = txs.iter().map(|tx| (tx.compute_txid(), last_seen)).collect::<Vec<_>>();
 		for (key, wallet) in self.wallets.iter_mut() {
-			wallet.apply_evicted_txs([(txid, last_seen)]);
-			wallet.cancel_tx(tx);
+			wallet.apply_evicted_txs(evicted_txs.iter().copied());
+			for tx in txs {
+				wallet.cancel_tx(tx);
+			}
 			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
 			wallet.persist(persister).map_err(|e| {
 				log::error!("Failed to persist wallet {:?}: {}", key, e);
@@ -1902,6 +1912,33 @@ mod tests {
 			.list_unspent()
 			.iter()
 			.any(|output| output.outpoint == tx.input[0].previous_output));
+	}
+
+	#[test]
+	fn pending_broadcast_reapplication_must_be_newer_than_an_equal_eviction() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let txid = tx.compute_txid();
+		let spent_outpoint = tx.input[0].previous_output;
+
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 7)], Vec::new()).unwrap();
+		aggregate.apply_mempool_txs(Vec::new(), vec![(txid, 7)]).unwrap();
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 7)], Vec::new()).unwrap();
+
+		assert_eq!(aggregate.find_tx(txid), None);
+		assert!(aggregate.list_unspent().iter().any(|output| output.outpoint == spent_outpoint));
+
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 8)], Vec::new()).unwrap();
+
+		assert_eq!(aggregate.find_tx(txid), Some(tx));
+		assert!(!aggregate.list_unspent().iter().any(|output| output.outpoint == spent_outpoint));
 	}
 
 	#[test]
