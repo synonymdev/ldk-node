@@ -12,6 +12,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
 use bdk_chain::ConfirmationBlockTime;
@@ -820,6 +821,30 @@ impl Wallet {
 			Error::PersistenceFailed
 		})?;
 		self.update_payment_store(&locked_wallet)
+	}
+
+	/// Persist an explicit signed transaction before it can cross the backend trust boundary.
+	pub(crate) fn persist_pending_broadcast(&self, tx: &Transaction) -> Result<(), Error> {
+		let last_seen = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+		self.apply_mempool_txs(vec![(tx.clone(), last_seen)], Vec::new())
+	}
+
+	/// Release a transaction that was rejected or was provably never dispatched.
+	pub(crate) fn abandon_pending_broadcast(&self, tx: &Transaction) -> Result<(), Error> {
+		let txid = tx.compute_txid();
+		let last_seen = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+		let mut locked_wallet = self.inner.lock().unwrap();
+		locked_wallet.abandon_tx(tx, last_seen).map_err(|e| {
+			log_error!(self.logger, "Failed to abandon pending transaction {}: {}", txid, e);
+			Error::PersistenceFailed
+		})?;
+		drop(locked_wallet);
+		self.payment_store.remove(&PaymentId(txid.to_byte_array()))
+	}
+
+	/// Recover the exact persisted transaction bytes for reconciliation or rebroadcast.
+	pub(crate) fn find_transaction(&self, txid: &Txid) -> Option<Transaction> {
+		self.inner.lock().unwrap().find_tx(*txid)
 	}
 
 	// Bumps the fee of an existing transaction using Replace-By-Fee (RBF).
