@@ -157,15 +157,27 @@ pub enum Error {
 	/// The seed bytes or a seed-derived wallet account are invalid.
 	InvalidSeedBytes,
 	/// The configured chain backend rejected an on-chain transaction.
-	OnchainTxBroadcastRejected,
-	/// Broadcasting failed after dispatch; backend acceptance is unknown and the transaction remains
-	/// persisted for reconciliation or exact rebroadcast.
-	OnchainTxBroadcastFailed,
+	OnchainTxBroadcastRejected {
+		/// The rejected transaction ID.
+		txid: bitcoin::Txid,
+	},
+	/// Broadcasting could not complete safely; the transaction remains persisted for reconciliation
+	/// or exact rebroadcast and a fresh transaction must not be created for the same payment intent.
+	OnchainTxBroadcastFailed {
+		/// The transaction ID requiring reconciliation or exact rebroadcast.
+		txid: bitcoin::Txid,
+	},
 	/// Broadcasting timed out after dispatch; backend acceptance is unknown and the transaction
 	/// remains persisted for reconciliation or exact rebroadcast.
-	OnchainTxBroadcastTimeout,
+	OnchainTxBroadcastTimeout {
+		/// The transaction ID requiring reconciliation or exact rebroadcast.
+		txid: bitcoin::Txid,
+	},
 	/// The on-chain transaction was not handed to the configured backend.
-	OnchainTxBroadcastNotDispatched,
+	OnchainTxBroadcastNotDispatched {
+		/// The transaction ID that was not dispatched.
+		txid: bitcoin::Txid,
+	},
 }
 
 impl fmt::Display for Error {
@@ -274,17 +286,20 @@ impl fmt::Display for Error {
 			Self::InvalidSeedBytes => {
 				write!(f, "The seed bytes or seed-derived wallet account are invalid.")
 			},
-			Self::OnchainTxBroadcastRejected => {
-				write!(f, "The on-chain transaction was rejected by the configured chain backend.")
+			Self::OnchainTxBroadcastRejected { txid } => {
+				write!(
+					f,
+					"On-chain transaction {txid} was rejected by the configured chain backend."
+				)
 			},
-			Self::OnchainTxBroadcastFailed => {
-				write!(f, "On-chain broadcast acceptance is unknown after a backend failure.")
+			Self::OnchainTxBroadcastFailed { txid } => {
+				write!(f, "On-chain transaction {txid} requires reconciliation after a broadcast or persistence failure.")
 			},
-			Self::OnchainTxBroadcastTimeout => {
-				write!(f, "On-chain broadcast acceptance is unknown after a backend timeout.")
+			Self::OnchainTxBroadcastTimeout { txid } => {
+				write!(f, "On-chain transaction {txid} has unknown broadcast acceptance after a backend timeout.")
 			},
-			Self::OnchainTxBroadcastNotDispatched => {
-				write!(f, "The on-chain transaction was not dispatched to the chain backend.")
+			Self::OnchainTxBroadcastNotDispatched { txid } => {
+				write!(f, "On-chain transaction {txid} was not dispatched to the chain backend.")
 			},
 		}
 	}
