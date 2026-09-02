@@ -96,6 +96,8 @@ cargo clippy --fix
 Individual scripts live under `scripts/` but should NOT be run directly —
 `bindgen.sh` installs shared tooling once and sets the correct build profile.
 
+Keep `bindings/kotlin/ldk-node-android/lib/src/main/jniLibs/` untracked. GitHub Actions generates the JNI libraries before publishing the Android package.
+
 ## Architecture
 
 ### Core Components
@@ -238,6 +240,7 @@ marked as skipped for CI), you must fix it before declaring success.
 - ALWAYS move imports to the top of the file when applicable (no inline imports in functions)
 - ALWAYS add unit tests for new business logic — untested code will be flagged in review
 - Run `./bindgen.sh` in the background when bindings need regeneration (it is long-running)
+- Keep `bindings/kotlin/ldk-node-android/lib/src/main/jniLibs/` untracked; Android Publish generates the JNI libraries before packaging
 
 ## Bindings Generation Command
 To regenerate ALL bindings (Swift, Kotlin, Python), run from the repo root:
@@ -249,10 +252,9 @@ To regenerate ALL bindings (Swift, Kotlin, Python), run from the repo root:
 When bumping the version, ALWAYS update ALL of these files:
 1. `Cargo.toml` - main crate version
 2. `bindings/kotlin/ldk-node-android/gradle.properties` - Android version
-3. `bindings/kotlin/ldk-node-jvm/gradle.properties` - JVM version
-4. `bindings/python/pyproject.toml` - Python version
-5. `Package.swift` - Swift tag (and checksum after building)
-6. `CHANGELOG.md` - Add release notes section at top
+3. `bindings/python/pyproject.toml` - Python version
+4. `Package.swift` - Swift tag (and checksum after building)
+5. `CHANGELOG.md` - Add release notes section at top
 
 ## CHANGELOG
 - The Synonym fork maintains a SINGLE section at the top: `# X.X.X (Synonym Fork)`

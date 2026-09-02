@@ -1,5 +1,10 @@
 # 0.7.0-rc.66 (Synonym Fork)
 
+## Synonym Fork Additions
+
+- Stopped tracking Android JNI `.so` files; GitHub Actions generates them before publish.
+- Dropped the unused `ldk-node-jvm` bindings and JVM publish job.
+
 ## Bug Fixes
 
 - Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.

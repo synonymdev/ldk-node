@@ -3,6 +3,7 @@
 /target/
 /bindings/uniffi-bindgen/target/
 /bindings/kotlin/ldk-node-android/native-debug-symbols.zip
+/bindings/kotlin/ldk-node-android/lib/src/main/jniLibs/
 
 # Remove Cargo.lock from gitignore if creating an executable, leave it for libraries
 # More information here https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
