@@ -74,16 +74,31 @@ const DUST_LIMIT_SATS: u64 = 546;
 const BIP32_MAX_NORMAL_INDEX: u32 = (1 << 31) - 1;
 const MAX_ADDRESS_INFO_BATCH_COUNT: u32 = bdk_wallet_aggregate::MAX_ADDRESS_INFO_BATCH_COUNT;
 const LEGACY_ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 1;
-const ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 2;
+const LEGACY_RBF_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 2;
+const ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BroadcastIntent {
 	transactions: Vec<Transaction>,
+	first_pending_index: u32,
 }
 
 impl BroadcastIntent {
 	fn new(tx: Transaction) -> Self {
-		Self { transactions: vec![tx] }
+		Self { transactions: vec![tx], first_pending_index: 0 }
+	}
+
+	fn replacement(
+		existing: Option<Self>, original: Transaction, replacement: Transaction,
+	) -> Result<Self, Error> {
+		let is_new_intent = existing.is_none();
+		let mut intent = existing.unwrap_or_else(|| Self::new(original));
+		intent.supersede(replacement)?;
+		if is_new_intent {
+			// The original was already accepted. Retain it only as reconciliation evidence.
+			intent.first_pending_index = 1;
+		}
+		Ok(intent)
 	}
 
 	fn key(&self) -> Txid {
@@ -96,6 +111,10 @@ impl BroadcastIntent {
 
 	fn active_txid(&self) -> Txid {
 		self.active_transaction().compute_txid()
+	}
+
+	fn has_pending_transaction(&self) -> bool {
+		self.transactions.len() > self.first_pending_index as usize
 	}
 
 	fn supersede(&mut self, replacement: Transaction) -> Result<(), Error> {
@@ -1125,7 +1144,7 @@ impl Wallet {
 	fn write_broadcast_intent(&self, intent: &BroadcastIntent) -> Result<(), Error> {
 		let intent_key = intent.key();
 		let mut bytes = vec![ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION];
-		bytes.extend(serialize(&intent.transactions));
+		bytes.extend(serialize(&(intent.first_pending_index, &intent.transactions)));
 		KVStoreSync::write(
 			&*self.kv_store,
 			ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
@@ -1180,7 +1199,7 @@ impl Wallet {
 				})?;
 				BroadcastIntent::new(tx)
 			},
-			Some(&ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION) => {
+			Some(&LEGACY_RBF_BROADCAST_INTENT_SERIALIZATION_VERSION) => {
 				let transactions = deserialize::<Vec<Transaction>>(&bytes[1..]).map_err(|e| {
 					log_error!(
 						self.logger,
@@ -1194,7 +1213,28 @@ impl Wallet {
 					log_error!(self.logger, "Broadcast intent {} has no transactions", intent_key);
 					return Err(Error::PersistenceFailed);
 				}
-				BroadcastIntent { transactions }
+				BroadcastIntent { transactions, first_pending_index: 0 }
+			},
+			Some(&ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION) => {
+				let (first_pending_index, transactions) =
+					deserialize::<(u32, Vec<Transaction>)>(&bytes[1..]).map_err(|e| {
+						log_error!(
+							self.logger,
+							"Failed to decode broadcast intent {}: {}",
+							intent_key,
+							e
+						);
+						Error::PersistenceFailed
+					})?;
+				if transactions.is_empty() || first_pending_index as usize >= transactions.len() {
+					log_error!(
+						self.logger,
+						"Broadcast intent {} has no pending transaction",
+						intent_key
+					);
+					return Err(Error::PersistenceFailed);
+				}
+				BroadcastIntent { transactions, first_pending_index }
 			},
 			_ => {
 				log_error!(self.logger, "Unsupported broadcast intent version for {}", intent_key);
@@ -1355,12 +1395,12 @@ impl Wallet {
 		})?;
 
 		let new_txid = tx.compute_txid();
-		let mut replacement_intent = existing_intent
-			.map(|(_, intent)| intent)
-			.unwrap_or_else(|| BroadcastIntent::new(tx.clone()));
-		if replacement_intent.active_txid() != new_txid {
-			replacement_intent.supersede(tx.clone())?;
-		}
+		let original_tx = locked_wallet.find_tx(*txid).ok_or(Error::TransactionNotFound)?;
+		let replacement_intent = BroadcastIntent::replacement(
+			existing_intent.map(|(_, intent)| intent),
+			original_tx,
+			tx.clone(),
+		)?;
 		self.write_broadcast_intent(&replacement_intent)?;
 		self.backend_observed_broadcasts.lock().unwrap().remove(&replacement_intent.key());
 
@@ -1404,7 +1444,9 @@ impl Wallet {
 			.find_broadcast_intent_by_active_txid(replacement_txid)
 			.ok_or(Error::TransactionNotFound)?;
 		let rejected_tx = intent.transactions.pop().ok_or(Error::TransactionNotFound)?;
-		let restored_tx = intent.transactions.last().cloned();
+		let restored_tx = intent.has_pending_transaction().then(|| {
+			intent.transactions.last().expect("a pending broadcast intent is non-empty").clone()
+		});
 
 		if restored_tx.is_some() {
 			self.write_broadcast_intent(&intent)?;
@@ -1441,7 +1483,7 @@ impl Wallet {
 		}
 		drop(locked_wallet);
 		self.payment_store.remove(&PaymentId(replacement_txid.to_byte_array()))?;
-		if intent.transactions.is_empty() {
+		if !intent.has_pending_transaction() {
 			self.remove_broadcast_intent(&intent_key)?;
 		}
 		Ok(())
@@ -3099,6 +3141,22 @@ mod tests {
 	}
 
 	#[test]
+	fn ordinary_rbf_retains_the_accepted_original_only_for_reconciliation() {
+		let original = replacement_test_transaction(8);
+		let replacement = replacement_test_transaction(9);
+		let original_txid = original.compute_txid();
+		let replacement_txid = replacement.compute_txid();
+
+		let intent =
+			BroadcastIntent::replacement(None, original.clone(), replacement.clone()).unwrap();
+
+		assert_eq!(intent.key(), original_txid);
+		assert_eq!(intent.active_txid(), replacement_txid);
+		assert_eq!(intent.first_pending_index, 1);
+		assert_eq!(intent.transactions, vec![original, replacement]);
+	}
+
+	#[test]
 	fn rbf_supersession_rejects_a_transaction_that_does_not_conflict() {
 		let original = replacement_test_transaction(1);
 		let mut replacement = replacement_test_transaction(2);
@@ -3136,11 +3194,25 @@ mod tests {
 		let node = replacement_test_node(store);
 		let original = replacement_test_transaction(5);
 		let replacement = replacement_test_transaction(6);
-		let mut intent = BroadcastIntent::new(original.clone());
-		intent.supersede(replacement).unwrap();
+		let intent = BroadcastIntent::replacement(None, original.clone(), replacement).unwrap();
 		node.wallet.write_broadcast_intent(&intent).unwrap();
 
 		node.wallet.apply_mempool_txs(vec![(original, 1)], Vec::new()).unwrap();
+
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+	}
+
+	#[test]
+	fn rejected_ordinary_rbf_does_not_turn_the_accepted_original_into_a_retry_target() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(store);
+		let original = replacement_test_transaction(10);
+		let replacement = replacement_test_transaction(11);
+		let replacement_txid = replacement.compute_txid();
+		let intent = BroadcastIntent::replacement(None, original, replacement).unwrap();
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+
+		node.wallet.reject_rbf_broadcast(&replacement_txid).unwrap();
 
 		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
 	}
