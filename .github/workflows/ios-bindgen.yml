@@ -1,0 +1,61 @@
+name: iOS Bindgen
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to build"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  ios-bindgen:
+    name: iOS Bindgen
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate root SwiftPM manifest
+        env:
+          CLANG_MODULE_CACHE_PATH: .build/module-cache
+        run: swift package dump-package
+
+      - name: Generate Swift bindings and XCFramework
+        run: |
+          ./scripts/uniffi_bindgen_generate_swift.sh
+          ./scripts/swift_create_xcframework_archive.sh
+
+      - name: Verify iOS outputs
+        run: |
+          test -f bindings/swift/Sources/LDKNode/LDKNode.swift
+          test -d bindings/swift/LDKNodeFFI.xcframework
+          test -f bindings/swift/LDKNodeFFI.xcframework/Info.plist
+          test -f bindings/swift/LDKNodeFFI.xcframework/ios-arm64/LDKNodeFFI.framework/Headers/LDKNodeFFI.h
+          test -f bindings/swift/LDKNodeFFI.xcframework/ios-arm64_x86_64-simulator/LDKNodeFFI.framework/Headers/LDKNodeFFI.h
+          test -f bindings/swift/LDKNodeFFI.xcframework/macos-arm64_x86_64/LDKNodeFFI.framework/Headers/LDKNodeFFI.h
+          test -f bindings/swift/LDKNodeFFI.xcframework.zip
+          swift package compute-checksum bindings/swift/LDKNodeFFI.xcframework.zip
+
+      - name: Upload iOS generated outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldk-node-ios-bindgen
+          path: |
+            bindings/swift/Sources/LDKNode/LDKNode.swift
+            bindings/swift/LDKNodeFFI.xcframework
+            bindings/swift/LDKNodeFFI.xcframework.zip
+          if-no-files-found: error
