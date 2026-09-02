@@ -3,6 +3,7 @@
 ## Bug Fixes
 
 - Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
+- Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
 - Add keep consumer rules for JNA types UniFFI needs under R8.
 
 # 0.7.0-rc.64 (Synonym Fork)

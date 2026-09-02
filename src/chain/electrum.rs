@@ -6,6 +6,7 @@
 // accordance with one or both of these licenses.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -957,20 +958,20 @@ impl ElectrumRuntimeClient {
 }
 
 struct ConfirmGate {
-	active: Mutex<bool>,
+	active: AtomicBool,
 }
 
 impl ConfirmGate {
 	fn new() -> Self {
-		Self { active: Mutex::new(true) }
+		Self { active: AtomicBool::new(true) }
 	}
 
 	fn deactivate(&self) {
-		*self.active.lock().unwrap() = false;
+		self.active.store(false, Ordering::Release);
 	}
 
 	fn is_active(&self) -> bool {
-		*self.active.lock().unwrap()
+		self.active.load(Ordering::Acquire)
 	}
 }
 
@@ -990,8 +991,7 @@ impl ShutdownAwareConfirm {
 		let Some(gate) = self.gate.upgrade() else {
 			return inactive_result;
 		};
-		let active = gate.active.lock().unwrap();
-		if !*active {
+		if !gate.is_active() {
 			return inactive_result;
 		}
 
@@ -1000,6 +1000,9 @@ impl ShutdownAwareConfirm {
 		else {
 			return inactive_result;
 		};
+		if !gate.is_active() {
+			return inactive_result;
+		}
 		f(&confirmables)
 	}
 }
@@ -1051,10 +1054,12 @@ impl Filter for ElectrumRuntimeClient {
 #[cfg(test)]
 mod tests {
 	use std::net::TcpListener;
+	use std::panic::{catch_unwind, AssertUnwindSafe};
 	use std::process::Command;
 	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::sync::mpsc::{self, sync_channel};
 	use std::thread;
+	use std::time::Instant;
 
 	use bitcoin::blockdata::constants::genesis_block;
 
@@ -1116,6 +1121,26 @@ mod tests {
 				started.send(()).unwrap();
 			}
 			self.release.lock().unwrap().recv().unwrap();
+		}
+
+		fn get_relevant_txids(&self) -> Vec<(Txid, u32, Option<bitcoin::BlockHash>)> {
+			Vec::new()
+		}
+	}
+
+	struct PanickingConfirm;
+
+	impl Confirm for PanickingConfirm {
+		fn transactions_confirmed(
+			&self, _header: &bitcoin::block::Header,
+			_txdata: &lightning::chain::transaction::TransactionData<'_>, _height: u32,
+		) {
+		}
+
+		fn transaction_unconfirmed(&self, _txid: &Txid) {}
+
+		fn best_block_updated(&self, _header: &bitcoin::block::Header, _height: u32) {
+			panic!("confirm callback");
 		}
 
 		fn get_relevant_txids(&self) -> Vec<(Txid, u32, Option<bitcoin::BlockHash>)> {
@@ -1218,7 +1243,7 @@ mod tests {
 	}
 
 	#[test]
-	fn shutdown_waits_for_the_whole_confirm_callback() {
+	fn deactivate_does_not_wait_for_in_flight_confirm() {
 		let block = genesis_block(Network::Regtest);
 		let txid = block.txdata[0].compute_txid();
 		let (started_sender, started_receiver) = mpsc::sync_channel(1);
@@ -1243,23 +1268,36 @@ mod tests {
 		};
 		started_receiver.recv().unwrap();
 
-		let (shutdown_done_sender, shutdown_done_receiver) = mpsc::sync_channel(1);
-		let shutdown = thread::spawn(move || {
-			gate.deactivate();
-			shutdown_done_sender.send(()).unwrap();
-		});
-		assert!(shutdown_done_receiver.recv_timeout(Duration::from_millis(50)).is_err());
+		let start = Instant::now();
+		gate.deactivate();
+		assert!(start.elapsed() < Duration::from_millis(50));
 
 		release_sender.send(()).unwrap();
 		callback.join().unwrap();
-		shutdown_done_receiver.recv().unwrap();
-		shutdown.join().unwrap();
 
 		assert_eq!(blocking.calls.load(Ordering::Acquire), 1);
 		assert_eq!(trailing.calls.load(Ordering::Acquire), 1);
 		confirm.best_block_updated(&block.header, 0);
 		assert_eq!(blocking.calls.load(Ordering::Acquire), 1);
 		assert_eq!(trailing.calls.load(Ordering::Acquire), 1);
+	}
+
+	#[test]
+	fn confirm_callback_panic_does_not_poison_shutdown() {
+		let block = genesis_block(Network::Regtest);
+		let panicking: Arc<dyn Confirm + Sync + Send> = Arc::new(PanickingConfirm);
+		let gate = Arc::new(ConfirmGate::new());
+		let confirm =
+			ShutdownAwareConfirm::new(Arc::downgrade(&gate), vec![Arc::downgrade(&panicking)]);
+
+		let panicked = catch_unwind(AssertUnwindSafe(|| {
+			confirm.best_block_updated(&block.header, 0);
+		}));
+		assert!(panicked.is_err());
+
+		gate.deactivate();
+		assert!(!gate.is_active());
+		confirm.best_block_updated(&block.header, 0);
 	}
 
 	#[test]

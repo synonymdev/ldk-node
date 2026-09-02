@@ -334,7 +334,13 @@ impl Node {
 			self.config.network
 		);
 
-		self.runtime.allow_task_spawns();
+		if !self.runtime.allow_task_spawns() {
+			log_error!(
+				self.logger,
+				"Refusing to start while previous background work is still running against this node state.",
+			);
+			return Err(Error::AlreadyRunning);
+		}
 
 		// Start up any runtime-dependant chain sources (e.g. Electrum)
 		// Electrum needs execution access without owning the runtime lifecycle.

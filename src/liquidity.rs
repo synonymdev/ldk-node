@@ -1498,16 +1498,16 @@ impl LSPS1Liquidity {
 
 		// We need to use our main runtime here as a local runtime might not be around to poll
 		// connection futures going forward.
-		self.runtime.block_on(async move {
+		self.runtime.try_block_on(async move {
 			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
-		})?;
+		})??;
 
 		log_info!(self.logger, "Connected to LSP {}@{}. ", lsp_node_id, lsp_address);
 
 		let refund_address = self.wallet.get_new_address()?;
 
 		let liquidity_source = Arc::clone(&liquidity_source);
-		let response = self.runtime.block_on(async move {
+		let response = self.runtime.try_block_on(async move {
 			liquidity_source
 				.lsps1_request_channel(
 					lsp_balance_sat,
@@ -1517,7 +1517,7 @@ impl LSPS1Liquidity {
 					refund_address,
 				)
 				.await
-		})?;
+		})??;
 
 		Ok(response)
 	}
@@ -1539,14 +1539,14 @@ impl LSPS1Liquidity {
 
 		// We need to use our main runtime here as a local runtime might not be around to poll
 		// connection futures going forward.
-		self.runtime.block_on(async move {
+		self.runtime.try_block_on(async move {
 			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
-		})?;
+		})??;
 
 		let liquidity_source = Arc::clone(&liquidity_source);
-		let response = self
-			.runtime
-			.block_on(async move { liquidity_source.lsps1_check_order_status(order_id).await })?;
+		let response = self.runtime.try_block_on(async move {
+			liquidity_source.lsps1_check_order_status(order_id).await
+		})??;
 		Ok(response)
 	}
 }

@@ -746,15 +746,15 @@ impl Bolt11Payment {
 
 		// We need to use our main runtime here as a local runtime might not be around to poll
 		// connection futures going forward.
-		self.runtime.block_on(async move {
+		self.runtime.try_block_on(async move {
 			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
-		})?;
+		})??;
 
 		log_info!(self.logger, "Connected to LSP {}@{}. ", peer_info.node_id, peer_info.address);
 
 		let liquidity_source = Arc::clone(&liquidity_source);
 		let (invoice, lsp_total_opening_fee, lsp_prop_opening_fee) =
-			self.runtime.block_on(async move {
+			self.runtime.try_block_on(async move {
 				if let Some(amount_msat) = amount_msat {
 					liquidity_source
 						.lsps2_receive_to_jit_channel(
@@ -777,7 +777,7 @@ impl Bolt11Payment {
 						.await
 						.map(|(invoice, prop_fee)| (invoice, None, Some(prop_fee)))
 				}
-			})?;
+			})??;
 
 		// Register payment in payment store.
 		let payment_hash = PaymentHash(invoice.payment_hash().to_byte_array());
@@ -818,7 +818,7 @@ impl Bolt11Payment {
 		self.payment_store.insert(payment)?;
 
 		// Persist LSP peer to make sure we reconnect on restart.
-		self.runtime.block_on(self.peer_store.add_peer(peer_info))?;
+		self.runtime.try_block_on(self.peer_store.add_peer(peer_info))??;
 
 		Ok(invoice)
 	}
