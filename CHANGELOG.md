@@ -9,7 +9,12 @@
   the transaction. Transaction-keyed rejected, not-dispatched, acceptance-unknown failure, and
   acceptance-unknown timeout outcomes are distinct. Uncertain signed transactions remain reserved
   in a durable intent store for enumeration, exact-byte rebroadcast, sync reconciliation, and
-  recovery after restart.
+  recovery after restart. Callers can explicitly abandon an externally reconciled intent, and RBF
+  replacements use the same result-bearing, durable lifecycle.
+- `NodeError` is now a fielded mobile error type so broadcast failures can expose their transaction
+  ID. Swift error cases no longer contain the legacy generated `message` associated value, and
+  fieldless Kotlin exceptions have an empty generated `message`; callers should match the error
+  variant and use its typed fields.
 - Electrum transaction rejections are now logged as failures instead of successful broadcasts.
 >>>>>>> 6967d92 (docs: place broadcast fixes in current changelog)
 - Add keep consumer rules for JNA types UniFFI needs under R8.
