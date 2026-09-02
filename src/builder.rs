@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::default::Default;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex, Once, RwLock};
 use std::time::SystemTime;
 use std::{fmt, fs};
@@ -804,12 +804,12 @@ impl NodeBuilder {
 		let logger = setup_logger(&self.log_writer_config, &self.config)?;
 
 		let runtime = if let Some(handle) = self.runtime_handle.as_ref() {
-			Arc::new(Runtime::with_handle(handle.clone(), Arc::clone(&logger)))
+			Runtime::with_handle(handle.clone(), Arc::clone(&logger))
 		} else {
-			Arc::new(Runtime::new(Arc::clone(&logger)).map_err(|e| {
+			Runtime::new(Arc::clone(&logger)).map_err(|e| {
 				log_error!(logger, "Failed to setup tokio runtime: {}", e);
 				BuildError::RuntimeSetupFailed
-			})?)
+			})?
 		};
 
 		let seed_bytes = seed_bytes_from_config(
@@ -855,12 +855,12 @@ impl NodeBuilder {
 		let logger = setup_logger(&self.log_writer_config, &self.config)?;
 
 		let runtime = if let Some(handle) = self.runtime_handle.as_ref() {
-			Arc::new(Runtime::with_handle(handle.clone(), Arc::clone(&logger)))
+			Runtime::with_handle(handle.clone(), Arc::clone(&logger))
 		} else {
-			Arc::new(Runtime::new(Arc::clone(&logger)).map_err(|e| {
+			Runtime::new(Arc::clone(&logger)).map_err(|e| {
 				log_error!(logger, "Failed to setup tokio runtime: {}", e);
 				BuildError::RuntimeSetupFailed
-			})?)
+			})?
 		};
 
 		let seed_bytes = seed_bytes_from_config(
@@ -1570,7 +1570,7 @@ fn build_additional_wallets(
 
 fn apply_channel_data_migration<K>(
 	migration: &ChannelDataMigration, kv_store: &Arc<DynStore>, keys_manager: &K,
-	logger: &Arc<Logger>, runtime: &Arc<Runtime>,
+	logger: &Arc<Logger>, runtime: &Runtime,
 ) -> Result<(), BuildError>
 where
 	K: EntropySource + SignerProvider<EcdsaSigner = InMemorySigner>,
@@ -1725,7 +1725,7 @@ fn build_with_store_internal(
 	gossip_source_config: Option<&GossipSourceConfig>,
 	liquidity_source_config: Option<&LiquiditySourceConfig>,
 	pathfinding_scores_sync_config: Option<&PathfindingScoresSyncConfig>,
-	async_payments_role: Option<AsyncPaymentsRole>, seed_bytes: [u8; 64], runtime: Arc<Runtime>,
+	async_payments_role: Option<AsyncPaymentsRole>, seed_bytes: [u8; 64], runtime: Runtime,
 	logger: Arc<Logger>, kv_store: Arc<DynStore>,
 	channel_data_migration: Option<&ChannelDataMigration>,
 ) -> Result<Node, BuildError> {
@@ -2440,7 +2440,7 @@ fn build_with_store_internal(
 	gossip_source.set_gossip_verifier(
 		Arc::clone(&chain_source),
 		Arc::clone(&peer_manager),
-		Arc::clone(&runtime),
+		runtime.control(),
 	);
 
 	let connection_manager =
@@ -2580,7 +2580,6 @@ fn build_with_store_internal(
 	let pathfinding_scores_sync_url = pathfinding_scores_sync_config.map(|c| c.url.clone());
 
 	Ok(Node {
-		runtime,
 		stop_sender,
 		background_processor_stop_sender,
 		config,
@@ -2607,12 +2606,16 @@ fn build_with_store_internal(
 		peer_store,
 		rgs_peer_recovery_exclusions: Arc::new(RgsPeerRecoveryExclusions::default()),
 		payment_store,
+		lifecycle_lock: Mutex::new(()),
 		is_running,
+		background_processor_failed: Arc::new(AtomicBool::new(false)),
+		background_processor_generation: Arc::new(AtomicU64::new(0)),
 		node_metrics,
 		om_mailbox,
 		async_payments_role,
 		runtime_sync_intervals: Arc::new(RwLock::new(RuntimeSyncIntervals::default())),
 		local_rgs_timestamp,
+		runtime,
 	})
 }
 
@@ -2918,13 +2921,11 @@ mod tests {
 		(serialized, monitor_key, update_id, seed)
 	}
 
-	fn make_test_deps(
-		seed: &[u8; 32],
-	) -> (Arc<DynStore>, LdkKeysManager, Arc<Logger>, Arc<Runtime>) {
+	fn make_test_deps(seed: &[u8; 32]) -> (Arc<DynStore>, LdkKeysManager, Arc<Logger>, Runtime) {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		let keys_manager = LdkKeysManager::new(seed, 0, 0, false);
 		let logger = Arc::new(Logger::new_log_facade());
-		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
+		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
 		(store, keys_manager, logger, runtime)
 	}
 
@@ -3112,7 +3113,7 @@ mod tests {
 		let store: Arc<DynStore> = Arc::new(FailingReadStore);
 		let keys_manager = LdkKeysManager::new(&seed, 0, 0, false);
 		let logger = Arc::new(Logger::new_log_facade());
-		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
+		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
 
 		// Migration should fail because the store returns an IO error on read
 		// (fail-closed: non-NotFound errors refuse migration).
@@ -3234,7 +3235,7 @@ mod tests {
 		let store: Arc<DynStore> = Arc::new(FailingReadStore);
 		let keys_manager = LdkKeysManager::new(&[42u8; 32], 0, 0, false);
 		let logger = Arc::new(Logger::new_log_facade());
-		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
+		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
 
 		let migration = ChannelDataMigration {
 			channel_manager: Some(vec![0x01, 0x02, 0x03]),
