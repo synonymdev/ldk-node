@@ -41,7 +41,9 @@ use crate::fee_estimator::{
 };
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
-use crate::tx_broadcaster::TxBroadcastError;
+use crate::tx_broadcaster::{
+	classify_rpc_broadcast_error, validate_broadcast_txid, TxBroadcastError,
+};
 use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::NodeMetrics;
 
@@ -852,23 +854,43 @@ impl ElectrumRuntimeClient {
 
 		match timeout_fut.await {
 			Ok(res) => match res {
-				Ok(Ok(id)) => {
-					debug_assert_eq!(id, txid);
-					log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
-					Ok(())
-				},
-				Ok(Err(e)) => {
-					let result = if matches!(&e, electrum_client::Error::Protocol(_)) {
-						Err(TxBroadcastError::Rejected)
-					} else {
-						Err(TxBroadcastError::Failed)
-					};
-					log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
-					log_trace!(
-						self.logger,
-						"Failed broadcast transaction bytes: {}",
-						log_bytes!(tx_bytes)
-					);
+				Ok(broadcast_result) => {
+					let result = classify_electrum_broadcast_result(txid, &broadcast_result);
+					match (&broadcast_result, &result) {
+						(Ok(_), Ok(())) => {
+							log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+						},
+						(Err(_), Ok(())) => {
+							log_trace!(
+								self.logger,
+								"Transaction {} is already known by backend",
+								txid
+							);
+						},
+						(Ok(id), Err(_)) => {
+							log_error!(
+								self.logger,
+								"Backend returned transaction ID {} for submitted transaction {}",
+								id,
+								txid
+							);
+						},
+						(Err(e), Err(_)) => {
+							log_error!(
+								self.logger,
+								"Failed to broadcast transaction {}: {}",
+								txid,
+								e
+							);
+						},
+					}
+					if result.is_err() {
+						log_trace!(
+							self.logger,
+							"Failed broadcast transaction bytes: {}",
+							log_bytes!(tx_bytes)
+						);
+					}
 					result
 				},
 				Err(e) => {
@@ -983,6 +1005,7 @@ impl ElectrumRuntimeClient {
 	}
 }
 
+<<<<<<< HEAD
 struct ConfirmGate {
 	active: AtomicBool,
 }
@@ -1065,6 +1088,18 @@ impl Confirm for ShutdownAwareConfirm {
 		self.with_confirmables(Vec::new(), |confirmables| {
 			confirmables.iter().flat_map(|confirmable| confirmable.get_relevant_txids()).collect()
 		})
+=======
+fn classify_electrum_broadcast_result(
+	expected_txid: Txid, result: &Result<Txid, electrum_client::Error>,
+) -> Result<(), TxBroadcastError> {
+	match result {
+		Ok(returned_txid) => validate_broadcast_txid(expected_txid, *returned_txid),
+		Err(electrum_client::Error::Protocol(value)) => {
+			let code = value.get("code").and_then(serde_json::Value::as_i64);
+			classify_rpc_broadcast_error(code, &value.to_string())
+		},
+		Err(_) => Err(TxBroadcastError::Failed),
+>>>>>>> 049b116 (fix: classify broadcast backend results)
 	}
 }
 
@@ -1172,6 +1207,52 @@ mod tests {
 		fn get_relevant_txids(&self) -> Vec<(Txid, u32, Option<bitcoin::BlockHash>)> {
 			Vec::new()
 		}
+	}
+
+	#[test]
+	fn electrum_nested_broadcast_results_are_classified() {
+		let txid = "0000000000000000000000000000000000000000000000000000000000000001"
+			.parse::<Txid>()
+			.unwrap();
+		let other_txid = "0000000000000000000000000000000000000000000000000000000000000002"
+			.parse::<Txid>()
+			.unwrap();
+
+		assert_eq!(classify_electrum_broadcast_result(txid, &Ok(txid)), Ok(()));
+		assert_eq!(
+			classify_electrum_broadcast_result(txid, &Ok(other_txid)),
+			Err(TxBroadcastError::Failed)
+		);
+		assert_eq!(
+			classify_electrum_broadcast_result(
+				txid,
+				&Err(electrum_client::Error::Protocol(serde_json::json!({
+					"code": -27,
+					"message": "Transaction already in block chain"
+				}))),
+			),
+			Ok(())
+		);
+		assert_eq!(
+			classify_electrum_broadcast_result(
+				txid,
+				&Err(electrum_client::Error::Protocol(serde_json::json!({
+					"code": -26,
+					"message": "non-final"
+				}))),
+			),
+			Err(TxBroadcastError::Rejected)
+		);
+		assert_eq!(
+			classify_electrum_broadcast_result(
+				txid,
+				&Err(electrum_client::Error::Protocol(serde_json::json!({
+					"code": -32603,
+					"message": "internal server error"
+				}))),
+			),
+			Err(TxBroadcastError::Failed)
+		);
 	}
 
 	#[test]

@@ -29,7 +29,7 @@ use crate::fee_estimator::{
 };
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
-use crate::tx_broadcaster::TxBroadcastError;
+use crate::tx_broadcaster::{classify_rpc_broadcast_error, TxBroadcastError};
 use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::{Error, NodeMetrics};
 
@@ -497,54 +497,42 @@ impl EsploraChainSource {
 						Ok(())
 					},
 					Err(e) => {
-						let result = if matches!(
-							&e,
-							esplora_client::Error::HttpResponse { status: 400, .. }
-						) {
-							Err(TxBroadcastError::Rejected)
+						let result = classify_esplora_broadcast_error(&e);
+						if result.is_ok() {
+							log_trace!(
+								self.logger,
+								"Transaction {} is already known by backend",
+								txid
+							);
 						} else {
-							Err(TxBroadcastError::Failed)
-						};
-						match e {
-							esplora_client::Error::HttpResponse { status, message } => {
-								if status == 400 {
-									// Log 400 at lesser level, as this often just means bitcoind already knows the
-									// transaction.
-									// FIXME: We can further differentiate here based on the error
-									// message which will be available with rust-esplora-client 0.7 and
-									// later.
-									log_trace!(
-										self.logger,
-										"Failed to broadcast due to HTTP connection error: {}",
-										message
-									);
-								} else {
+							match e {
+								esplora_client::Error::HttpResponse { status, message } => {
 									log_error!(
 										self.logger,
-										"Failed to broadcast due to HTTP connection error: {} - {}",
+										"Failed to broadcast due to HTTP response: {} - {}",
 										status,
 										message
 									);
-								}
-								log_trace!(
-									self.logger,
-									"Failed broadcast transaction bytes: {}",
-									log_bytes!(tx.encode())
-								);
-							},
-							_ => {
-								log_error!(
-									self.logger,
-									"Failed to broadcast transaction {}: {}",
-									txid,
-									e
-								);
-								log_trace!(
-									self.logger,
-									"Failed broadcast transaction bytes: {}",
-									log_bytes!(tx.encode())
-								);
-							},
+									log_trace!(
+										self.logger,
+										"Failed broadcast transaction bytes: {}",
+										log_bytes!(tx.encode())
+									);
+								},
+								_ => {
+									log_error!(
+										self.logger,
+										"Failed to broadcast transaction {}: {}",
+										txid,
+										e
+									);
+									log_trace!(
+										self.logger,
+										"Failed broadcast transaction bytes: {}",
+										log_bytes!(tx.encode())
+									);
+								},
+							}
 						}
 						result
 					},
@@ -597,11 +585,48 @@ impl EsploraChainSource {
 	}
 }
 
+fn classify_esplora_broadcast_error(error: &esplora_client::Error) -> Result<(), TxBroadcastError> {
+	match error {
+		esplora_client::Error::HttpResponse { status: 400, message } => {
+			classify_rpc_broadcast_error(None, message)
+		},
+		_ => Err(TxBroadcastError::Failed),
+	}
+}
+
 impl Filter for EsploraChainSource {
 	fn register_tx(&self, txid: &Txid, script_pubkey: &Script) {
 		self.tx_sync.register_tx(txid, script_pubkey);
 	}
 	fn register_output(&self, output: WatchedOutput) {
 		self.tx_sync.register_output(output);
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::classify_esplora_broadcast_error;
+	use crate::tx_broadcaster::TxBroadcastError;
+
+	#[test]
+	fn esplora_http_responses_distinguish_known_rejections_and_failures() {
+		let already_known = esplora_client::Error::HttpResponse {
+			status: 400,
+			message: "Transaction already in block chain".to_string(),
+		};
+		assert_eq!(classify_esplora_broadcast_error(&already_known), Ok(()));
+
+		let rejected = esplora_client::Error::HttpResponse {
+			status: 400,
+			message: r#"sendrawtransaction RPC error: {"code":-26,"message":"non-final"}"#
+				.to_string(),
+		};
+		assert_eq!(classify_esplora_broadcast_error(&rejected), Err(TxBroadcastError::Rejected));
+
+		let unavailable = esplora_client::Error::HttpResponse {
+			status: 503,
+			message: "service unavailable".to_string(),
+		};
+		assert_eq!(classify_esplora_broadcast_error(&unavailable), Err(TxBroadcastError::Failed));
 	}
 }
