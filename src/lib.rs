@@ -1112,6 +1112,8 @@ impl Node {
 	pub fn onchain_payment(&self) -> OnchainPayment {
 		OnchainPayment::new(
 			Arc::clone(&self.wallet),
+			Arc::clone(&self.tx_broadcaster),
+			Arc::clone(&self.runtime),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.config),
 			Arc::clone(&self.is_running),
@@ -1124,6 +1126,8 @@ impl Node {
 	pub fn onchain_payment(&self) -> Arc<OnchainPayment> {
 		Arc::new(OnchainPayment::new(
 			Arc::clone(&self.wallet),
+			Arc::clone(&self.tx_broadcaster),
+			Arc::clone(&self.runtime),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.config),
 			Arc::clone(&self.is_running),

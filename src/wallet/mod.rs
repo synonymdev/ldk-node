@@ -1859,10 +1859,10 @@ impl Wallet {
 	}
 
 	#[allow(deprecated)]
-	pub(crate) fn send_to_address(
+	pub(crate) fn create_send_to_address_transaction(
 		&self, address: &Address, send_amount: OnchainSendAmount, fee_rate: Option<FeeRate>,
 		utxos_to_spend: Option<Vec<OutPoint>>, channel_manager: &ChannelManager,
-	) -> Result<Txid, Error> {
+	) -> Result<Transaction, Error> {
 		self.parse_and_validate_address(&address)?;
 
 		// Use the set fee_rate or default to fee estimation.
@@ -1912,8 +1912,6 @@ impl Wallet {
 			tx
 		};
 
-		self.broadcaster.broadcast_transactions(&[&tx]);
-
 		let txid = tx.compute_txid();
 
 		match send_amount {
@@ -1945,7 +1943,7 @@ impl Wallet {
 			},
 		}
 
-		Ok(txid)
+		Ok(tx)
 	}
 
 	pub(crate) fn select_confirmed_utxos(

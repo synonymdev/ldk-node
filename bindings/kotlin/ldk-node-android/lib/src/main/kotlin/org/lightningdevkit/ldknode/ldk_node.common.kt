@@ -2025,6 +2025,12 @@ sealed class NodeException(message: String): kotlin.Exception(message) {
 
     class InvalidSeedBytes(message: String) : NodeException(message)
 
+    class OnchainTxBroadcastRejected(message: String) : NodeException(message)
+
+    class OnchainTxBroadcastFailed(message: String) : NodeException(message)
+
+    class OnchainTxBroadcastTimeout(message: String) : NodeException(message)
+
 }
 
 

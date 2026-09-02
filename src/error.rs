@@ -156,6 +156,12 @@ pub enum Error {
 	OnchainWalletAccountNotRegistered,
 	/// The seed bytes or a seed-derived wallet account are invalid.
 	InvalidSeedBytes,
+	/// The configured chain backend rejected an on-chain transaction.
+	OnchainTxBroadcastRejected,
+	/// Broadcasting an on-chain transaction failed before backend acceptance was known.
+	OnchainTxBroadcastFailed,
+	/// Broadcasting an on-chain transaction timed out before backend acceptance was known.
+	OnchainTxBroadcastTimeout,
 }
 
 impl fmt::Display for Error {
@@ -263,6 +269,15 @@ impl fmt::Display for Error {
 			},
 			Self::InvalidSeedBytes => {
 				write!(f, "The seed bytes or seed-derived wallet account are invalid.")
+			},
+			Self::OnchainTxBroadcastRejected => {
+				write!(f, "The on-chain transaction was rejected by the configured chain backend.")
+			},
+			Self::OnchainTxBroadcastFailed => {
+				write!(f, "Failed to broadcast the on-chain transaction.")
+			},
+			Self::OnchainTxBroadcastTimeout => {
+				write!(f, "Broadcasting the on-chain transaction timed out.")
 			},
 		}
 	}

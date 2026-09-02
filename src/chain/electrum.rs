@@ -41,6 +41,7 @@ use crate::fee_estimator::{
 };
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
+use crate::tx_broadcaster::TxBroadcastError;
 use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::NodeMetrics;
 
@@ -524,18 +525,25 @@ impl ElectrumChainSource {
 		Ok(())
 	}
 
-	pub(crate) async fn process_broadcast_package(&self, package: Vec<Transaction>) {
+	pub(crate) async fn process_broadcast_package(
+		&self, package: Vec<Transaction>,
+	) -> Result<(), TxBroadcastError> {
 		let electrum_client: Arc<ElectrumRuntimeClient> =
 			if let Some(client) = self.electrum_runtime_status.read().unwrap().client().as_ref() {
 				Arc::clone(client)
 			} else {
 				debug_assert!(false, "We should have started the chain source before broadcasting");
-				return;
+				return Err(TxBroadcastError::Failed);
 			};
 
+		let mut package_result = Ok(());
 		for tx in package {
-			electrum_client.broadcast(tx).await;
+			let result = electrum_client.broadcast(tx).await;
+			if package_result.is_ok() {
+				package_result = result;
+			}
 		}
+		package_result
 	}
 
 	pub(super) async fn get_address_balance(&self, address: &bitcoin::Address) -> Option<u64> {
@@ -831,7 +839,7 @@ impl ElectrumRuntimeClient {
 			})
 	}
 
-	async fn broadcast(&self, tx: Transaction) {
+	async fn broadcast(&self, tx: Transaction) -> Result<(), TxBroadcastError> {
 		let electrum_client = Arc::clone(&self.electrum_client);
 
 		let txid = tx.compute_txid();
@@ -844,8 +852,24 @@ impl ElectrumRuntimeClient {
 
 		match timeout_fut.await {
 			Ok(res) => match res {
-				Ok(_) => {
+				Ok(Ok(id)) => {
+					debug_assert_eq!(id, txid);
 					log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+					Ok(())
+				},
+				Ok(Err(e)) => {
+					let result = if matches!(&e, electrum_client::Error::Protocol(_)) {
+						Err(TxBroadcastError::Rejected)
+					} else {
+						Err(TxBroadcastError::Failed)
+					};
+					log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
+					log_trace!(
+						self.logger,
+						"Failed broadcast transaction bytes: {}",
+						log_bytes!(tx_bytes)
+					);
+					result
 				},
 				Err(e) => {
 					log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
@@ -854,6 +878,7 @@ impl ElectrumRuntimeClient {
 						"Failed broadcast transaction bytes: {}",
 						log_bytes!(tx_bytes)
 					);
+					Err(TxBroadcastError::Failed)
 				},
 			},
 			Err(e) => {
@@ -868,6 +893,7 @@ impl ElectrumRuntimeClient {
 					"Failed broadcast transaction bytes: {}",
 					log_bytes!(tx_bytes)
 				);
+				Err(TxBroadcastError::Timeout)
 			},
 		}
 	}

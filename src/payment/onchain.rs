@@ -15,7 +15,8 @@ use crate::config::{AddressType, Config, OnchainWalletAccount};
 use crate::error::Error;
 use crate::fee_estimator::ConfirmationTarget;
 use crate::logger::{log_info, LdkLogger, Logger};
-use crate::types::{ChannelManager, SpendableUtxo, Wallet};
+use crate::runtime::Runtime;
+use crate::types::{Broadcaster, ChannelManager, SpendableUtxo, Wallet};
 use crate::wallet::{CoinSelectionAlgorithm, OnchainSendAmount};
 
 #[cfg(not(feature = "uniffi"))]
@@ -98,6 +99,8 @@ impl From<bdk_wallet::AddressInfo> for AddressInfo {
 /// [`Node::onchain_payment`]: crate::Node::onchain_payment
 pub struct OnchainPayment {
 	wallet: Arc<Wallet>,
+	tx_broadcaster: Arc<Broadcaster>,
+	runtime: Arc<Runtime>,
 	channel_manager: Arc<ChannelManager>,
 	config: Arc<Config>,
 	is_running: Arc<RwLock<bool>>,
@@ -106,10 +109,11 @@ pub struct OnchainPayment {
 
 impl OnchainPayment {
 	pub(crate) fn new(
-		wallet: Arc<Wallet>, channel_manager: Arc<ChannelManager>, config: Arc<Config>,
-		is_running: Arc<RwLock<bool>>, logger: Arc<Logger>,
+		wallet: Arc<Wallet>, tx_broadcaster: Arc<Broadcaster>, runtime: Arc<Runtime>,
+		channel_manager: Arc<ChannelManager>, config: Arc<Config>, is_running: Arc<RwLock<bool>>,
+		logger: Arc<Logger>,
 	) -> Self {
-		Self { wallet, channel_manager, config, is_running, logger }
+		Self { wallet, tx_broadcaster, runtime, channel_manager, config, is_running, logger }
 	}
 
 	/// Retrieve a new on-chain/funding address.
@@ -538,6 +542,10 @@ impl OnchainPayment {
 	/// If `fee_rate` is set it will be used on the resulting transaction. Otherwise we'll retrieve
 	/// a reasonable estimate from the configured chain source.
 	///
+	/// Returns the transaction ID only after the configured chain backend accepts the transaction.
+	/// A rejection, transport failure, or timeout is returned as an error. For transport failures
+	/// and timeouts, backend acceptance remains unknown and callers must not present success.
+	///
 	/// [`BalanceDetails::total_anchor_channels_reserve_sats`]: crate::BalanceDetails::total_anchor_channels_reserve_sats
 	pub fn send_to_address(
 		&self, address: &bitcoin::Address, amount_sats: u64, fee_rate: Option<FeeRate>,
@@ -553,13 +561,16 @@ impl OnchainPayment {
 			OnchainSendAmount::ExactRetainingReserve { amount_sats, cur_anchor_reserve_sats };
 		let outpoints = utxos_to_spend.map(|utxos| utxos.into_iter().map(|u| u.outpoint).collect());
 		let fee_rate_opt = maybe_map_fee_rate_opt!(fee_rate);
-		self.wallet.send_to_address(
+		let tx = self.wallet.create_send_to_address_transaction(
 			address,
 			send_amount,
 			fee_rate_opt,
 			outpoints,
 			&self.channel_manager,
-		)
+		)?;
+		let txid = tx.compute_txid();
+		self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx))?;
+		Ok(txid)
 	}
 
 	/// Send an on-chain payment to the given address, draining the available funds.
@@ -577,6 +588,10 @@ impl OnchainPayment {
 	///
 	/// If `fee_rate` is set it will be used on the resulting transaction. Otherwise a reasonable
 	/// we'll retrieve an estimate from the configured chain source.
+	///
+	/// Returns the transaction ID only after the configured chain backend accepts the transaction.
+	/// A rejection, transport failure, or timeout is returned as an error. For transport failures
+	/// and timeouts, backend acceptance remains unknown and callers must not present success.
 	///
 	/// [`calculate_send_all_fee`]: Self::calculate_send_all_fee
 	/// [`BalanceDetails::spendable_onchain_balance_sats`]: crate::balance::BalanceDetails::spendable_onchain_balance_sats
@@ -596,7 +611,16 @@ impl OnchainPayment {
 		};
 
 		let fee_rate_opt = maybe_map_fee_rate_opt!(fee_rate);
-		self.wallet.send_to_address(address, send_amount, fee_rate_opt, None, &self.channel_manager)
+		let tx = self.wallet.create_send_to_address_transaction(
+			address,
+			send_amount,
+			fee_rate_opt,
+			None,
+			&self.channel_manager,
+		)?;
+		let txid = tx.compute_txid();
+		self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(tx))?;
+		Ok(txid)
 	}
 
 	/// Bumps the fee of an existing transaction using Replace-By-Fee (RBF).
