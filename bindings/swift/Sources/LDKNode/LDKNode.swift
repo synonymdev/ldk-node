@@ -9313,6 +9313,12 @@ public enum NodeError {
     case OnchainWalletAccountNotRegistered(message: String)
 
     case InvalidSeedBytes(message: String)
+
+    case OnchainTxBroadcastRejected(message: String)
+
+    case OnchainTxBroadcastFailed(message: String)
+
+    case OnchainTxBroadcastTimeout(message: String)
 }
 
 #if swift(>=5.8)
@@ -9596,6 +9602,18 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
                 message: FfiConverterString.read(from: &buf)
             )
 
+        case 69: return try .OnchainTxBroadcastRejected(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 70: return try .OnchainTxBroadcastFailed(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 71: return try .OnchainTxBroadcastTimeout(
+                message: FfiConverterString.read(from: &buf)
+            )
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -9738,6 +9756,12 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(67))
         case .InvalidSeedBytes(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(68))
+        case .OnchainTxBroadcastRejected(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(69))
+        case .OnchainTxBroadcastFailed(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(70))
+        case .OnchainTxBroadcastTimeout(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(71))
         }
     }
 }

@@ -1306,17 +1306,22 @@ impl ChainSource {
 					);
 					return;
 				}
-				Some(next_package) = receiver.recv() => {
-					match &self.kind {
+				Some(request) = receiver.recv() => {
+					let package = request.package;
+					let result_sender = request.result_sender;
+					let result = match &self.kind {
 						ChainSourceKind::Esplora(esplora_chain_source) => {
-							esplora_chain_source.process_broadcast_package(next_package).await
+							esplora_chain_source.process_broadcast_package(package).await
 						},
 						ChainSourceKind::Electrum(electrum_chain_source) => {
-							electrum_chain_source.process_broadcast_package(next_package).await
+							electrum_chain_source.process_broadcast_package(package).await
 						},
 						ChainSourceKind::Bitcoind(bitcoind_chain_source) => {
-							bitcoind_chain_source.process_broadcast_package(next_package).await
+							bitcoind_chain_source.process_broadcast_package(package).await
 						},
+					};
+					if let Some(result_sender) = result_sender {
+						let _ = result_sender.send(result);
 					}
 				}
 			}

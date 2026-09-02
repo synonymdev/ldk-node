@@ -12200,6 +12200,9 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
             66 -> NodeException.AddressTypeNotMonitored(FfiConverterString.read(buf))
             67 -> NodeException.OnchainWalletAccountNotRegistered(FfiConverterString.read(buf))
             68 -> NodeException.InvalidSeedBytes(FfiConverterString.read(buf))
+            69 -> NodeException.OnchainTxBroadcastRejected(FfiConverterString.read(buf))
+            70 -> NodeException.OnchainTxBroadcastFailed(FfiConverterString.read(buf))
+            71 -> NodeException.OnchainTxBroadcastTimeout(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -12480,6 +12483,18 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
             }
             is NodeException.InvalidSeedBytes -> {
                 buf.putInt(68)
+                Unit
+            }
+            is NodeException.OnchainTxBroadcastRejected -> {
+                buf.putInt(69)
+                Unit
+            }
+            is NodeException.OnchainTxBroadcastFailed -> {
+                buf.putInt(70)
+                Unit
+            }
+            is NodeException.OnchainTxBroadcastTimeout -> {
+                buf.putInt(71)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

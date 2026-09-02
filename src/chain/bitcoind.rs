@@ -38,6 +38,7 @@ use crate::fee_estimator::{
 };
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
+use crate::tx_broadcaster::TxBroadcastError;
 use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::{Error, NodeMetrics};
 
@@ -643,30 +644,44 @@ impl BitcoindChainSource {
 		Ok(())
 	}
 
-	pub(crate) async fn process_broadcast_package(&self, package: Vec<Transaction>) {
+	pub(crate) async fn process_broadcast_package(
+		&self, package: Vec<Transaction>,
+	) -> Result<(), TxBroadcastError> {
 		// While it's a bit unclear when we'd be able to lean on Bitcoin Core >v28
 		// features, we should eventually switch to use `submitpackage` via the
 		// `rust-bitcoind-json-rpc` crate rather than just broadcasting individual
 		// transactions.
+		let mut package_result = Ok(());
 		for tx in &package {
 			let txid = tx.compute_txid();
 			let timeout_fut = tokio::time::timeout(
 				Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
 				self.api_client.broadcast_transaction(tx),
 			);
-			match timeout_fut.await {
+			let tx_result = match timeout_fut.await {
 				Ok(res) => match res {
 					Ok(id) => {
 						debug_assert_eq!(id, txid);
 						log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+						Ok(())
 					},
 					Err(e) => {
+						let result = if e
+							.get_ref()
+							.and_then(|inner| inner.downcast_ref::<RpcError>())
+							.is_some()
+						{
+							Err(TxBroadcastError::Rejected)
+						} else {
+							Err(TxBroadcastError::Failed)
+						};
 						log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
 						log_trace!(
 							self.logger,
 							"Failed broadcast transaction bytes: {}",
 							log_bytes!(tx.encode())
 						);
+						result
 					},
 				},
 				Err(e) => {
@@ -681,9 +696,14 @@ impl BitcoindChainSource {
 						"Failed broadcast transaction bytes: {}",
 						log_bytes!(tx.encode())
 					);
+					Err(TxBroadcastError::Timeout)
 				},
+			};
+			if package_result.is_ok() {
+				package_result = tx_result;
 			}
 		}
+		package_result
 	}
 }
 

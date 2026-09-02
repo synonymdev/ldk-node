@@ -1840,6 +1840,28 @@ mod tests {
 	}
 
 	#[test]
+	fn signed_transaction_is_not_recorded_until_observed_on_chain() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		aggregate.persist_all().unwrap();
+
+		let txid = tx.compute_txid();
+		assert!(aggregate
+			.wallets()
+			.values()
+			.flat_map(|wallet| wallet.transactions())
+			.all(|wallet_tx| wallet_tx.tx_node.txid != txid));
+	}
+
+	#[test]
 	fn persistence_fails_when_a_wallet_has_no_persister() {
 		let mut persister = NoopPersister;
 		let wallet = create_empty_wallet(&mut persister);

@@ -1,5 +1,4 @@
-# 0.7.0-rc.66 (Synonym Fork)
-
+# 0.7.0-rc.67 (Synonym Fork)
 ## Bug Fixes
 
 - Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
@@ -84,6 +83,9 @@
 
 ## Synonym Fork Additions
 
+- Explicit on-chain sends now return a transaction ID only after the configured backend accepts
+  the transaction, with distinct errors for rejection, failure, and timeout.
+- Electrum transaction rejections are now logged as failures instead of successful broadcasts.
 - Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.
   Stale channel-monitor mismatches now fail closed with `BuildError::DangerousValue`.
   Lightning crates come from crates.io `0.2.0` again.

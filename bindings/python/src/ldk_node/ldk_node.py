@@ -13520,6 +13520,21 @@ class NodeError:  # type: ignore
         def __repr__(self):
             return "NodeError.InvalidSeedBytes({})".format(repr(str(self)))
     _UniffiTempNodeError.InvalidSeedBytes = InvalidSeedBytes # type: ignore
+    class OnchainTxBroadcastRejected(_UniffiTempNodeError):
+
+        def __repr__(self):
+            return "NodeError.OnchainTxBroadcastRejected({})".format(repr(str(self)))
+    _UniffiTempNodeError.OnchainTxBroadcastRejected = OnchainTxBroadcastRejected # type: ignore
+    class OnchainTxBroadcastFailed(_UniffiTempNodeError):
+
+        def __repr__(self):
+            return "NodeError.OnchainTxBroadcastFailed({})".format(repr(str(self)))
+    _UniffiTempNodeError.OnchainTxBroadcastFailed = OnchainTxBroadcastFailed # type: ignore
+    class OnchainTxBroadcastTimeout(_UniffiTempNodeError):
+
+        def __repr__(self):
+            return "NodeError.OnchainTxBroadcastTimeout({})".format(repr(str(self)))
+    _UniffiTempNodeError.OnchainTxBroadcastTimeout = OnchainTxBroadcastTimeout # type: ignore
 
 NodeError = _UniffiTempNodeError # type: ignore
 del _UniffiTempNodeError
@@ -13801,6 +13816,18 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             return NodeError.InvalidSeedBytes(
                 _UniffiConverterString.read(buf),
             )
+        if variant == 69:
+            return NodeError.OnchainTxBroadcastRejected(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 70:
+            return NodeError.OnchainTxBroadcastFailed(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 71:
+            return NodeError.OnchainTxBroadcastTimeout(
+                _UniffiConverterString.read(buf),
+            )
         raise InternalError("Raw enum value doesn't match any cases")
 
     @staticmethod
@@ -13941,6 +13968,12 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             return
         if isinstance(value, NodeError.InvalidSeedBytes):
             return
+        if isinstance(value, NodeError.OnchainTxBroadcastRejected):
+            return
+        if isinstance(value, NodeError.OnchainTxBroadcastFailed):
+            return
+        if isinstance(value, NodeError.OnchainTxBroadcastTimeout):
+            return
 
     @staticmethod
     def write(value, buf):
@@ -14080,6 +14113,12 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             buf.write_i32(67)
         if isinstance(value, NodeError.InvalidSeedBytes):
             buf.write_i32(68)
+        if isinstance(value, NodeError.OnchainTxBroadcastRejected):
+            buf.write_i32(69)
+        if isinstance(value, NodeError.OnchainTxBroadcastFailed):
+            buf.write_i32(70)
+        if isinstance(value, NodeError.OnchainTxBroadcastTimeout):
+            buf.write_i32(71)
 
 
 
