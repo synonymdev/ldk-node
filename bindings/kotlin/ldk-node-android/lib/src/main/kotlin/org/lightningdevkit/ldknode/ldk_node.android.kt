@@ -4149,7 +4149,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 22129.toShort()) {
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 40346.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144.toShort()) {
@@ -8524,8 +8524,8 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
     }
 
     @Throws(NodeException::class)
-    override fun `listPendingBroadcasts`(): List<Txid> {
-        return FfiConverterSequenceTypeTxid.lift(callWithPointer {
+    override fun `listPendingBroadcasts`(): List<PendingBroadcastInfo> {
+        return FfiConverterSequenceTypePendingBroadcastInfo.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts(
                     it,
@@ -10568,6 +10568,28 @@ object FfiConverterTypePeerDetails: FfiConverterRustBuffer<PeerDetails> {
         FfiConverterTypeSocketAddress.write(value.`address`, buf)
         FfiConverterBoolean.write(value.`isPersisted`, buf)
         FfiConverterBoolean.write(value.`isConnected`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypePendingBroadcastInfo: FfiConverterRustBuffer<PendingBroadcastInfo> {
+    override fun read(buf: ByteBuffer): PendingBroadcastInfo {
+        return PendingBroadcastInfo(
+            FfiConverterTypeTxid.read(buf),
+            FfiConverterSequenceTypeTxid.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PendingBroadcastInfo) = (
+            FfiConverterTypeTxid.allocationSize(value.`txid`) +
+            FfiConverterSequenceTypeTxid.allocationSize(value.`lineage`)
+    )
+
+    override fun write(value: PendingBroadcastInfo, buf: ByteBuffer) {
+        FfiConverterTypeTxid.write(value.`txid`, buf)
+        FfiConverterSequenceTypeTxid.write(value.`lineage`, buf)
     }
 }
 
@@ -14978,6 +15000,31 @@ object FfiConverterSequenceTypePeerDetails: FfiConverterRustBuffer<List<PeerDeta
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypePeerDetails.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypePendingBroadcastInfo: FfiConverterRustBuffer<List<PendingBroadcastInfo>> {
+    override fun read(buf: ByteBuffer): List<PendingBroadcastInfo> {
+        val len = buf.getInt()
+        return List<PendingBroadcastInfo>(len) {
+            FfiConverterTypePendingBroadcastInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<PendingBroadcastInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypePendingBroadcastInfo.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<PendingBroadcastInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypePendingBroadcastInfo.write(it, buf)
         }
     }
 }

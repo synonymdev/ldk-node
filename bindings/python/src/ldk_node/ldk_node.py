@@ -825,7 +825,7 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 22129:
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 40346:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -7174,8 +7174,8 @@ class OnchainPayment:
 
 
 
-    def list_pending_broadcasts(self, ) -> "typing.List[Txid]":
-        return _UniffiConverterSequenceTypeTxid.lift(
+    def list_pending_broadcasts(self, ) -> "typing.List[PendingBroadcastInfo]":
+        return _UniffiConverterSequenceTypePendingBroadcastInfo.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts,self._uniffi_clone_pointer(),)
         )
 
@@ -9830,6 +9830,42 @@ class _UniffiConverterTypePeerDetails(_UniffiConverterRustBuffer):
         _UniffiConverterTypeSocketAddress.write(value.address, buf)
         _UniffiConverterBool.write(value.is_persisted, buf)
         _UniffiConverterBool.write(value.is_connected, buf)
+
+
+class PendingBroadcastInfo:
+    txid: "Txid"
+    lineage: "typing.List[Txid]"
+    def __init__(self, *, txid: "Txid", lineage: "typing.List[Txid]"):
+        self.txid = txid
+        self.lineage = lineage
+
+    def __str__(self):
+        return "PendingBroadcastInfo(txid={}, lineage={})".format(self.txid, self.lineage)
+
+    def __eq__(self, other):
+        if self.txid != other.txid:
+            return False
+        if self.lineage != other.lineage:
+            return False
+        return True
+
+class _UniffiConverterTypePendingBroadcastInfo(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return PendingBroadcastInfo(
+            txid=_UniffiConverterTypeTxid.read(buf),
+            lineage=_UniffiConverterSequenceTypeTxid.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterTypeTxid.check_lower(value.txid)
+        _UniffiConverterSequenceTypeTxid.check_lower(value.lineage)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterTypeTxid.write(value.txid, buf)
+        _UniffiConverterSequenceTypeTxid.write(value.lineage, buf)
 
 
 class ProbeHandle:
@@ -16933,6 +16969,31 @@ class _UniffiConverterSequenceTypePeerDetails(_UniffiConverterRustBuffer):
 
 
 
+class _UniffiConverterSequenceTypePendingBroadcastInfo(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiConverterTypePendingBroadcastInfo.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiConverterTypePendingBroadcastInfo.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiConverterTypePendingBroadcastInfo.read(buf) for i in range(count)
+        ]
+
+
+
 class _UniffiConverterSequenceTypeProbeHandle(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -17928,6 +17989,7 @@ __all__ = [
     "OutPoint",
     "PaymentDetails",
     "PeerDetails",
+    "PendingBroadcastInfo",
     "ProbeHandle",
     "RouteHintHop",
     "RouteParametersConfig",

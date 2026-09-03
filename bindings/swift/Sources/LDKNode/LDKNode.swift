@@ -3375,7 +3375,7 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func calculateTotalFee(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> UInt64
 
-    func listPendingBroadcasts() throws -> [Txid]
+    func listPendingBroadcasts() throws -> [PendingBroadcastInfo]
 
     func listSpendableOutputs() throws -> [SpendableUtxo]
 
@@ -3544,8 +3544,8 @@ open class OnchainPayment:
         })
     }
 
-    open func listPendingBroadcasts() throws -> [Txid] {
-        return try FfiConverterSequenceTypeTxid.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+    open func listPendingBroadcasts() throws -> [PendingBroadcastInfo] {
+        return try FfiConverterSequenceTypePendingBroadcastInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts(self.uniffiClonePointer(), $0)
         })
     }
@@ -6979,6 +6979,67 @@ public func FfiConverterTypePeerDetails_lift(_ buf: RustBuffer) throws -> PeerDe
 #endif
 public func FfiConverterTypePeerDetails_lower(_ value: PeerDetails) -> RustBuffer {
     return FfiConverterTypePeerDetails.lower(value)
+}
+
+public struct PendingBroadcastInfo {
+    public var txid: Txid
+    public var lineage: [Txid]
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(txid: Txid, lineage: [Txid]) {
+        self.txid = txid
+        self.lineage = lineage
+    }
+}
+
+extension PendingBroadcastInfo: Equatable, Hashable {
+    public static func == (lhs: PendingBroadcastInfo, rhs: PendingBroadcastInfo) -> Bool {
+        if lhs.txid != rhs.txid {
+            return false
+        }
+        if lhs.lineage != rhs.lineage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(txid)
+        hasher.combine(lineage)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePendingBroadcastInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PendingBroadcastInfo {
+        return
+            try PendingBroadcastInfo(
+                txid: FfiConverterTypeTxid.read(from: &buf),
+                lineage: FfiConverterSequenceTypeTxid.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: PendingBroadcastInfo, into buf: inout [UInt8]) {
+        FfiConverterTypeTxid.write(value.txid, into: &buf)
+        FfiConverterSequenceTypeTxid.write(value.lineage, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypePendingBroadcastInfo_lift(_ buf: RustBuffer) throws -> PendingBroadcastInfo {
+    return try FfiConverterTypePendingBroadcastInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypePendingBroadcastInfo_lower(_ value: PendingBroadcastInfo) -> RustBuffer {
+    return FfiConverterTypePendingBroadcastInfo.lower(value)
 }
 
 public struct ProbeHandle {
@@ -11648,6 +11709,31 @@ private struct FfiConverterSequenceTypePeerDetails: FfiConverterRustBuffer {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterSequenceTypePendingBroadcastInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [PendingBroadcastInfo]
+
+    static func write(_ value: [PendingBroadcastInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePendingBroadcastInfo.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PendingBroadcastInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PendingBroadcastInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypePendingBroadcastInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceTypeProbeHandle: FfiConverterRustBuffer {
     typealias SwiftType = [ProbeHandle]
 
@@ -13447,7 +13533,7 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218 {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 22129 {
+    if uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 40346 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144 {
