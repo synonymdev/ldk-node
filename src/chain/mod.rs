@@ -570,11 +570,12 @@ where
 		if !seen_received_txids.insert(txid) {
 			continue;
 		}
-		let details =
-			get_transaction_details(&txid, wallet, channel_manager).unwrap_or_else(|| {
-				log_error!(logger, "Transaction {} not found in wallet", txid);
-				TransactionDetails { amount_sats: 0, inputs: Vec::new(), outputs: Vec::new() }
-			});
+		if seen_confirmed_txids.contains(&txid) || transaction_confirmations.contains_key(&txid) {
+			continue;
+		}
+		let Some(details) = get_transaction_details(&txid, wallet, channel_manager) else {
+			continue;
+		};
 		log_info!(
 			logger,
 			"New unconfirmed transaction {} detected in mempool (amount: {} sats)",

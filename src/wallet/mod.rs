@@ -1902,11 +1902,7 @@ impl Wallet {
 			original_tx,
 			tx.clone(),
 		)?;
-		self.write_broadcast_intent(&replacement_intent)?;
-
-		let lineage_txids =
-			replacement_intent.transactions.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
-		let last_seen = Self::next_broadcast_timestamp(&locked_wallet, &lineage_txids)?;
+		let last_seen = self.write_rbf_replacement_intent(&locked_wallet, &replacement_intent)?;
 		self.payment_store_update_pending.store(true, Ordering::Release);
 		if let Err(e) = locked_wallet.apply_mempool_txs(vec![(tx.clone(), last_seen)], Vec::new()) {
 			log_error!(self.logger, "Failed to reserve RBF replacement {}: {}", new_txid, e);
@@ -1938,6 +1934,17 @@ impl Wallet {
 		);
 
 		Ok(tx)
+	}
+
+	fn write_rbf_replacement_intent(
+		&self, locked_wallet: &AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>,
+		replacement_intent: &BroadcastIntent,
+	) -> Result<u64, Error> {
+		let lineage_txids =
+			replacement_intent.transactions.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
+		let last_seen = Self::next_broadcast_timestamp(locked_wallet, &lineage_txids)?;
+		self.write_broadcast_intent(replacement_intent)?;
+		Ok(last_seen)
 	}
 
 	/// Roll back a conclusively rejected or undispatched RBF replacement.
@@ -1987,6 +1994,7 @@ impl Wallet {
 		self.update_payment_store(&locked_wallet)?;
 		drop(locked_wallet);
 		self.payment_store.remove(&PaymentId(rejected_txid.to_byte_array()))?;
+		self.forget_locally_applied_unconfirmed(&[rejected_txid]);
 
 		let finished_rejected_tx = intent.finish_rejection()?;
 		debug_assert_eq!(finished_rejected_tx.compute_txid(), rejected_txid);
@@ -3986,6 +3994,23 @@ mod tests {
 	}
 
 	#[test]
+	fn rejected_rbf_clears_the_locally_applied_unconfirmed_marker() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(store);
+		let original = replacement_test_transaction(3);
+		let replacement = replacement_test_transaction(4);
+		let replacement_txid = replacement.compute_txid();
+		let mut intent = BroadcastIntent::new(original);
+		intent.supersede(replacement).unwrap();
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+		node.wallet.note_locally_applied_unconfirmed(replacement_txid);
+
+		node.wallet.reject_rbf_broadcast(&replacement_txid).unwrap();
+
+		assert!(!node.wallet.take_locally_applied_unconfirmed_txids().contains(&replacement_txid));
+	}
+
+	#[test]
 	fn observing_an_rbf_predecessor_keeps_the_active_replacement_pending() {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		let node = replacement_test_node(store);
@@ -4034,6 +4059,51 @@ mod tests {
 		let restarted = replacement_test_node(store);
 		assert_eq!(restarted.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
 		assert_eq!(restarted.wallet.recover_pending_broadcast(&txid).unwrap(), Some(original));
+	}
+
+	#[test]
+	fn rbf_does_not_persist_replacement_when_lineage_last_seen_is_terminal() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(Arc::clone(&store));
+		let script_pubkey = node.onchain_payment().new_address().unwrap().script_pubkey();
+		let mut original = replacement_test_transaction(38);
+		original.input[0].previous_output.vout = 1;
+		original
+			.output
+			.push(TxOut { value: Amount::from_sat(10_000), script_pubkey: script_pubkey.clone() });
+		let mut replacement = replacement_test_transaction(39);
+		replacement.input[0].previous_output.vout = 1;
+		replacement.output.push(TxOut { value: Amount::from_sat(9_000), script_pubkey });
+		let original_txid = original.compute_txid();
+		node.wallet.prepare_pending_broadcast(&original).unwrap();
+		node.wallet
+			.inner
+			.lock()
+			.unwrap()
+			.apply_mempool_txs(vec![(original.clone(), u64::MAX - 1)], Vec::new())
+			.unwrap();
+		let existing_intent = node
+			.wallet
+			.find_broadcast_intent_by_active_txid(&original_txid)
+			.map(|(_, intent)| intent);
+		let replacement_intent =
+			BroadcastIntent::replacement(existing_intent, original.clone(), replacement).unwrap();
+		{
+			let wallet = node.wallet.inner.lock().unwrap();
+			assert_eq!(
+				node.wallet.write_rbf_replacement_intent(&wallet, &replacement_intent),
+				Err(Error::WalletOperationFailed)
+			);
+		}
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![original_txid]);
+		drop(node);
+
+		let restarted = replacement_test_node(store);
+		assert_eq!(restarted.wallet.list_pending_broadcasts().unwrap(), vec![original_txid]);
+		assert_eq!(
+			restarted.wallet.recover_pending_broadcast(&original_txid).unwrap(),
+			Some(original)
+		);
 	}
 
 	#[test]

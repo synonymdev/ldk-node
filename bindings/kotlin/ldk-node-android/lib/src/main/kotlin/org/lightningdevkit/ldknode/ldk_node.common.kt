@@ -624,7 +624,7 @@ interface OnchainPaymentInterface {
     fun `calculateTotalFee`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): kotlin.ULong
 
     @Throws(NodeException::class)
-    fun `listPendingBroadcasts`(): List<Txid>
+    fun `listPendingBroadcasts`(): List<PendingBroadcastInfo>
 
     @Throws(NodeException::class)
     fun `listSpendableOutputs`(): List<SpendableUtxo>
@@ -1200,6 +1200,16 @@ data class PeerDetails (
     val `address`: SocketAddress,
     val `isPersisted`: kotlin.Boolean,
     val `isConnected`: kotlin.Boolean
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class PendingBroadcastInfo (
+    val `txid`: Txid,
+    val `lineage`: List<Txid>
 ) {
     companion object
 }
@@ -2572,6 +2582,8 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
 
 
 
