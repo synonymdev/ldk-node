@@ -454,7 +454,7 @@ pub(crate) struct Wallet {
 	node_metrics: Arc<RwLock<NodeMetrics>>,
 	logger: Arc<Logger>,
 	derived_account_lookahead: u32,
-	locally_applied_unconfirmed_txids: Mutex<Vec<Txid>>,
+	locally_applied_unconfirmed_txids: Mutex<Vec<(Txid, bool)>>,
 }
 
 impl Wallet {
@@ -1339,15 +1339,38 @@ impl Wallet {
 	}
 
 	pub(crate) fn take_locally_applied_unconfirmed_txids(&self) -> Vec<Txid> {
-		std::mem::take(&mut *self.locally_applied_unconfirmed_txids.lock().unwrap())
+		let mut stored = self.locally_applied_unconfirmed_txids.lock().unwrap();
+		let mut ready = Vec::new();
+		stored.retain(|(txid, publishable)| {
+			if *publishable {
+				ready.push(*txid);
+				false
+			} else {
+				true
+			}
+		});
+		ready
 	}
 
 	fn note_locally_applied_unconfirmed(&self, txid: Txid) {
-		self.locally_applied_unconfirmed_txids.lock().unwrap().push(txid);
+		self.locally_applied_unconfirmed_txids.lock().unwrap().push((txid, false));
+	}
+
+	pub(crate) fn publish_locally_applied_unconfirmed(&self, txid: Txid) {
+		for (stored, publishable) in
+			self.locally_applied_unconfirmed_txids.lock().unwrap().iter_mut()
+		{
+			if *stored == txid {
+				*publishable = true;
+			}
+		}
 	}
 
 	fn forget_locally_applied_unconfirmed(&self, txids: &[Txid]) {
-		self.locally_applied_unconfirmed_txids.lock().unwrap().retain(|txid| !txids.contains(txid));
+		self.locally_applied_unconfirmed_txids
+			.lock()
+			.unwrap()
+			.retain(|(txid, _)| !txids.contains(txid));
 	}
 
 	/// Resolve an accepted broadcast while retaining multi-hop RBF lineage until confirmation.
@@ -3590,9 +3613,11 @@ mod tests {
 	use std::collections::HashSet;
 	use std::future::Future;
 	use std::pin::Pin;
+	use std::sync::atomic::{AtomicBool, Ordering};
 	use std::sync::Arc;
 	use std::sync::Mutex;
-	use std::time::{SystemTime, UNIX_EPOCH};
+	use std::thread;
+	use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 	struct NamespaceFailStore {
 		inner: InMemoryStore,
@@ -4008,6 +4033,58 @@ mod tests {
 		node.wallet.reject_rbf_broadcast(&replacement_txid).unwrap();
 
 		assert!(!node.wallet.take_locally_applied_unconfirmed_txids().contains(&replacement_txid));
+	}
+
+	#[test]
+	fn unpublished_locally_applied_marker_is_not_consumed() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(store);
+		let txid = replacement_test_transaction(40).compute_txid();
+		node.wallet.note_locally_applied_unconfirmed(txid);
+		assert!(node.wallet.take_locally_applied_unconfirmed_txids().is_empty());
+		node.wallet.publish_locally_applied_unconfirmed(txid);
+		assert_eq!(node.wallet.take_locally_applied_unconfirmed_txids(), vec![txid]);
+	}
+
+	#[test]
+	fn concurrent_rbf_rejection_does_not_publish_locally_applied_marker() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(store);
+		let original = replacement_test_transaction(3);
+		let replacement = replacement_test_transaction(4);
+		let replacement_txid = replacement.compute_txid();
+		let mut intent = BroadcastIntent::new(original);
+		intent.supersede(replacement).unwrap();
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+
+		let wallet = Arc::clone(&node.wallet);
+		let seen = Arc::new(Mutex::new(Vec::new()));
+		let stop = Arc::new(AtomicBool::new(false));
+		let taker_wallet = Arc::clone(&wallet);
+		let taker_seen = Arc::clone(&seen);
+		let taker_stop = Arc::clone(&stop);
+		let taker = thread::spawn(move || {
+			while !taker_stop.load(Ordering::Relaxed) {
+				taker_seen
+					.lock()
+					.unwrap()
+					.extend(taker_wallet.take_locally_applied_unconfirmed_txids());
+				thread::yield_now();
+			}
+			taker_seen
+				.lock()
+				.unwrap()
+				.extend(taker_wallet.take_locally_applied_unconfirmed_txids());
+		});
+
+		wallet.note_locally_applied_unconfirmed(replacement_txid);
+		thread::sleep(Duration::from_millis(10));
+		wallet.reject_rbf_broadcast(&replacement_txid).unwrap();
+		stop.store(true, Ordering::Relaxed);
+		taker.join().unwrap();
+
+		assert!(!seen.lock().unwrap().contains(&replacement_txid));
+		assert!(!wallet.take_locally_applied_unconfirmed_txids().contains(&replacement_txid));
 	}
 
 	#[test]

@@ -153,6 +153,7 @@ impl OnchainPayment {
 						e
 					);
 				}
+				self.wallet.publish_locally_applied_unconfirmed(txid);
 				Ok(txid)
 			},
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
@@ -162,6 +163,7 @@ impl OnchainPayment {
 				Err(Self::initial_broadcast_error(error, txid))
 			},
 			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
+				self.wallet.publish_locally_applied_unconfirmed(txid);
 				Err(Self::initial_broadcast_error(error, txid))
 			},
 		}
@@ -729,6 +731,7 @@ impl OnchainPayment {
 						e
 					);
 				}
+				self.wallet.publish_locally_applied_unconfirmed(*txid);
 				Ok(*txid)
 			},
 			Err(error) => Err(Self::rebroadcast_error(error, *txid)),
@@ -848,6 +851,7 @@ impl OnchainPayment {
 						e
 					);
 				}
+				self.wallet.publish_locally_applied_unconfirmed(replacement_txid);
 				Ok(replacement_txid)
 			},
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
@@ -857,6 +861,7 @@ impl OnchainPayment {
 				Err(Self::initial_broadcast_error(error, replacement_txid))
 			},
 			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
+				self.wallet.publish_locally_applied_unconfirmed(replacement_txid);
 				Err(Self::initial_broadcast_error(error, replacement_txid))
 			},
 		}
