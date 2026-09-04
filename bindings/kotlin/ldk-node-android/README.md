@@ -1,35 +1,33 @@
 ## Publishing
-Publishing new version guide.
 
-1. Run in root dir
-   `sh scripts/uniffi_bindgen_generate_kotlin_android.sh`
+Follow the [binding release guide](../../README.md). Run `./bindgen.sh` from the repository root; do not run the child generation scripts directly. Commit the generated Kotlin sources, but do not commit `lib/src/main/jniLibs/`. The Android publishing workflow rebuilds the JNI libraries before packaging the AAR.
 
-1. Update `version` in `bindings/kotlin/ldk-node-android/gradle.properties`.
+## Consuming
 
-1. Commit generated Kotlin sources. Do not commit `lib/src/main/jniLibs/`.
+In the Android project:
 
-1. Push new branch (or new tag)
+- In `settings.gradle.kts`, add the GitHub Packages repository:
 
-1. In the android project:
-
-    - in `settings.gradle.kts` add GitHub Packages repository:
-
-        ```kt
-        dependencyResolutionManagement {
-            repositories {
-                google()
-                mavenCentral()
-                maven {
-                    url = uri("https://maven.pkg.github.com/synonymdev/ldk-node")
-                    credentials {
-                        username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
-                        password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
-                    }
+    ```kt
+    dependencyResolutionManagement {
+        repositories {
+            google()
+            mavenCentral()
+            maven {
+                url = uri("https://maven.pkg.github.com/synonymdev/ldk-node")
+                credentials {
+                    username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
+                    password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
                 }
             }
-        ```
-    - add dependency in `libs.versions.toml`:
-        ```toml
-        ldk-node-android = { module = "com.synonym:ldk-node-android", version = "0.7.0-rc.26" }
-        ```
-    - Run `Sync project with gradle files` action in android studio
+        }
+    }
+    ```
+
+- Add the dependency in `libs.versions.toml`:
+
+    ```toml
+    ldk-node-android = { module = "com.synonym:ldk-node-android", version = "0.7.0-rc.26" }
+    ```
+
+- Run the `Sync project with gradle files` action in Android Studio.

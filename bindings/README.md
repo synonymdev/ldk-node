@@ -1,20 +1,18 @@
-## Generating the Bindings
+## Generating the bindings
 
-## Build All Bindings
-Run in the root dir:
+Run from the repository root:
+
 ```sh
 ./bindgen.sh
 ```
 
----
+## Publishing a binding release
 
-Detailed instructions for publishing a new version of the bindings.
-
-1. Update `Cargo.toml`
-2. Update `version` in:
-   - `bindings/kotlin/ldk-node-android/gradle.properties`
-3. Run the above command to generate UDL language sources
-4. Do not commit `bindings/kotlin/ldk-node-android/lib/src/main/jniLibs/`
-5. Open a PR with the changes
-6. Create a new GitHub release with a new tag like `v0.1.0`, uploading the following files:
-   - `bindings/swift/LDKNodeFFI.xcframework.zip`
+1. Update the version in `Cargo.toml`, `bindings/kotlin/ldk-node-android/gradle.properties`, `bindings/python/pyproject.toml`, and the release tag in `Package.swift`.
+2. Update the existing Synonym fork heading and additions subsection in `CHANGELOG.md`.
+3. Run `./bindgen.sh` from the repository root.
+4. Commit the generated Swift, Kotlin, and Python sources plus the updated `Package.swift` checksum. Do not commit `bindings/kotlin/ldk-node-android/lib/src/main/jniLibs/`.
+5. Push every release change before tagging the release commit.
+6. Verify that `shasum -a 256 bindings/swift/LDKNodeFFI.xcframework.zip` matches the checksum in `Package.swift`.
+7. Publish the tag as the latest GitHub release and upload `bindings/swift/LDKNodeFFI.xcframework.zip`.
+8. Add the release link to the PR description.
