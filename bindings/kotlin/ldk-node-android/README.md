@@ -6,7 +6,7 @@ Publishing new version guide.
 
 1. Update `version` in `bindings/kotlin/ldk-node-android/gradle.properties`.
 
-1. Commit
+1. Commit generated Kotlin sources. Do not commit `lib/src/main/jniLibs/`.
 
 1. Push new branch (or new tag)
 

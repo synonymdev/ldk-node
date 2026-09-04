@@ -90,11 +90,13 @@ cargo clippy --fix
 
 ### Language Bindings
 ```bash
-# Generate ALL bindings (Swift, Kotlin, Python) + xcframework archive
+# Generate UDL language sources (Swift, Kotlin, Python) + xcframework archive
 ./bindgen.sh
 ```
 Individual scripts live under `scripts/` but should NOT be run directly —
 `bindgen.sh` installs shared tooling once and sets the correct build profile.
+Do not commit `bindings/kotlin/ldk-node-android/lib/src/main/jniLibs/`.
+`publish-android.yml` rebuilds those JNI libraries before publishing.
 
 ## Architecture
 
@@ -238,21 +240,23 @@ marked as skipped for CI), you must fix it before declaring success.
 - ALWAYS move imports to the top of the file when applicable (no inline imports in functions)
 - ALWAYS add unit tests for new business logic — untested code will be flagged in review
 - Run `./bindgen.sh` in the background when bindings need regeneration (it is long-running)
+- Do not commit Android JNI `.so` files under `bindings/kotlin/ldk-node-android/lib/src/main/jniLibs/`
 
 ## Bindings Generation Command
-To regenerate ALL bindings (Swift, Kotlin, Python), run from the repo root:
+To regenerate UDL language sources (Swift, Kotlin, Python) from the repo root:
 ```sh
 ./bindgen.sh
 ```
+Commit the generated Swift, Kotlin, and Python sources plus the `Package.swift` checksum.
+Do not commit native `.so` files; `publish-android.yml` rebuilds them.
 
 ## Version Bumping Checklist
 When bumping the version, ALWAYS update ALL of these files:
 1. `Cargo.toml` - main crate version
 2. `bindings/kotlin/ldk-node-android/gradle.properties` - Android version
-3. `bindings/kotlin/ldk-node-jvm/gradle.properties` - JVM version
-4. `bindings/python/pyproject.toml` - Python version
-5. `Package.swift` - Swift tag (and checksum after building)
-6. `CHANGELOG.md` - Add release notes section at top
+3. `bindings/python/pyproject.toml` - Python version
+4. `Package.swift` - Swift tag (and checksum after building)
+5. `CHANGELOG.md` - Add release notes section at top
 
 ## CHANGELOG
 - The Synonym fork maintains a SINGLE section at the top: `# X.X.X (Synonym Fork)`
