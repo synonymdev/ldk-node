@@ -1,15 +1,9 @@
 # 0.7.0-rc.67 (Synonym Fork)
+
 ## Bug Fixes
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-- Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
-- Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
-=======
-=======
 - `list_pending_broadcasts` now returns each unresolved spend's complete RBF lineage so callers can
   independently reconcile every replacement before `abandon_pending_broadcast`.
->>>>>>> a58ddaa (fix: address on-chain broadcast review)
 - Explicit on-chain sends now return a transaction ID only after the configured backend accepts
   the transaction. Transaction-keyed rejected, not-dispatched, acceptance-unknown failure, and
   acceptance-unknown timeout outcomes are distinct. Uncertain signed transactions remain reserved
@@ -22,7 +16,8 @@
   fieldless Kotlin exceptions have an empty generated `message`; callers should match the error
   variant and use its typed fields.
 - Electrum transaction rejections are now logged as failures instead of successful broadcasts.
->>>>>>> 6967d92 (docs: place broadcast fixes in current changelog)
+- Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
+- Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
 - Add keep consumer rules for JNA types UniFFI needs under R8.
 
 # 0.7.0-rc.64 (Synonym Fork)

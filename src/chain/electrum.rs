@@ -978,7 +978,19 @@ impl ElectrumRuntimeClient {
 	}
 }
 
-<<<<<<< HEAD
+fn classify_electrum_broadcast_result(
+	expected_txid: Txid, result: &Result<Txid, electrum_client::Error>,
+) -> Result<(), TxBroadcastError> {
+	match result {
+		Ok(returned_txid) => validate_broadcast_txid(expected_txid, *returned_txid),
+		Err(electrum_client::Error::Protocol(value)) => {
+			let code = value.get("code").and_then(serde_json::Value::as_i64);
+			classify_rpc_broadcast_error(code, &value.to_string())
+		},
+		Err(_) => Err(TxBroadcastError::Failed),
+	}
+}
+
 struct ConfirmGate {
 	active: AtomicBool,
 }
@@ -1061,18 +1073,6 @@ impl Confirm for ShutdownAwareConfirm {
 		self.with_confirmables(Vec::new(), |confirmables| {
 			confirmables.iter().flat_map(|confirmable| confirmable.get_relevant_txids()).collect()
 		})
-=======
-fn classify_electrum_broadcast_result(
-	expected_txid: Txid, result: &Result<Txid, electrum_client::Error>,
-) -> Result<(), TxBroadcastError> {
-	match result {
-		Ok(returned_txid) => validate_broadcast_txid(expected_txid, *returned_txid),
-		Err(electrum_client::Error::Protocol(value)) => {
-			let code = value.get("code").and_then(serde_json::Value::as_i64);
-			classify_rpc_broadcast_error(code, &value.to_string())
-		},
-		Err(_) => Err(TxBroadcastError::Failed),
->>>>>>> 049b116 (fix: classify broadcast backend results)
 	}
 }
 
