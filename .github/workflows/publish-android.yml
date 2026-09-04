@@ -1,6 +1,7 @@
 name: Android Publish
 
 env:
+  NDK_RELEASE: r28b
   NDK_VERSION: 28.1.13356709
 
 on:
@@ -56,11 +57,14 @@ jobs:
       id: setup-ndk
       uses: nttld/setup-ndk@v1
       with:
-        ndk-version: ${{ env.NDK_VERSION }}
+        ndk-version: ${{ env.NDK_RELEASE }}
         add-to-path: true
 
-    - name: Export Android NDK environment
+    - name: Verify and export Android NDK environment
+      env:
+        INSTALLED_NDK_VERSION: ${{ steps.setup-ndk.outputs.ndk-full-version }}
       run: |
+        test "$INSTALLED_NDK_VERSION" = "$NDK_VERSION"
         echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
         echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
 
