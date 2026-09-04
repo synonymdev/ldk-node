@@ -42,12 +42,10 @@ pub const DUST_LIMIT_SATS: u64 = 546;
 /// When the recipient script is available, its exact serialized output weight
 /// is used. APIs without a recipient retain the conservative standard-output
 /// allowance below.
-/// - tx overhead: 4 (version) + 2 (marker/flag) + ~3 (varints) + 4 (locktime) ~ 13 vB
-/// - recipient output: 43 vB (P2TR/P2WSH)
-///
-/// Total ~56 vB = 224 WU.
+/// Conservative fallback for public selection APIs without a recipient script:
+/// 42 WU transaction overhead + 204 WU for a 40-byte v2 witness program output = 246 WU.
 const TX_ENVELOPE_WEIGHT: Weight = Weight::from_wu(42);
-const CONSERVATIVE_PAYMENT_OVERHEAD: Weight = Weight::from_wu(224);
+const CONSERVATIVE_PAYMENT_OVERHEAD: Weight = Weight::from_wu(246);
 
 /// Calculate the satisfaction weight for a UTXO based on its script type.
 pub fn calculate_utxo_weight(script_pubkey: &ScriptBuf) -> Weight {
@@ -281,7 +279,14 @@ where
 		let base_fee = fee_rate.fee_wu(payment_overhead).ok_or(Error::InvalidFeeRate)?;
 		Amount::from_sat(target_amount).checked_add(base_fee).ok_or(Error::InsufficientFunds)?
 	} else {
+		let min_input_fee = weighted_utxos
+			.iter()
+			.filter_map(|u| fee_rate.fee_wu(u.satisfaction_weight))
+			.min()
+			.unwrap_or(Amount::ZERO);
 		Amount::from_sat(target_amount)
+			.checked_add(min_input_fee)
+			.ok_or(Error::InsufficientFunds)?
 	};
 	let mut rng = OsRng;
 

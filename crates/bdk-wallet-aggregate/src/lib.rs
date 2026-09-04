@@ -2048,16 +2048,19 @@ mod tests {
 			.address
 			.script_pubkey();
 
-		let selected = aggregate
-			.select_utxos(
-				target_amount,
-				aggregate.list_unspent(),
-				fee_rate,
-				CoinSelectionAlgorithm::BranchAndBound,
-				&drain_script,
-				&[],
-			)
-			.unwrap();
+		let recipient = recipient_script();
+		let selected = utxo::select_utxos_with_algorithm(utxo::SelectionRequest {
+			target_amount,
+			available_utxos: aggregate.list_unspent(),
+			fee_rate,
+			algorithm: CoinSelectionAlgorithm::BranchAndBound,
+			drain_script: &drain_script,
+			excluded_outpoints: &[],
+			wallets: &aggregate.wallets,
+			recipient_script: Some(&recipient),
+			include_payment_overhead: true,
+		})
+		.unwrap();
 
 		// The tight changeless match quoted in the review: eight P2WPKH inputs
 		// totaling ~35,600 sats, which the old precheck would have rejected.
@@ -2072,9 +2075,7 @@ mod tests {
 
 		let infos = aggregate.prepare_outpoints_for_psbt(&selected).unwrap();
 		let mut builder = aggregate.primary_wallet_mut().build_tx();
-		builder
-			.add_recipient(recipient_script(), Amount::from_sat(target_amount))
-			.fee_rate(fee_rate);
+		builder.add_recipient(recipient, Amount::from_sat(target_amount)).fee_rate(fee_rate);
 		utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
 		builder.manually_selected_only();
 		builder.finish().expect("builder must accept the changeless low-fee selection");
@@ -2192,6 +2193,18 @@ mod tests {
 		}
 	}
 
+	/// The conservative no-recipient base-overhead allowance (246 WU) must
+	/// keep public selector and transaction builder in agreement for the largest
+	/// valid future-witness recipient, a v2 40-byte program (204 WU output +
+	/// 42 WU tx overhead = 246 WU).
+	///
+	/// Boundary fixture: at 1,000 sat/kwu (1 sat/WU), 10,510 sats covers the
+	/// 10,000-sat target + 1 input fee (271 sats) + 224 WU base fee (224 sats),
+	/// so a 224-WU allowance selects only the 10,510-sat UTXO. However, spending
+	/// 1 P2WPKH input to a 51 vB output needs 518 sats fee (10,518 total),
+	/// making 10,510 sats insufficient for TxBuilder. The 246-WU allowance
+	/// targets 10,517 sats, correctly forcing selection of the second (700 sat)
+	/// UTXO, which TxBuilder accepts.
 	#[test]
 	fn selection_is_accepted_for_witness_v2_40_byte_recipient() {
 		let recipient = witness_v2_40_byte_recipient_script();
@@ -2212,18 +2225,16 @@ mod tests {
 			TxOut { value: Amount::ZERO, script_pubkey: recipient.clone() }.weight(),
 			Weight::from_wu(204)
 		);
-		let selected = utxo::select_utxos_with_algorithm(utxo::SelectionRequest {
-			target_amount,
-			available_utxos: aggregate.list_unspent(),
-			fee_rate,
-			algorithm: CoinSelectionAlgorithm::LargestFirst,
-			drain_script: &drain_script,
-			excluded_outpoints: &[],
-			wallets: &aggregate.wallets,
-			recipient_script: Some(&recipient),
-			include_payment_overhead: true,
-		})
-		.unwrap();
+		let selected = aggregate
+			.select_utxos(
+				target_amount,
+				aggregate.list_unspent(),
+				fee_rate,
+				CoinSelectionAlgorithm::LargestFirst,
+				&drain_script,
+				&[],
+			)
+			.unwrap();
 		assert_eq!(selected.len(), 2);
 
 		let infos = aggregate.prepare_outpoints_for_psbt(&selected).unwrap();
@@ -2254,6 +2265,18 @@ mod tests {
 				CoinSelectionAlgorithm::BranchAndBound,
 				&drain_script,
 				&[],
+			),
+			Err(Error::InsufficientFunds)
+		);
+		assert_eq!(
+			utxo::select_utxos_for_deficit(
+				u64::MAX,
+				aggregate.list_unspent(),
+				FeeRate::from_sat_per_kwu(250),
+				CoinSelectionAlgorithm::BranchAndBound,
+				&drain_script,
+				&[],
+				&aggregate.wallets,
 			),
 			Err(Error::InsufficientFunds)
 		);
