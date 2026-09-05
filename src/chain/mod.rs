@@ -424,7 +424,7 @@ mod sync_tests {
 // Process BDK wallet events and emit corresponding ldk-node events via the event queue.
 // When a transaction touches multiple wallet accounts, each wallet emits its own
 // BdkWalletEvent, so we deduplicate by txid before forwarding to the event queue.
-async fn process_wallet_events<L2: Deref>(
+pub(crate) async fn process_wallet_events<L2: Deref>(
 	wallet_events: Vec<BdkWalletEvent>, wallet: &crate::wallet::Wallet,
 	event_queue: &EventQueue<L2>, logger: &Arc<Logger>,
 	channel_manager: Option<&Arc<ChannelManager>>, _chain_monitor: Option<&Arc<ChainMonitor>>,
@@ -564,6 +564,29 @@ where
 				// TxDropped is handled via check_and_emit_evicted_transactions; skip here.
 			},
 		}
+	}
+
+	for txid in wallet.take_locally_applied_unconfirmed_txids() {
+		if !seen_received_txids.insert(txid) {
+			continue;
+		}
+		if seen_confirmed_txids.contains(&txid) || transaction_confirmations.contains_key(&txid) {
+			continue;
+		}
+		let Some(details) = get_transaction_details(&txid, wallet, channel_manager) else {
+			continue;
+		};
+		log_info!(
+			logger,
+			"New unconfirmed transaction {} detected in mempool (amount: {} sats)",
+			txid,
+			details.amount_sats
+		);
+		let event = Event::OnchainTransactionReceived { txid, details };
+		event_queue.add_event(event).await.map_err(|e| {
+			log_error!(logger, "Failed to push onchain event to queue: {}", e);
+			e
+		})?;
 	}
 	Ok(())
 }
@@ -1295,28 +1318,35 @@ impl ChainSource {
 	pub(crate) async fn continuously_process_broadcast_queue(
 		&self, mut stop_tx_bcast_receiver: tokio::sync::watch::Receiver<()>,
 	) {
-		let mut receiver = self.tx_broadcaster.get_broadcast_queue().await;
+		let mut receivers = self.tx_broadcaster.get_broadcast_queue_receivers().await;
 		loop {
 			let tx_bcast_logger = Arc::clone(&self.logger);
 			tokio::select! {
 				_ = stop_tx_bcast_receiver.changed() => {
+					self.tx_broadcaster.pause_explicit_broadcasts();
+					receivers.fail_queued_explicit_requests();
 					log_debug!(
 						tx_bcast_logger,
 						"Stopping broadcasting transactions.",
 					);
 					return;
 				}
-				Some(next_package) = receiver.recv() => {
-					match &self.kind {
+				Some(request) = receivers.recv() => {
+					let package = request.package;
+					let result_sender = request.result_sender;
+					let result = match &self.kind {
 						ChainSourceKind::Esplora(esplora_chain_source) => {
-							esplora_chain_source.process_broadcast_package(next_package).await
+							esplora_chain_source.process_broadcast_package(package).await
 						},
 						ChainSourceKind::Electrum(electrum_chain_source) => {
-							electrum_chain_source.process_broadcast_package(next_package).await
+							electrum_chain_source.process_broadcast_package(package).await
 						},
 						ChainSourceKind::Bitcoind(bitcoind_chain_source) => {
-							bitcoind_chain_source.process_broadcast_package(next_package).await
+							bitcoind_chain_source.process_broadcast_package(package).await
 						},
+					};
+					if let Some(result_sender) = result_sender {
+						let _ = result_sender.send(result);
 					}
 				}
 			}

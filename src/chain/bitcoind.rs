@@ -38,6 +38,9 @@ use crate::fee_estimator::{
 };
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
+use crate::tx_broadcaster::{
+	classify_rpc_broadcast_error, validate_broadcast_txid, TxBroadcastError,
+};
 use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::{Error, NodeMetrics};
 
@@ -643,30 +646,58 @@ impl BitcoindChainSource {
 		Ok(())
 	}
 
-	pub(crate) async fn process_broadcast_package(&self, package: Vec<Transaction>) {
+	pub(crate) async fn process_broadcast_package(
+		&self, package: Vec<Transaction>,
+	) -> Result<(), TxBroadcastError> {
 		// While it's a bit unclear when we'd be able to lean on Bitcoin Core >v28
 		// features, we should eventually switch to use `submitpackage` via the
 		// `rust-bitcoind-json-rpc` crate rather than just broadcasting individual
 		// transactions.
+		let mut package_result = Ok(());
 		for tx in &package {
 			let txid = tx.compute_txid();
 			let timeout_fut = tokio::time::timeout(
 				Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
 				self.api_client.broadcast_transaction(tx),
 			);
-			match timeout_fut.await {
+			let tx_result = match timeout_fut.await {
 				Ok(res) => match res {
 					Ok(id) => {
-						debug_assert_eq!(id, txid);
-						log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+						let result = classify_bitcoind_broadcast_success(txid, id);
+						if result.is_ok() {
+							log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+						} else {
+							log_error!(
+								self.logger,
+								"Backend returned transaction ID {} for submitted transaction {}",
+								id,
+								txid
+							);
+						}
+						result
 					},
 					Err(e) => {
-						log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
-						log_trace!(
-							self.logger,
-							"Failed broadcast transaction bytes: {}",
-							log_bytes!(tx.encode())
-						);
+						let result = classify_bitcoind_broadcast_error(&e);
+						if result.is_ok() {
+							log_trace!(
+								self.logger,
+								"Transaction {} is already known by backend",
+								txid
+							);
+						} else {
+							log_error!(
+								self.logger,
+								"Failed to broadcast transaction {}: {}",
+								txid,
+								e
+							);
+							log_trace!(
+								self.logger,
+								"Failed broadcast transaction bytes: {}",
+								log_bytes!(tx.encode())
+							);
+						}
+						result
 					},
 				},
 				Err(e) => {
@@ -681,9 +712,27 @@ impl BitcoindChainSource {
 						"Failed broadcast transaction bytes: {}",
 						log_bytes!(tx.encode())
 					);
+					Err(TxBroadcastError::Timeout)
 				},
+			};
+			if package_result.is_ok() {
+				package_result = tx_result;
 			}
 		}
+		package_result
+	}
+}
+
+fn classify_bitcoind_broadcast_success(
+	expected_txid: Txid, returned_txid: Txid,
+) -> Result<(), TxBroadcastError> {
+	validate_broadcast_txid(expected_txid, returned_txid)
+}
+
+fn classify_bitcoind_broadcast_error(error: &std::io::Error) -> Result<(), TxBroadcastError> {
+	match error.get_ref().and_then(|inner| inner.downcast_ref::<RpcError>()) {
+		Some(rpc_error) => classify_rpc_broadcast_error(Some(rpc_error.code), &rpc_error.message),
+		None => Err(TxBroadcastError::Failed),
 	}
 }
 
@@ -1607,6 +1656,7 @@ impl std::fmt::Display for HttpError {
 
 #[cfg(test)]
 mod tests {
+	use std::io;
 	use std::sync::Arc;
 
 	use bitcoin::blockdata::constants::genesis_block;
@@ -1614,6 +1664,7 @@ mod tests {
 	use bitcoin::{FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
 	use lightning::chain::{BestBlock, Listen};
 	use lightning_block_sync::http::JsonResponse;
+	use lightning_block_sync::rpc::RpcError;
 	use proptest::arbitrary::any;
 	use proptest::collection::vec;
 	use proptest::{prop_assert_eq, prop_compose, proptest};
@@ -1621,14 +1672,53 @@ mod tests {
 
 	use crate::builder::NodeBuilder;
 	use crate::chain::bitcoind::{
+		classify_bitcoind_broadcast_error, classify_bitcoind_broadcast_success,
 		should_emit_mempool_entry, AccountChainListener, AccountChainListenerOutcome,
 		BitcoindClient, FeeResponse, GetMempoolEntryResponse, GetRawMempoolResponse,
 		GetRawTransactionResponse, MempoolMinFeeResponse, MempoolUpdate,
 	};
 	use crate::config::{AddressType, Config, OnchainWalletAccount};
 	use crate::io::test_utils::InMemoryStore;
+	use crate::tx_broadcaster::TxBroadcastError;
 	use crate::types::DynStore;
 	use crate::Error;
+
+	#[test]
+	fn bitcoind_broadcast_errors_are_classified_by_rpc_code() {
+		let already_known = io::Error::new(
+			io::ErrorKind::Other,
+			RpcError { code: -27, message: "Transaction already in block chain".to_string() },
+		);
+		assert_eq!(classify_bitcoind_broadcast_error(&already_known), Ok(()));
+
+		let rejected = io::Error::new(
+			io::ErrorKind::Other,
+			RpcError { code: -26, message: "non-final".to_string() },
+		);
+		assert_eq!(classify_bitcoind_broadcast_error(&rejected), Err(TxBroadcastError::Rejected));
+
+		let unavailable = io::Error::new(
+			io::ErrorKind::Other,
+			RpcError { code: -28, message: "Loading block index".to_string() },
+		);
+		assert_eq!(classify_bitcoind_broadcast_error(&unavailable), Err(TxBroadcastError::Failed));
+	}
+
+	#[test]
+	fn bitcoind_broadcast_success_requires_the_submitted_txid() {
+		let expected = "0000000000000000000000000000000000000000000000000000000000000001"
+			.parse::<Txid>()
+			.unwrap();
+		let returned = "0000000000000000000000000000000000000000000000000000000000000002"
+			.parse::<Txid>()
+			.unwrap();
+
+		assert_eq!(classify_bitcoind_broadcast_success(expected, expected), Ok(()));
+		assert_eq!(
+			classify_bitcoind_broadcast_success(expected, returned),
+			Err(TxBroadcastError::Failed)
+		);
+	}
 
 	fn test_node() -> (crate::Node, [u8; 64]) {
 		let seed = [42u8; 64];

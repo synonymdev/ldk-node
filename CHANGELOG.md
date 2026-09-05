@@ -1,7 +1,21 @@
-# 0.7.0-rc.66 (Synonym Fork)
+# 0.7.0-rc.67 (Synonym Fork)
 
 ## Bug Fixes
 
+- `list_pending_broadcasts` now returns each unresolved spend's complete RBF lineage so callers can
+  independently reconcile every replacement before `abandon_pending_broadcast`.
+- Explicit on-chain sends now return a transaction ID only after the configured backend accepts
+  the transaction. Transaction-keyed rejected, not-dispatched, acceptance-unknown failure, and
+  acceptance-unknown timeout outcomes are distinct. Uncertain signed transactions remain reserved
+  in a durable intent store for enumeration, exact-byte rebroadcast, sync reconciliation, and
+  recovery after restart. Callers can explicitly abandon an externally reconciled intent, and RBF
+  replacements use the same result-bearing, durable lifecycle while exposing only the canonical
+  transaction in payment history.
+- `NodeError` is now a fielded mobile error type so broadcast failures can expose their transaction
+  ID. Swift error cases no longer contain the legacy generated `message` associated value, and
+  fieldless Kotlin exceptions have an empty generated `message`; callers should match the error
+  variant and use its typed fields.
+- Electrum transaction rejections are now logged as failures instead of successful broadcasts.
 - Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
 - Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
 - Add keep consumer rules for JNA types UniFFI needs under R8.

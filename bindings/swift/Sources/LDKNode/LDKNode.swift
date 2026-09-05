@@ -3355,6 +3355,8 @@ public func FfiConverterTypeOffer_lower(_ value: Offer) -> UnsafeMutableRawPoint
 }
 
 public protocol OnchainPaymentProtocol: AnyObject {
+    func abandonPendingBroadcast(txid: Txid) throws
+
     func accelerateByCpfp(txid: Txid, feeRate: FeeRate?, destinationAddress: Address?) throws -> Txid
 
     func addressInfoForAccountAtIndex(addressType: AddressType, accountIndex: UInt32, keychain: KeychainKind, index: UInt32) throws -> AddressInfo
@@ -3373,6 +3375,8 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func calculateTotalFee(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> UInt64
 
+    func listPendingBroadcasts() throws -> [PendingBroadcastInfo]
+
     func listSpendableOutputs() throws -> [SpendableUtxo]
 
     func newAddress() throws -> Address
@@ -3386,6 +3390,8 @@ public protocol OnchainPaymentProtocol: AnyObject {
     func newAddressInfoForAccount(addressType: AddressType, accountIndex: UInt32) throws -> AddressInfo
 
     func newAddressInfoForType(addressType: AddressType) throws -> AddressInfo
+
+    func rebroadcastTransaction(txid: Txid) throws -> Txid
 
     func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws
 
@@ -3445,6 +3451,13 @@ open class OnchainPayment:
         }
 
         try! rustCall { uniffi_ldk_node_fn_free_onchainpayment(pointer, $0) }
+    }
+
+    open func abandonPendingBroadcast(txid: Txid) throws {
+        try rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_abandon_pending_broadcast(self.uniffiClonePointer(),
+                                                                               FfiConverterTypeTxid.lower(txid), $0)
+        }
     }
 
     open func accelerateByCpfp(txid: Txid, feeRate: FeeRate?, destinationAddress: Address?) throws -> Txid {
@@ -3531,6 +3544,12 @@ open class OnchainPayment:
         })
     }
 
+    open func listPendingBroadcasts() throws -> [PendingBroadcastInfo] {
+        return try FfiConverterSequenceTypePendingBroadcastInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts(self.uniffiClonePointer(), $0)
+        })
+    }
+
     open func listSpendableOutputs() throws -> [SpendableUtxo] {
         return try FfiConverterSequenceTypeSpendableUtxo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_list_spendable_outputs(self.uniffiClonePointer(), $0)
@@ -3576,6 +3595,13 @@ open class OnchainPayment:
         return try FfiConverterTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type(self.uniffiClonePointer(),
                                                                                FfiConverterTypeAddressType.lower(addressType), $0)
+        })
+    }
+
+    open func rebroadcastTransaction(txid: Txid) throws -> Txid {
+        return try FfiConverterTypeTxid.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_rebroadcast_transaction(self.uniffiClonePointer(),
+                                                                             FfiConverterTypeTxid.lower(txid), $0)
         })
     }
 
@@ -6955,6 +6981,67 @@ public func FfiConverterTypePeerDetails_lower(_ value: PeerDetails) -> RustBuffe
     return FfiConverterTypePeerDetails.lower(value)
 }
 
+public struct PendingBroadcastInfo {
+    public var txid: Txid
+    public var lineage: [Txid]
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(txid: Txid, lineage: [Txid]) {
+        self.txid = txid
+        self.lineage = lineage
+    }
+}
+
+extension PendingBroadcastInfo: Equatable, Hashable {
+    public static func == (lhs: PendingBroadcastInfo, rhs: PendingBroadcastInfo) -> Bool {
+        if lhs.txid != rhs.txid {
+            return false
+        }
+        if lhs.lineage != rhs.lineage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(txid)
+        hasher.combine(lineage)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePendingBroadcastInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PendingBroadcastInfo {
+        return
+            try PendingBroadcastInfo(
+                txid: FfiConverterTypeTxid.read(from: &buf),
+                lineage: FfiConverterSequenceTypeTxid.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: PendingBroadcastInfo, into buf: inout [UInt8]) {
+        FfiConverterTypeTxid.write(value.txid, into: &buf)
+        FfiConverterSequenceTypeTxid.write(value.lineage, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypePendingBroadcastInfo_lift(_ buf: RustBuffer) throws -> PendingBroadcastInfo {
+    return try FfiConverterTypePendingBroadcastInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypePendingBroadcastInfo_lower(_ value: PendingBroadcastInfo) -> RustBuffer {
+    return FfiConverterTypePendingBroadcastInfo.lower(value)
+}
+
 public struct ProbeHandle {
     public var paymentHash: PaymentHash
     public var paymentId: PaymentId
@@ -9178,141 +9265,78 @@ public func FfiConverterTypeNetwork_lower(_ value: Network) -> RustBuffer {
 extension Network: Equatable, Hashable {}
 
 public enum NodeError {
-    case AlreadyRunning(message: String)
-
-    case NotRunning(message: String)
-
-    case OnchainTxCreationFailed(message: String)
-
-    case ConnectionFailed(message: String)
-
-    case InvoiceCreationFailed(message: String)
-
-    case InvoiceRequestCreationFailed(message: String)
-
-    case OfferCreationFailed(message: String)
-
-    case RefundCreationFailed(message: String)
-
-    case PaymentSendingFailed(message: String)
-
-    case InvalidCustomTlvs(message: String)
-
-    case ProbeSendingFailed(message: String)
-
-    case RouteNotFound(message: String)
-
-    case ChannelCreationFailed(message: String)
-
-    case ChannelClosingFailed(message: String)
-
-    case ChannelSplicingFailed(message: String)
-
-    case ChannelConfigUpdateFailed(message: String)
-
-    case PersistenceFailed(message: String)
-
-    case FeerateEstimationUpdateFailed(message: String)
-
-    case FeerateEstimationUpdateTimeout(message: String)
-
-    case WalletOperationFailed(message: String)
-
-    case WalletOperationTimeout(message: String)
-
-    case OnchainTxSigningFailed(message: String)
-
-    case TxSyncFailed(message: String)
-
-    case TxSyncTimeout(message: String)
-
-    case GossipUpdateFailed(message: String)
-
-    case GossipUpdateTimeout(message: String)
-
-    case LiquidityRequestFailed(message: String)
-
-    case UriParameterParsingFailed(message: String)
-
-    case InvalidAddress(message: String)
-
-    case InvalidSocketAddress(message: String)
-
-    case InvalidPublicKey(message: String)
-
-    case InvalidSecretKey(message: String)
-
-    case InvalidOfferId(message: String)
-
-    case InvalidNodeId(message: String)
-
-    case InvalidPaymentId(message: String)
-
-    case InvalidPaymentHash(message: String)
-
-    case InvalidPaymentPreimage(message: String)
-
-    case InvalidPaymentSecret(message: String)
-
-    case InvalidAmount(message: String)
-
-    case InvalidInvoice(message: String)
-
-    case InvalidOffer(message: String)
-
-    case InvalidRefund(message: String)
-
-    case InvalidChannelId(message: String)
-
-    case InvalidNetwork(message: String)
-
-    case InvalidUri(message: String)
-
-    case InvalidQuantity(message: String)
-
-    case InvalidNodeAlias(message: String)
-
-    case InvalidDateTime(message: String)
-
-    case InvalidFeeRate(message: String)
-
-    case DuplicatePayment(message: String)
-
-    case UnsupportedCurrency(message: String)
-
-    case InsufficientFunds(message: String)
-
-    case LiquiditySourceUnavailable(message: String)
-
-    case LiquidityFeeTooHigh(message: String)
-
-    case InvalidBlindedPaths(message: String)
-
-    case AsyncPaymentServicesDisabled(message: String)
-
-    case CannotRbfFundingTransaction(message: String)
-
-    case TransactionNotFound(message: String)
-
-    case TransactionAlreadyConfirmed(message: String)
-
-    case NoSpendableOutputs(message: String)
-
-    case CoinSelectionFailed(message: String)
-
-    case InvalidMnemonic(message: String)
-
-    case BackgroundSyncNotEnabled(message: String)
-
-    case AddressTypeAlreadyMonitored(message: String)
-
-    case AddressTypeIsPrimary(message: String)
-
-    case AddressTypeNotMonitored(message: String)
-
-    case OnchainWalletAccountNotRegistered(message: String)
-
-    case InvalidSeedBytes(message: String)
+    case AlreadyRunning
+    case NotRunning
+    case OnchainTxCreationFailed
+    case ConnectionFailed
+    case InvoiceCreationFailed
+    case InvoiceRequestCreationFailed
+    case OfferCreationFailed
+    case RefundCreationFailed
+    case PaymentSendingFailed
+    case InvalidCustomTlvs
+    case ProbeSendingFailed
+    case RouteNotFound
+    case ChannelCreationFailed
+    case ChannelClosingFailed
+    case ChannelSplicingFailed
+    case ChannelConfigUpdateFailed
+    case PersistenceFailed
+    case FeerateEstimationUpdateFailed
+    case FeerateEstimationUpdateTimeout
+    case WalletOperationFailed
+    case WalletOperationTimeout
+    case OnchainTxSigningFailed
+    case TxSyncFailed
+    case TxSyncTimeout
+    case GossipUpdateFailed
+    case GossipUpdateTimeout
+    case LiquidityRequestFailed
+    case UriParameterParsingFailed
+    case InvalidAddress
+    case InvalidSocketAddress
+    case InvalidPublicKey
+    case InvalidSecretKey
+    case InvalidOfferId
+    case InvalidNodeId
+    case InvalidPaymentId
+    case InvalidPaymentHash
+    case InvalidPaymentPreimage
+    case InvalidPaymentSecret
+    case InvalidAmount
+    case InvalidInvoice
+    case InvalidOffer
+    case InvalidRefund
+    case InvalidChannelId
+    case InvalidNetwork
+    case InvalidUri
+    case InvalidQuantity
+    case InvalidNodeAlias
+    case InvalidDateTime
+    case InvalidFeeRate
+    case DuplicatePayment
+    case UnsupportedCurrency
+    case InsufficientFunds
+    case LiquiditySourceUnavailable
+    case LiquidityFeeTooHigh
+    case InvalidBlindedPaths
+    case AsyncPaymentServicesDisabled
+    case CannotRbfFundingTransaction
+    case TransactionNotFound
+    case TransactionAlreadyConfirmed
+    case NoSpendableOutputs
+    case CoinSelectionFailed
+    case InvalidMnemonic
+    case BackgroundSyncNotEnabled
+    case AddressTypeAlreadyMonitored
+    case AddressTypeIsPrimary
+    case AddressTypeNotMonitored
+    case OnchainWalletAccountNotRegistered
+    case InvalidSeedBytes
+    case OnchainTxBroadcastRejected(txid: Txid)
+    case OnchainTxBroadcastFailed(txid: Txid)
+    case OnchainTxBroadcastTimeout(txid: Txid)
+    case OnchainTxBroadcastNotDispatched(txid: Txid)
 }
 
 #if swift(>=5.8)
@@ -9324,420 +9348,311 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NodeError {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        case 1: return try .AlreadyRunning(
-                message: FfiConverterString.read(from: &buf)
+        case 1: return .AlreadyRunning
+        case 2: return .NotRunning
+        case 3: return .OnchainTxCreationFailed
+        case 4: return .ConnectionFailed
+        case 5: return .InvoiceCreationFailed
+        case 6: return .InvoiceRequestCreationFailed
+        case 7: return .OfferCreationFailed
+        case 8: return .RefundCreationFailed
+        case 9: return .PaymentSendingFailed
+        case 10: return .InvalidCustomTlvs
+        case 11: return .ProbeSendingFailed
+        case 12: return .RouteNotFound
+        case 13: return .ChannelCreationFailed
+        case 14: return .ChannelClosingFailed
+        case 15: return .ChannelSplicingFailed
+        case 16: return .ChannelConfigUpdateFailed
+        case 17: return .PersistenceFailed
+        case 18: return .FeerateEstimationUpdateFailed
+        case 19: return .FeerateEstimationUpdateTimeout
+        case 20: return .WalletOperationFailed
+        case 21: return .WalletOperationTimeout
+        case 22: return .OnchainTxSigningFailed
+        case 23: return .TxSyncFailed
+        case 24: return .TxSyncTimeout
+        case 25: return .GossipUpdateFailed
+        case 26: return .GossipUpdateTimeout
+        case 27: return .LiquidityRequestFailed
+        case 28: return .UriParameterParsingFailed
+        case 29: return .InvalidAddress
+        case 30: return .InvalidSocketAddress
+        case 31: return .InvalidPublicKey
+        case 32: return .InvalidSecretKey
+        case 33: return .InvalidOfferId
+        case 34: return .InvalidNodeId
+        case 35: return .InvalidPaymentId
+        case 36: return .InvalidPaymentHash
+        case 37: return .InvalidPaymentPreimage
+        case 38: return .InvalidPaymentSecret
+        case 39: return .InvalidAmount
+        case 40: return .InvalidInvoice
+        case 41: return .InvalidOffer
+        case 42: return .InvalidRefund
+        case 43: return .InvalidChannelId
+        case 44: return .InvalidNetwork
+        case 45: return .InvalidUri
+        case 46: return .InvalidQuantity
+        case 47: return .InvalidNodeAlias
+        case 48: return .InvalidDateTime
+        case 49: return .InvalidFeeRate
+        case 50: return .DuplicatePayment
+        case 51: return .UnsupportedCurrency
+        case 52: return .InsufficientFunds
+        case 53: return .LiquiditySourceUnavailable
+        case 54: return .LiquidityFeeTooHigh
+        case 55: return .InvalidBlindedPaths
+        case 56: return .AsyncPaymentServicesDisabled
+        case 57: return .CannotRbfFundingTransaction
+        case 58: return .TransactionNotFound
+        case 59: return .TransactionAlreadyConfirmed
+        case 60: return .NoSpendableOutputs
+        case 61: return .CoinSelectionFailed
+        case 62: return .InvalidMnemonic
+        case 63: return .BackgroundSyncNotEnabled
+        case 64: return .AddressTypeAlreadyMonitored
+        case 65: return .AddressTypeIsPrimary
+        case 66: return .AddressTypeNotMonitored
+        case 67: return .OnchainWalletAccountNotRegistered
+        case 68: return .InvalidSeedBytes
+        case 69: return try .OnchainTxBroadcastRejected(
+                txid: FfiConverterTypeTxid.read(from: &buf)
+            )
+        case 70: return try .OnchainTxBroadcastFailed(
+                txid: FfiConverterTypeTxid.read(from: &buf)
+            )
+        case 71: return try .OnchainTxBroadcastTimeout(
+                txid: FfiConverterTypeTxid.read(from: &buf)
+            )
+        case 72: return try .OnchainTxBroadcastNotDispatched(
+                txid: FfiConverterTypeTxid.read(from: &buf)
             )
-
-        case 2: return try .NotRunning(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 3: return try .OnchainTxCreationFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 4: return try .ConnectionFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 5: return try .InvoiceCreationFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 6: return try .InvoiceRequestCreationFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 7: return try .OfferCreationFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 8: return try .RefundCreationFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 9: return try .PaymentSendingFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 10: return try .InvalidCustomTlvs(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 11: return try .ProbeSendingFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 12: return try .RouteNotFound(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 13: return try .ChannelCreationFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 14: return try .ChannelClosingFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 15: return try .ChannelSplicingFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 16: return try .ChannelConfigUpdateFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 17: return try .PersistenceFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 18: return try .FeerateEstimationUpdateFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 19: return try .FeerateEstimationUpdateTimeout(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 20: return try .WalletOperationFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 21: return try .WalletOperationTimeout(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 22: return try .OnchainTxSigningFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 23: return try .TxSyncFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 24: return try .TxSyncTimeout(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 25: return try .GossipUpdateFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 26: return try .GossipUpdateTimeout(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 27: return try .LiquidityRequestFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 28: return try .UriParameterParsingFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 29: return try .InvalidAddress(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 30: return try .InvalidSocketAddress(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 31: return try .InvalidPublicKey(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 32: return try .InvalidSecretKey(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 33: return try .InvalidOfferId(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 34: return try .InvalidNodeId(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 35: return try .InvalidPaymentId(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 36: return try .InvalidPaymentHash(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 37: return try .InvalidPaymentPreimage(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 38: return try .InvalidPaymentSecret(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 39: return try .InvalidAmount(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 40: return try .InvalidInvoice(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 41: return try .InvalidOffer(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 42: return try .InvalidRefund(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 43: return try .InvalidChannelId(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 44: return try .InvalidNetwork(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 45: return try .InvalidUri(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 46: return try .InvalidQuantity(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 47: return try .InvalidNodeAlias(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 48: return try .InvalidDateTime(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 49: return try .InvalidFeeRate(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 50: return try .DuplicatePayment(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 51: return try .UnsupportedCurrency(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 52: return try .InsufficientFunds(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 53: return try .LiquiditySourceUnavailable(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 54: return try .LiquidityFeeTooHigh(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 55: return try .InvalidBlindedPaths(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 56: return try .AsyncPaymentServicesDisabled(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 57: return try .CannotRbfFundingTransaction(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 58: return try .TransactionNotFound(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 59: return try .TransactionAlreadyConfirmed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 60: return try .NoSpendableOutputs(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 61: return try .CoinSelectionFailed(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 62: return try .InvalidMnemonic(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 63: return try .BackgroundSyncNotEnabled(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 64: return try .AddressTypeAlreadyMonitored(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 65: return try .AddressTypeIsPrimary(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 66: return try .AddressTypeNotMonitored(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 67: return try .OnchainWalletAccountNotRegistered(
-                message: FfiConverterString.read(from: &buf)
-            )
-
-        case 68: return try .InvalidSeedBytes(
-                message: FfiConverterString.read(from: &buf)
-            )
-
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: NodeError, into buf: inout [UInt8]) {
         switch value {
-        case .AlreadyRunning(_ /* message is ignored*/ ):
+        case .AlreadyRunning:
             writeInt(&buf, Int32(1))
-        case .NotRunning(_ /* message is ignored*/ ):
+
+        case .NotRunning:
             writeInt(&buf, Int32(2))
-        case .OnchainTxCreationFailed(_ /* message is ignored*/ ):
+
+        case .OnchainTxCreationFailed:
             writeInt(&buf, Int32(3))
-        case .ConnectionFailed(_ /* message is ignored*/ ):
+
+        case .ConnectionFailed:
             writeInt(&buf, Int32(4))
-        case .InvoiceCreationFailed(_ /* message is ignored*/ ):
+
+        case .InvoiceCreationFailed:
             writeInt(&buf, Int32(5))
-        case .InvoiceRequestCreationFailed(_ /* message is ignored*/ ):
+
+        case .InvoiceRequestCreationFailed:
             writeInt(&buf, Int32(6))
-        case .OfferCreationFailed(_ /* message is ignored*/ ):
+
+        case .OfferCreationFailed:
             writeInt(&buf, Int32(7))
-        case .RefundCreationFailed(_ /* message is ignored*/ ):
+
+        case .RefundCreationFailed:
             writeInt(&buf, Int32(8))
-        case .PaymentSendingFailed(_ /* message is ignored*/ ):
+
+        case .PaymentSendingFailed:
             writeInt(&buf, Int32(9))
-        case .InvalidCustomTlvs(_ /* message is ignored*/ ):
+
+        case .InvalidCustomTlvs:
             writeInt(&buf, Int32(10))
-        case .ProbeSendingFailed(_ /* message is ignored*/ ):
+
+        case .ProbeSendingFailed:
             writeInt(&buf, Int32(11))
-        case .RouteNotFound(_ /* message is ignored*/ ):
+
+        case .RouteNotFound:
             writeInt(&buf, Int32(12))
-        case .ChannelCreationFailed(_ /* message is ignored*/ ):
+
+        case .ChannelCreationFailed:
             writeInt(&buf, Int32(13))
-        case .ChannelClosingFailed(_ /* message is ignored*/ ):
+
+        case .ChannelClosingFailed:
             writeInt(&buf, Int32(14))
-        case .ChannelSplicingFailed(_ /* message is ignored*/ ):
+
+        case .ChannelSplicingFailed:
             writeInt(&buf, Int32(15))
-        case .ChannelConfigUpdateFailed(_ /* message is ignored*/ ):
+
+        case .ChannelConfigUpdateFailed:
             writeInt(&buf, Int32(16))
-        case .PersistenceFailed(_ /* message is ignored*/ ):
+
+        case .PersistenceFailed:
             writeInt(&buf, Int32(17))
-        case .FeerateEstimationUpdateFailed(_ /* message is ignored*/ ):
+
+        case .FeerateEstimationUpdateFailed:
             writeInt(&buf, Int32(18))
-        case .FeerateEstimationUpdateTimeout(_ /* message is ignored*/ ):
+
+        case .FeerateEstimationUpdateTimeout:
             writeInt(&buf, Int32(19))
-        case .WalletOperationFailed(_ /* message is ignored*/ ):
+
+        case .WalletOperationFailed:
             writeInt(&buf, Int32(20))
-        case .WalletOperationTimeout(_ /* message is ignored*/ ):
+
+        case .WalletOperationTimeout:
             writeInt(&buf, Int32(21))
-        case .OnchainTxSigningFailed(_ /* message is ignored*/ ):
+
+        case .OnchainTxSigningFailed:
             writeInt(&buf, Int32(22))
-        case .TxSyncFailed(_ /* message is ignored*/ ):
+
+        case .TxSyncFailed:
             writeInt(&buf, Int32(23))
-        case .TxSyncTimeout(_ /* message is ignored*/ ):
+
+        case .TxSyncTimeout:
             writeInt(&buf, Int32(24))
-        case .GossipUpdateFailed(_ /* message is ignored*/ ):
+
+        case .GossipUpdateFailed:
             writeInt(&buf, Int32(25))
-        case .GossipUpdateTimeout(_ /* message is ignored*/ ):
+
+        case .GossipUpdateTimeout:
             writeInt(&buf, Int32(26))
-        case .LiquidityRequestFailed(_ /* message is ignored*/ ):
+
+        case .LiquidityRequestFailed:
             writeInt(&buf, Int32(27))
-        case .UriParameterParsingFailed(_ /* message is ignored*/ ):
+
+        case .UriParameterParsingFailed:
             writeInt(&buf, Int32(28))
-        case .InvalidAddress(_ /* message is ignored*/ ):
+
+        case .InvalidAddress:
             writeInt(&buf, Int32(29))
-        case .InvalidSocketAddress(_ /* message is ignored*/ ):
+
+        case .InvalidSocketAddress:
             writeInt(&buf, Int32(30))
-        case .InvalidPublicKey(_ /* message is ignored*/ ):
+
+        case .InvalidPublicKey:
             writeInt(&buf, Int32(31))
-        case .InvalidSecretKey(_ /* message is ignored*/ ):
+
+        case .InvalidSecretKey:
             writeInt(&buf, Int32(32))
-        case .InvalidOfferId(_ /* message is ignored*/ ):
+
+        case .InvalidOfferId:
             writeInt(&buf, Int32(33))
-        case .InvalidNodeId(_ /* message is ignored*/ ):
+
+        case .InvalidNodeId:
             writeInt(&buf, Int32(34))
-        case .InvalidPaymentId(_ /* message is ignored*/ ):
+
+        case .InvalidPaymentId:
             writeInt(&buf, Int32(35))
-        case .InvalidPaymentHash(_ /* message is ignored*/ ):
+
+        case .InvalidPaymentHash:
             writeInt(&buf, Int32(36))
-        case .InvalidPaymentPreimage(_ /* message is ignored*/ ):
+
+        case .InvalidPaymentPreimage:
             writeInt(&buf, Int32(37))
-        case .InvalidPaymentSecret(_ /* message is ignored*/ ):
+
+        case .InvalidPaymentSecret:
             writeInt(&buf, Int32(38))
-        case .InvalidAmount(_ /* message is ignored*/ ):
+
+        case .InvalidAmount:
             writeInt(&buf, Int32(39))
-        case .InvalidInvoice(_ /* message is ignored*/ ):
+
+        case .InvalidInvoice:
             writeInt(&buf, Int32(40))
-        case .InvalidOffer(_ /* message is ignored*/ ):
+
+        case .InvalidOffer:
             writeInt(&buf, Int32(41))
-        case .InvalidRefund(_ /* message is ignored*/ ):
+
+        case .InvalidRefund:
             writeInt(&buf, Int32(42))
-        case .InvalidChannelId(_ /* message is ignored*/ ):
+
+        case .InvalidChannelId:
             writeInt(&buf, Int32(43))
-        case .InvalidNetwork(_ /* message is ignored*/ ):
+
+        case .InvalidNetwork:
             writeInt(&buf, Int32(44))
-        case .InvalidUri(_ /* message is ignored*/ ):
+
+        case .InvalidUri:
             writeInt(&buf, Int32(45))
-        case .InvalidQuantity(_ /* message is ignored*/ ):
+
+        case .InvalidQuantity:
             writeInt(&buf, Int32(46))
-        case .InvalidNodeAlias(_ /* message is ignored*/ ):
+
+        case .InvalidNodeAlias:
             writeInt(&buf, Int32(47))
-        case .InvalidDateTime(_ /* message is ignored*/ ):
+
+        case .InvalidDateTime:
             writeInt(&buf, Int32(48))
-        case .InvalidFeeRate(_ /* message is ignored*/ ):
+
+        case .InvalidFeeRate:
             writeInt(&buf, Int32(49))
-        case .DuplicatePayment(_ /* message is ignored*/ ):
+
+        case .DuplicatePayment:
             writeInt(&buf, Int32(50))
-        case .UnsupportedCurrency(_ /* message is ignored*/ ):
+
+        case .UnsupportedCurrency:
             writeInt(&buf, Int32(51))
-        case .InsufficientFunds(_ /* message is ignored*/ ):
+
+        case .InsufficientFunds:
             writeInt(&buf, Int32(52))
-        case .LiquiditySourceUnavailable(_ /* message is ignored*/ ):
+
+        case .LiquiditySourceUnavailable:
             writeInt(&buf, Int32(53))
-        case .LiquidityFeeTooHigh(_ /* message is ignored*/ ):
+
+        case .LiquidityFeeTooHigh:
             writeInt(&buf, Int32(54))
-        case .InvalidBlindedPaths(_ /* message is ignored*/ ):
+
+        case .InvalidBlindedPaths:
             writeInt(&buf, Int32(55))
-        case .AsyncPaymentServicesDisabled(_ /* message is ignored*/ ):
+
+        case .AsyncPaymentServicesDisabled:
             writeInt(&buf, Int32(56))
-        case .CannotRbfFundingTransaction(_ /* message is ignored*/ ):
+
+        case .CannotRbfFundingTransaction:
             writeInt(&buf, Int32(57))
-        case .TransactionNotFound(_ /* message is ignored*/ ):
+
+        case .TransactionNotFound:
             writeInt(&buf, Int32(58))
-        case .TransactionAlreadyConfirmed(_ /* message is ignored*/ ):
+
+        case .TransactionAlreadyConfirmed:
             writeInt(&buf, Int32(59))
-        case .NoSpendableOutputs(_ /* message is ignored*/ ):
+
+        case .NoSpendableOutputs:
             writeInt(&buf, Int32(60))
-        case .CoinSelectionFailed(_ /* message is ignored*/ ):
+
+        case .CoinSelectionFailed:
             writeInt(&buf, Int32(61))
-        case .InvalidMnemonic(_ /* message is ignored*/ ):
+
+        case .InvalidMnemonic:
             writeInt(&buf, Int32(62))
-        case .BackgroundSyncNotEnabled(_ /* message is ignored*/ ):
+
+        case .BackgroundSyncNotEnabled:
             writeInt(&buf, Int32(63))
-        case .AddressTypeAlreadyMonitored(_ /* message is ignored*/ ):
+
+        case .AddressTypeAlreadyMonitored:
             writeInt(&buf, Int32(64))
-        case .AddressTypeIsPrimary(_ /* message is ignored*/ ):
+
+        case .AddressTypeIsPrimary:
             writeInt(&buf, Int32(65))
-        case .AddressTypeNotMonitored(_ /* message is ignored*/ ):
+
+        case .AddressTypeNotMonitored:
             writeInt(&buf, Int32(66))
-        case .OnchainWalletAccountNotRegistered(_ /* message is ignored*/ ):
+
+        case .OnchainWalletAccountNotRegistered:
             writeInt(&buf, Int32(67))
-        case .InvalidSeedBytes(_ /* message is ignored*/ ):
+
+        case .InvalidSeedBytes:
             writeInt(&buf, Int32(68))
+
+        case let .OnchainTxBroadcastRejected(txid):
+            writeInt(&buf, Int32(69))
+            FfiConverterTypeTxid.write(txid, into: &buf)
+
+        case let .OnchainTxBroadcastFailed(txid):
+            writeInt(&buf, Int32(70))
+            FfiConverterTypeTxid.write(txid, into: &buf)
+
+        case let .OnchainTxBroadcastTimeout(txid):
+            writeInt(&buf, Int32(71))
+            FfiConverterTypeTxid.write(txid, into: &buf)
+
+        case let .OnchainTxBroadcastNotDispatched(txid):
+            writeInt(&buf, Int32(72))
+            FfiConverterTypeTxid.write(txid, into: &buf)
         }
     }
 }
@@ -11794,6 +11709,31 @@ private struct FfiConverterSequenceTypePeerDetails: FfiConverterRustBuffer {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterSequenceTypePendingBroadcastInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [PendingBroadcastInfo]
+
+    static func write(_ value: [PendingBroadcastInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePendingBroadcastInfo.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PendingBroadcastInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PendingBroadcastInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypePendingBroadcastInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceTypeProbeHandle: FfiConverterRustBuffer {
     typealias SwiftType = [ProbeHandle]
 
@@ -13563,6 +13503,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_offer_supports_chain() != 2135 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_onchainpayment_abandon_pending_broadcast() != 686 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13590,6 +13533,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 40346 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13609,6 +13555,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_rebroadcast_transaction() != 36642 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189 {

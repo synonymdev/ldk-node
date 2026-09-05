@@ -155,7 +155,7 @@ use liquidity::{LSPS1Liquidity, LiquiditySource};
 use logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use payment::asynchronous::om_mailbox::OnionMessageMailbox;
 use payment::asynchronous::static_invoice_store::StaticInvoiceStore;
-pub use payment::{AddressInfo, KeychainKind};
+pub use payment::{AddressInfo, KeychainKind, PendingBroadcastInfo};
 use payment::{
 	Bolt11Payment, Bolt12Payment, OnchainPayment, PaymentDetails, SpontaneousPayment,
 	UnifiedQrPayment,
@@ -356,6 +356,7 @@ impl Node {
 
 		// Set event queue for onchain event emission
 		self.chain_source.set_event_queue(Arc::clone(&self.event_queue));
+		self.tx_broadcaster.resume_explicit_broadcasts();
 
 		self.spawn_chain_sync_task();
 
@@ -827,6 +828,7 @@ impl Node {
 		self.background_processor_generation.fetch_add(1, Ordering::AcqRel);
 
 		log_info!(self.logger, "Shutting down LDK Node with node ID {}...", self.node_id());
+		self.tx_broadcaster.pause_explicit_broadcasts();
 
 		// Prevent all task groups from accepting work that could outlive this shutdown generation.
 		self.runtime.close_task_admission();
@@ -851,6 +853,7 @@ impl Node {
 
 		// Cancel cancellable background tasks
 		self.runtime.abort_cancellable_background_tasks();
+		self.runtime.block_on(self.tx_broadcaster.drain_explicit_broadcasts());
 
 		// Disconnect all peers.
 		self.peer_manager.disconnect_all_peers();
@@ -1112,6 +1115,8 @@ impl Node {
 	pub fn onchain_payment(&self) -> OnchainPayment {
 		OnchainPayment::new(
 			Arc::clone(&self.wallet),
+			Arc::clone(&self.tx_broadcaster),
+			self.runtime.control(),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.config),
 			Arc::clone(&self.is_running),
@@ -1124,6 +1129,8 @@ impl Node {
 	pub fn onchain_payment(&self) -> Arc<OnchainPayment> {
 		Arc::new(OnchainPayment::new(
 			Arc::clone(&self.wallet),
+			Arc::clone(&self.tx_broadcaster),
+			self.runtime.control(),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.config),
 			Arc::clone(&self.is_running),
@@ -2471,11 +2478,14 @@ mod tests {
 	use std::future::Future;
 	use std::pin::Pin;
 	use std::str::FromStr;
-	use std::sync::atomic::{AtomicBool, Ordering};
+	use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 	use std::sync::Arc;
 	use std::time::Duration;
 
-	use bitcoin::Network;
+	use bitcoin::absolute::LockTime;
+	use bitcoin::hashes::Hash;
+	use bitcoin::transaction::Version;
+	use bitcoin::{Network, Transaction, Txid};
 	use lightning::io;
 	use lightning::util::persist::{KVStore, KVStoreSync};
 
@@ -2487,15 +2497,30 @@ mod tests {
 	struct FailNextWriteStore {
 		inner: InMemoryStore,
 		fail_next_write: AtomicBool,
+		broadcast_intent_removes: AtomicUsize,
 	}
 
 	impl FailNextWriteStore {
 		fn new() -> Self {
-			Self { inner: InMemoryStore::new(), fail_next_write: AtomicBool::new(false) }
+			Self {
+				inner: InMemoryStore::new(),
+				fail_next_write: AtomicBool::new(false),
+				broadcast_intent_removes: AtomicUsize::new(0),
+			}
 		}
 
 		fn fail_next_write(&self) {
 			self.fail_next_write.store(true, Ordering::Relaxed);
+		}
+
+		fn broadcast_intent_remove_count(&self) -> usize {
+			self.broadcast_intent_removes.load(Ordering::Relaxed)
+		}
+
+		fn count_broadcast_intent_remove(&self, primary_namespace: &str) {
+			if primary_namespace == crate::io::ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE {
+				self.broadcast_intent_removes.fetch_add(1, Ordering::Relaxed);
+			}
 		}
 	}
 
@@ -2520,6 +2545,7 @@ mod tests {
 		fn remove(
 			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
 		) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'static + Send>> {
+			self.count_broadcast_intent_remove(primary_namespace);
 			KVStore::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
 		}
 
@@ -2549,6 +2575,7 @@ mod tests {
 		fn remove(
 			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
 		) -> io::Result<()> {
+			self.count_broadcast_intent_remove(primary_namespace);
 			KVStoreSync::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
 		}
 
@@ -2574,6 +2601,167 @@ mod tests {
 			node_id,
 			address: SocketAddress::from_str(&format!("127.0.0.1:{port}")).unwrap(),
 		}
+	}
+
+	fn test_wallet_node(store: Arc<DynStore>) -> Node {
+		let config = Config { network: Network::Regtest, ..Config::default() };
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes([42u8; 64]);
+		builder.set_log_facade_logger();
+		builder.build_with_store(store).unwrap()
+	}
+
+	fn test_broadcast_transaction(lock_time: u32) -> Transaction {
+		Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::from_consensus(lock_time),
+			input: vec![],
+			output: vec![],
+		}
+	}
+
+	#[test]
+	fn pending_broadcast_survives_restart_with_exact_transaction_bytes() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(42);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(Arc::clone(&store));
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx.clone()));
+		drop(node);
+
+		let restarted_node = test_wallet_node(store);
+		assert_eq!(restarted_node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(restarted_node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx));
+	}
+
+	#[test]
+	fn backend_mempool_eviction_preserves_unresolved_broadcast() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(43);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+
+		node.wallet.apply_mempool_txs(Vec::new(), vec![(txid, 1)]).unwrap();
+
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx));
+	}
+
+	#[test]
+	fn backend_mempool_observation_resolves_broadcast_intent() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(44);
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+
+		node.wallet.apply_mempool_txs(vec![(tx, 1)], Vec::new()).unwrap();
+
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+	}
+
+	#[test]
+	fn backend_wallet_sync_observation_resolves_broadcast_intent() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(45);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		let mut update = bdk_wallet::Update::default();
+		update.tx_update.txs.push(Arc::new(tx));
+		update.tx_update.seen_ats.insert((txid, 1));
+
+		node.wallet.apply_update(update).unwrap();
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+		node.wallet.update_payment_store_for_all_transactions().unwrap();
+
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+	}
+
+	#[test]
+	fn electrum_cached_transaction_without_backend_evidence_preserves_broadcast_intent() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(451);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		let mut update = bdk_wallet::Update::default();
+		update.tx_update.txs.push(Arc::new(tx.clone()));
+		update.tx_update.evicted_ats.insert((txid, 1));
+
+		node.wallet.apply_update(update).unwrap();
+		node.wallet.update_payment_store_for_all_transactions().unwrap();
+
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx));
+	}
+
+	#[test]
+	fn reconciliation_removes_only_observed_pending_intents() {
+		let concrete_store = Arc::new(FailNextWriteStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let tx = test_broadcast_transaction(452);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		let mut update = bdk_wallet::Update::default();
+		update.tx_update.txs.push(Arc::new(tx));
+		update.tx_update.seen_ats.insert((txid, 1));
+		for byte in 1..=16 {
+			update.tx_update.seen_ats.insert((Txid::from_byte_array([byte; 32]), 1));
+		}
+
+		node.wallet.apply_update(update).unwrap();
+		node.wallet.update_payment_store_for_all_transactions().unwrap();
+
+		assert_eq!(concrete_store.broadcast_intent_remove_count(), 1);
+		let mut unrelated_update = bdk_wallet::Update::default();
+		for byte in 17..=32 {
+			unrelated_update.tx_update.seen_ats.insert((Txid::from_byte_array([byte; 32]), 2));
+		}
+		node.wallet.apply_update(unrelated_update).unwrap();
+		node.wallet.update_payment_store_for_all_transactions().unwrap();
+		assert_eq!(concrete_store.broadcast_intent_remove_count(), 1);
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn exact_rebroadcast_retains_unknown_retry_and_clears_on_acceptance() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let tx = test_broadcast_transaction(46);
+		let txid = tx.compute_txid();
+		let node = test_wallet_node(store);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		*node.is_running.write().unwrap() = true;
+
+		let payment = node.onchain_payment();
+		let first_call =
+			tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let first_request = receivers.recv().await.unwrap();
+		assert_eq!(first_request.package, vec![tx.clone()]);
+		first_request
+			.result_sender
+			.unwrap()
+			.send(Err(crate::tx_broadcaster::TxBroadcastError::NotDispatched))
+			.unwrap();
+		drop(receivers);
+		assert_eq!(first_call.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+
+		let payment = node.onchain_payment();
+		let second_call =
+			tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let second_request = receivers.recv().await.unwrap();
+		assert_eq!(second_request.package, vec![tx]);
+		second_request.result_sender.unwrap().send(Ok(())).unwrap();
+		drop(receivers);
+		assert_eq!(second_call.await.unwrap(), Ok(txid));
+		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());
+		*node.is_running.write().unwrap() = false;
 	}
 
 	#[test]

@@ -26,6 +26,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
 use bdk_chain::{ChainPosition, ConfirmationBlockTime};
@@ -623,6 +624,57 @@ where
 			})?;
 		}
 		Ok(())
+	}
+
+	/// Mark a locally prepared transaction as no longer intended for broadcast.
+	///
+	/// The transaction is evicted from the active graph and its inputs are released for a new send.
+	pub fn abandon_tx(&mut self, tx: &Transaction) -> Result<(), Error> {
+		self.abandon_txs(std::slice::from_ref(tx))
+	}
+
+	/// Mark a transaction and all of its locally prepared replacements as abandoned.
+	///
+	/// Every transaction is evicted and cancelled before each wallet is persisted, so conflicting
+	/// replacements cannot leave the same input reserved after explicit reconciliation.
+	pub fn abandon_txs(&mut self, txs: &[Transaction]) -> Result<(), Error> {
+		let txids = txs.iter().map(Transaction::compute_txid).collect::<Vec<_>>();
+		let last_seen = self.next_transaction_update_timestamp(&txids)?;
+		let evicted_txs = txs.iter().map(|tx| (tx.compute_txid(), last_seen)).collect::<Vec<_>>();
+		for (key, wallet) in self.wallets.iter_mut() {
+			wallet.apply_evicted_txs(evicted_txs.iter().copied());
+			for tx in txs {
+				wallet.cancel_tx(tx);
+			}
+			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
+			wallet.persist(persister).map_err(|e| {
+				log::error!("Failed to persist wallet {:?}: {}", key, e);
+				Error::PersistenceFailed
+			})?;
+		}
+		Ok(())
+	}
+
+	fn next_transaction_update_timestamp(&self, txids: &[Txid]) -> Result<u64, Error> {
+		let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+		let tracked_txids = txids.iter().copied().collect::<HashSet<_>>();
+		let latest_seen = self
+			.unconfirmed_txids_with_last_seen()
+			.into_iter()
+			.filter(|(txid, _)| tracked_txids.contains(txid))
+			.map(|(_, last_seen)| last_seen)
+			.max()
+			.unwrap_or(0);
+		let latest_evicted = self
+			.wallets
+			.values()
+			.flat_map(|wallet| {
+				txids.iter().filter_map(|txid| wallet.tx_graph().get_last_evicted(*txid))
+			})
+			.max()
+			.unwrap_or(0);
+
+		now.max(latest_seen).max(latest_evicted).checked_add(1).ok_or(Error::WalletOperationFailed)
 	}
 
 	/// Cancel a dry-run transaction on the primary wallet without persisting.
@@ -1837,6 +1889,152 @@ mod tests {
 
 	fn recipient_script() -> ScriptBuf {
 		ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_byte_array([0xab; 20]))
+	}
+
+	#[test]
+	fn signed_transaction_is_not_recorded_until_observed_on_chain() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		aggregate.persist_all().unwrap();
+
+		let txid = tx.compute_txid();
+		assert!(aggregate
+			.wallets()
+			.values()
+			.flat_map(|wallet| wallet.transactions())
+			.all(|wallet_tx| wallet_tx.tx_node.txid != txid));
+	}
+
+	#[test]
+	fn pending_broadcast_is_recoverable_until_abandoned() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let txid = tx.compute_txid();
+
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+		assert_eq!(aggregate.find_tx(txid), Some(tx.clone()));
+		assert!(aggregate.unconfirmed_txids().contains(&txid));
+
+		aggregate.abandon_tx(&tx).unwrap();
+		assert_eq!(aggregate.find_tx(txid), None);
+		assert!(!aggregate.unconfirmed_txids().contains(&txid));
+		assert!(aggregate
+			.list_unspent()
+			.iter()
+			.any(|output| output.outpoint == tx.input[0].previous_output));
+	}
+
+	#[test]
+	fn abandonment_is_newer_than_the_latest_transaction_observation() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let txid = tx.compute_txid();
+		let latest_observation =
+			SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().saturating_add(60);
+
+		aggregate.apply_mempool_txs(vec![(tx.clone(), latest_observation)], Vec::new()).unwrap();
+		aggregate.abandon_tx(&tx).unwrap();
+
+		let latest_eviction = aggregate
+			.wallets()
+			.values()
+			.filter_map(|wallet| wallet.tx_graph().get_last_evicted(txid))
+			.max()
+			.unwrap();
+		assert_eq!(latest_eviction, latest_observation + 1);
+		assert_eq!(aggregate.find_tx(txid), None);
+	}
+
+	#[test]
+	fn abandonment_fails_closed_when_timestamp_cannot_advance() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let txid = tx.compute_txid();
+
+		aggregate.apply_mempool_txs(vec![(tx.clone(), u64::MAX)], Vec::new()).unwrap();
+
+		assert_eq!(aggregate.abandon_tx(&tx), Err(Error::WalletOperationFailed));
+		assert_eq!(aggregate.find_tx(txid), Some(tx));
+	}
+
+	#[test]
+	fn pending_broadcast_reapplication_must_be_newer_than_an_equal_eviction() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let txid = tx.compute_txid();
+		let spent_outpoint = tx.input[0].previous_output;
+
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 7)], Vec::new()).unwrap();
+		aggregate.apply_mempool_txs(Vec::new(), vec![(txid, 7)]).unwrap();
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 7)], Vec::new()).unwrap();
+
+		assert_eq!(aggregate.find_tx(txid), None);
+		assert!(aggregate.list_unspent().iter().any(|output| output.outpoint == spent_outpoint));
+
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 8)], Vec::new()).unwrap();
+
+		assert_eq!(aggregate.find_tx(txid), Some(tx));
+		assert!(!aggregate.list_unspent().iter().any(|output| output.outpoint == spent_outpoint));
+	}
+
+	#[test]
+	fn pending_broadcast_survives_wallet_reload_for_exact_rebroadcast() {
+		let mut persister = MemoryPersister::default();
+		let mut wallet = create_empty_wallet(&mut persister);
+		fund_wallet(&mut wallet, Amount::from_sat(100_000), 0x01);
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let tx = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let txid = tx.compute_txid();
+		aggregate.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+
+		let mut reload_persister = aggregate.persisters().get(&0).unwrap().clone();
+		drop(aggregate);
+		let reloaded_wallet = load_empty_wallet(&mut reload_persister);
+		let reloaded = AggregateWallet::new(reloaded_wallet, reload_persister, 0u8, vec![]);
+
+		assert_eq!(reloaded.find_tx(txid), Some(tx));
+		assert!(reloaded.unconfirmed_txids().contains(&txid));
 	}
 
 	#[test]

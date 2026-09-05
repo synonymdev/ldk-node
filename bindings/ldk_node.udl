@@ -387,6 +387,12 @@ interface OnchainPayment {
     [Throws=NodeError]
     Txid send_all_to_address([ByRef]Address address, boolean retain_reserve, FeeRate? fee_rate);
     [Throws=NodeError]
+    Txid rebroadcast_transaction([ByRef]Txid txid);
+    [Throws=NodeError]
+    sequence<PendingBroadcastInfo> list_pending_broadcasts();
+    [Throws=NodeError]
+    void abandon_pending_broadcast([ByRef]Txid txid);
+    [Throws=NodeError]
     Txid bump_fee_by_rbf([ByRef]Txid txid, FeeRate fee_rate);
     [Throws=NodeError]
     Txid accelerate_by_cpfp([ByRef]Txid txid, FeeRate? fee_rate, Address? destination_address);
@@ -403,6 +409,11 @@ enum CoinSelectionAlgorithm {
 	"LargestFirst",
 	"OldestFirst",
 	"SingleRandomDraw",
+};
+
+dictionary PendingBroadcastInfo {
+    Txid txid;
+    sequence<Txid> lineage;
 };
 
 dictionary SpendableUtxo {
@@ -435,75 +446,79 @@ interface LSPS1Liquidity {
 };
 
 [Error]
-enum NodeError {
-	"AlreadyRunning",
-	"NotRunning",
-	"OnchainTxCreationFailed",
-	"ConnectionFailed",
-	"InvoiceCreationFailed",
-	"InvoiceRequestCreationFailed",
-	"OfferCreationFailed",
-	"RefundCreationFailed",
-	"PaymentSendingFailed",
-	"InvalidCustomTlvs",
-	"ProbeSendingFailed",
-	"RouteNotFound",
-	"ChannelCreationFailed",
-	"ChannelClosingFailed",
-	"ChannelSplicingFailed",
-	"ChannelConfigUpdateFailed",
-	"PersistenceFailed",
-	"FeerateEstimationUpdateFailed",
-	"FeerateEstimationUpdateTimeout",
-	"WalletOperationFailed",
-	"WalletOperationTimeout",
-	"OnchainTxSigningFailed",
-	"TxSyncFailed",
-	"TxSyncTimeout",
-	"GossipUpdateFailed",
-	"GossipUpdateTimeout",
-	"LiquidityRequestFailed",
-	"UriParameterParsingFailed",
-	"InvalidAddress",
-	"InvalidSocketAddress",
-	"InvalidPublicKey",
-	"InvalidSecretKey",
-	"InvalidOfferId",
-	"InvalidNodeId",
-	"InvalidPaymentId",
-	"InvalidPaymentHash",
-	"InvalidPaymentPreimage",
-	"InvalidPaymentSecret",
-	"InvalidAmount",
-	"InvalidInvoice",
-	"InvalidOffer",
-	"InvalidRefund",
-	"InvalidChannelId",
-	"InvalidNetwork",
-	"InvalidUri",
-	"InvalidQuantity",
-	"InvalidNodeAlias",
-	"InvalidDateTime",
-	"InvalidFeeRate",
-	"DuplicatePayment",
-	"UnsupportedCurrency",
-	"InsufficientFunds",
-	"LiquiditySourceUnavailable",
-	"LiquidityFeeTooHigh",
-	"InvalidBlindedPaths",
-	"AsyncPaymentServicesDisabled",
-	"CannotRbfFundingTransaction",
-    "TransactionNotFound",
-    "TransactionAlreadyConfirmed",
-    "NoSpendableOutputs",
-    "CoinSelectionFailed",
-    "InvalidMnemonic",
-    "BackgroundSyncNotEnabled",
-    "AddressTypeAlreadyMonitored",
-    "AddressTypeIsPrimary",
-    "AddressTypeNotMonitored",
-    "OnchainWalletAccountNotRegistered",
-    "InvalidSeedBytes",
+interface NodeError {
+	AlreadyRunning();
+	NotRunning();
+	OnchainTxCreationFailed();
+	ConnectionFailed();
+	InvoiceCreationFailed();
+	InvoiceRequestCreationFailed();
+	OfferCreationFailed();
+	RefundCreationFailed();
+	PaymentSendingFailed();
+	InvalidCustomTlvs();
+	ProbeSendingFailed();
+	RouteNotFound();
+	ChannelCreationFailed();
+	ChannelClosingFailed();
+	ChannelSplicingFailed();
+	ChannelConfigUpdateFailed();
+	PersistenceFailed();
+	FeerateEstimationUpdateFailed();
+	FeerateEstimationUpdateTimeout();
+	WalletOperationFailed();
+	WalletOperationTimeout();
+	OnchainTxSigningFailed();
+	TxSyncFailed();
+	TxSyncTimeout();
+	GossipUpdateFailed();
+	GossipUpdateTimeout();
+	LiquidityRequestFailed();
+	UriParameterParsingFailed();
+	InvalidAddress();
+	InvalidSocketAddress();
+	InvalidPublicKey();
+	InvalidSecretKey();
+	InvalidOfferId();
+	InvalidNodeId();
+	InvalidPaymentId();
+	InvalidPaymentHash();
+	InvalidPaymentPreimage();
+	InvalidPaymentSecret();
+	InvalidAmount();
+	InvalidInvoice();
+	InvalidOffer();
+	InvalidRefund();
+	InvalidChannelId();
+	InvalidNetwork();
+	InvalidUri();
+	InvalidQuantity();
+	InvalidNodeAlias();
+	InvalidDateTime();
+	InvalidFeeRate();
+	DuplicatePayment();
+	UnsupportedCurrency();
+	InsufficientFunds();
+	LiquiditySourceUnavailable();
+	LiquidityFeeTooHigh();
+	InvalidBlindedPaths();
+	AsyncPaymentServicesDisabled();
+	CannotRbfFundingTransaction();
+	TransactionNotFound();
+	TransactionAlreadyConfirmed();
+	NoSpendableOutputs();
+	CoinSelectionFailed();
+	InvalidMnemonic();
+	BackgroundSyncNotEnabled();
+	AddressTypeAlreadyMonitored();
+	AddressTypeIsPrimary();
+	AddressTypeNotMonitored();
+	OnchainWalletAccountNotRegistered();
+	InvalidSeedBytes();
+	OnchainTxBroadcastRejected(Txid txid);
+	OnchainTxBroadcastFailed(Txid txid);
+	OnchainTxBroadcastTimeout(Txid txid);
+	OnchainTxBroadcastNotDispatched(Txid txid);
 };
 
 dictionary NodeStatus {

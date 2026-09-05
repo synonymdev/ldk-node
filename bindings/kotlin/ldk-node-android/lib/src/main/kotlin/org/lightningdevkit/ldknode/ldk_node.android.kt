@@ -1554,6 +1554,12 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2610,6 +2616,11 @@ internal interface UniffiLib : Library {
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_fn_method_onchainpayment_abandon_pending_broadcast(
+        `ptr`: Pointer?,
+        `txid`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_method_onchainpayment_accelerate_by_cpfp(
         `ptr`: Pointer?,
         `txid`: RustBufferByValue,
@@ -2676,6 +2687,10 @@ internal interface UniffiLib : Library {
         `utxosToSpend`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Long
+    fun uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_list_spendable_outputs(
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -2708,6 +2723,11 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type(
         `ptr`: Pointer?,
         `addressType`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_rebroadcast_transaction(
+        `ptr`: Pointer?,
+        `txid`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(
@@ -3466,6 +3486,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_offer_supports_chain(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_abandon_pending_broadcast(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index(
@@ -3484,6 +3506,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_new_address(
@@ -3497,6 +3521,8 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_account(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_rebroadcast_transaction(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to(
     ): Short
@@ -4093,6 +4119,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_offer_supports_chain() != 2135.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_abandon_pending_broadcast() != 686.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -4120,6 +4149,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 40346.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -4139,6 +4171,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_rebroadcast_transaction() != 36642.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189.toShort()) {
@@ -8338,6 +8373,19 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
 
 
     @Throws(NodeException::class)
+    override fun `abandonPendingBroadcast`(`txid`: Txid) {
+        callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_abandon_pending_broadcast(
+                    it,
+                    FfiConverterTypeTxid.lower(`txid`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+    @Throws(NodeException::class)
     override fun `accelerateByCpfp`(`txid`: Txid, `feeRate`: FeeRate?, `destinationAddress`: Address?): Txid {
         return FfiConverterTypeTxid.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -8476,6 +8524,18 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
     }
 
     @Throws(NodeException::class)
+    override fun `listPendingBroadcasts`(): List<PendingBroadcastInfo> {
+        return FfiConverterSequenceTypePendingBroadcastInfo.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
     override fun `listSpendableOutputs`(): List<SpendableUtxo> {
         return FfiConverterSequenceTypeSpendableUtxo.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -8559,6 +8619,19 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type(
                     it,
                     FfiConverterTypeAddressType.lower(`addressType`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `rebroadcastTransaction`(`txid`: Txid): Txid {
+        return FfiConverterTypeTxid.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_rebroadcast_transaction(
+                    it,
+                    FfiConverterTypeTxid.lower(`txid`),
                     uniffiRustCallStatus,
                 )
             }
@@ -10501,6 +10574,28 @@ object FfiConverterTypePeerDetails: FfiConverterRustBuffer<PeerDetails> {
 
 
 
+object FfiConverterTypePendingBroadcastInfo: FfiConverterRustBuffer<PendingBroadcastInfo> {
+    override fun read(buf: ByteBuffer): PendingBroadcastInfo {
+        return PendingBroadcastInfo(
+            FfiConverterTypeTxid.read(buf),
+            FfiConverterSequenceTypeTxid.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PendingBroadcastInfo) = (
+            FfiConverterTypeTxid.allocationSize(value.`txid`) +
+            FfiConverterSequenceTypeTxid.allocationSize(value.`lineage`)
+    )
+
+    override fun write(value: PendingBroadcastInfo, buf: ByteBuffer) {
+        FfiConverterTypeTxid.write(value.`txid`, buf)
+        FfiConverterSequenceTypeTxid.write(value.`lineage`, buf)
+    }
+}
+
+
+
+
 object FfiConverterTypeProbeHandle: FfiConverterRustBuffer<ProbeHandle> {
     override fun read(buf: ByteBuffer): ProbeHandle {
         return ProbeHandle(
@@ -12132,80 +12227,385 @@ object NodeExceptionErrorHandler : UniffiRustCallStatusErrorHandler<NodeExceptio
 object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
     override fun read(buf: ByteBuffer): NodeException {
         return when (buf.getInt()) {
-            1 -> NodeException.AlreadyRunning(FfiConverterString.read(buf))
-            2 -> NodeException.NotRunning(FfiConverterString.read(buf))
-            3 -> NodeException.OnchainTxCreationFailed(FfiConverterString.read(buf))
-            4 -> NodeException.ConnectionFailed(FfiConverterString.read(buf))
-            5 -> NodeException.InvoiceCreationFailed(FfiConverterString.read(buf))
-            6 -> NodeException.InvoiceRequestCreationFailed(FfiConverterString.read(buf))
-            7 -> NodeException.OfferCreationFailed(FfiConverterString.read(buf))
-            8 -> NodeException.RefundCreationFailed(FfiConverterString.read(buf))
-            9 -> NodeException.PaymentSendingFailed(FfiConverterString.read(buf))
-            10 -> NodeException.InvalidCustomTlvs(FfiConverterString.read(buf))
-            11 -> NodeException.ProbeSendingFailed(FfiConverterString.read(buf))
-            12 -> NodeException.RouteNotFound(FfiConverterString.read(buf))
-            13 -> NodeException.ChannelCreationFailed(FfiConverterString.read(buf))
-            14 -> NodeException.ChannelClosingFailed(FfiConverterString.read(buf))
-            15 -> NodeException.ChannelSplicingFailed(FfiConverterString.read(buf))
-            16 -> NodeException.ChannelConfigUpdateFailed(FfiConverterString.read(buf))
-            17 -> NodeException.PersistenceFailed(FfiConverterString.read(buf))
-            18 -> NodeException.FeerateEstimationUpdateFailed(FfiConverterString.read(buf))
-            19 -> NodeException.FeerateEstimationUpdateTimeout(FfiConverterString.read(buf))
-            20 -> NodeException.WalletOperationFailed(FfiConverterString.read(buf))
-            21 -> NodeException.WalletOperationTimeout(FfiConverterString.read(buf))
-            22 -> NodeException.OnchainTxSigningFailed(FfiConverterString.read(buf))
-            23 -> NodeException.TxSyncFailed(FfiConverterString.read(buf))
-            24 -> NodeException.TxSyncTimeout(FfiConverterString.read(buf))
-            25 -> NodeException.GossipUpdateFailed(FfiConverterString.read(buf))
-            26 -> NodeException.GossipUpdateTimeout(FfiConverterString.read(buf))
-            27 -> NodeException.LiquidityRequestFailed(FfiConverterString.read(buf))
-            28 -> NodeException.UriParameterParsingFailed(FfiConverterString.read(buf))
-            29 -> NodeException.InvalidAddress(FfiConverterString.read(buf))
-            30 -> NodeException.InvalidSocketAddress(FfiConverterString.read(buf))
-            31 -> NodeException.InvalidPublicKey(FfiConverterString.read(buf))
-            32 -> NodeException.InvalidSecretKey(FfiConverterString.read(buf))
-            33 -> NodeException.InvalidOfferId(FfiConverterString.read(buf))
-            34 -> NodeException.InvalidNodeId(FfiConverterString.read(buf))
-            35 -> NodeException.InvalidPaymentId(FfiConverterString.read(buf))
-            36 -> NodeException.InvalidPaymentHash(FfiConverterString.read(buf))
-            37 -> NodeException.InvalidPaymentPreimage(FfiConverterString.read(buf))
-            38 -> NodeException.InvalidPaymentSecret(FfiConverterString.read(buf))
-            39 -> NodeException.InvalidAmount(FfiConverterString.read(buf))
-            40 -> NodeException.InvalidInvoice(FfiConverterString.read(buf))
-            41 -> NodeException.InvalidOffer(FfiConverterString.read(buf))
-            42 -> NodeException.InvalidRefund(FfiConverterString.read(buf))
-            43 -> NodeException.InvalidChannelId(FfiConverterString.read(buf))
-            44 -> NodeException.InvalidNetwork(FfiConverterString.read(buf))
-            45 -> NodeException.InvalidUri(FfiConverterString.read(buf))
-            46 -> NodeException.InvalidQuantity(FfiConverterString.read(buf))
-            47 -> NodeException.InvalidNodeAlias(FfiConverterString.read(buf))
-            48 -> NodeException.InvalidDateTime(FfiConverterString.read(buf))
-            49 -> NodeException.InvalidFeeRate(FfiConverterString.read(buf))
-            50 -> NodeException.DuplicatePayment(FfiConverterString.read(buf))
-            51 -> NodeException.UnsupportedCurrency(FfiConverterString.read(buf))
-            52 -> NodeException.InsufficientFunds(FfiConverterString.read(buf))
-            53 -> NodeException.LiquiditySourceUnavailable(FfiConverterString.read(buf))
-            54 -> NodeException.LiquidityFeeTooHigh(FfiConverterString.read(buf))
-            55 -> NodeException.InvalidBlindedPaths(FfiConverterString.read(buf))
-            56 -> NodeException.AsyncPaymentServicesDisabled(FfiConverterString.read(buf))
-            57 -> NodeException.CannotRbfFundingTransaction(FfiConverterString.read(buf))
-            58 -> NodeException.TransactionNotFound(FfiConverterString.read(buf))
-            59 -> NodeException.TransactionAlreadyConfirmed(FfiConverterString.read(buf))
-            60 -> NodeException.NoSpendableOutputs(FfiConverterString.read(buf))
-            61 -> NodeException.CoinSelectionFailed(FfiConverterString.read(buf))
-            62 -> NodeException.InvalidMnemonic(FfiConverterString.read(buf))
-            63 -> NodeException.BackgroundSyncNotEnabled(FfiConverterString.read(buf))
-            64 -> NodeException.AddressTypeAlreadyMonitored(FfiConverterString.read(buf))
-            65 -> NodeException.AddressTypeIsPrimary(FfiConverterString.read(buf))
-            66 -> NodeException.AddressTypeNotMonitored(FfiConverterString.read(buf))
-            67 -> NodeException.OnchainWalletAccountNotRegistered(FfiConverterString.read(buf))
-            68 -> NodeException.InvalidSeedBytes(FfiConverterString.read(buf))
+            1 -> NodeException.AlreadyRunning()
+            2 -> NodeException.NotRunning()
+            3 -> NodeException.OnchainTxCreationFailed()
+            4 -> NodeException.ConnectionFailed()
+            5 -> NodeException.InvoiceCreationFailed()
+            6 -> NodeException.InvoiceRequestCreationFailed()
+            7 -> NodeException.OfferCreationFailed()
+            8 -> NodeException.RefundCreationFailed()
+            9 -> NodeException.PaymentSendingFailed()
+            10 -> NodeException.InvalidCustomTlvs()
+            11 -> NodeException.ProbeSendingFailed()
+            12 -> NodeException.RouteNotFound()
+            13 -> NodeException.ChannelCreationFailed()
+            14 -> NodeException.ChannelClosingFailed()
+            15 -> NodeException.ChannelSplicingFailed()
+            16 -> NodeException.ChannelConfigUpdateFailed()
+            17 -> NodeException.PersistenceFailed()
+            18 -> NodeException.FeerateEstimationUpdateFailed()
+            19 -> NodeException.FeerateEstimationUpdateTimeout()
+            20 -> NodeException.WalletOperationFailed()
+            21 -> NodeException.WalletOperationTimeout()
+            22 -> NodeException.OnchainTxSigningFailed()
+            23 -> NodeException.TxSyncFailed()
+            24 -> NodeException.TxSyncTimeout()
+            25 -> NodeException.GossipUpdateFailed()
+            26 -> NodeException.GossipUpdateTimeout()
+            27 -> NodeException.LiquidityRequestFailed()
+            28 -> NodeException.UriParameterParsingFailed()
+            29 -> NodeException.InvalidAddress()
+            30 -> NodeException.InvalidSocketAddress()
+            31 -> NodeException.InvalidPublicKey()
+            32 -> NodeException.InvalidSecretKey()
+            33 -> NodeException.InvalidOfferId()
+            34 -> NodeException.InvalidNodeId()
+            35 -> NodeException.InvalidPaymentId()
+            36 -> NodeException.InvalidPaymentHash()
+            37 -> NodeException.InvalidPaymentPreimage()
+            38 -> NodeException.InvalidPaymentSecret()
+            39 -> NodeException.InvalidAmount()
+            40 -> NodeException.InvalidInvoice()
+            41 -> NodeException.InvalidOffer()
+            42 -> NodeException.InvalidRefund()
+            43 -> NodeException.InvalidChannelId()
+            44 -> NodeException.InvalidNetwork()
+            45 -> NodeException.InvalidUri()
+            46 -> NodeException.InvalidQuantity()
+            47 -> NodeException.InvalidNodeAlias()
+            48 -> NodeException.InvalidDateTime()
+            49 -> NodeException.InvalidFeeRate()
+            50 -> NodeException.DuplicatePayment()
+            51 -> NodeException.UnsupportedCurrency()
+            52 -> NodeException.InsufficientFunds()
+            53 -> NodeException.LiquiditySourceUnavailable()
+            54 -> NodeException.LiquidityFeeTooHigh()
+            55 -> NodeException.InvalidBlindedPaths()
+            56 -> NodeException.AsyncPaymentServicesDisabled()
+            57 -> NodeException.CannotRbfFundingTransaction()
+            58 -> NodeException.TransactionNotFound()
+            59 -> NodeException.TransactionAlreadyConfirmed()
+            60 -> NodeException.NoSpendableOutputs()
+            61 -> NodeException.CoinSelectionFailed()
+            62 -> NodeException.InvalidMnemonic()
+            63 -> NodeException.BackgroundSyncNotEnabled()
+            64 -> NodeException.AddressTypeAlreadyMonitored()
+            65 -> NodeException.AddressTypeIsPrimary()
+            66 -> NodeException.AddressTypeNotMonitored()
+            67 -> NodeException.OnchainWalletAccountNotRegistered()
+            68 -> NodeException.InvalidSeedBytes()
+            69 -> NodeException.OnchainTxBroadcastRejected(
+                FfiConverterTypeTxid.read(buf),
+                )
+            70 -> NodeException.OnchainTxBroadcastFailed(
+                FfiConverterTypeTxid.read(buf),
+                )
+            71 -> NodeException.OnchainTxBroadcastTimeout(
+                FfiConverterTypeTxid.read(buf),
+                )
+            72 -> NodeException.OnchainTxBroadcastNotDispatched(
+                FfiConverterTypeTxid.read(buf),
+                )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
 
     override fun allocationSize(value: NodeException): ULong {
-        return 4UL
+        return when (value) {
+            is NodeException.AlreadyRunning -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.NotRunning -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.OnchainTxCreationFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.ConnectionFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvoiceCreationFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvoiceRequestCreationFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.OfferCreationFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.RefundCreationFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.PaymentSendingFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidCustomTlvs -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.ProbeSendingFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.RouteNotFound -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.ChannelCreationFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.ChannelClosingFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.ChannelSplicingFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.ChannelConfigUpdateFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.PersistenceFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.FeerateEstimationUpdateFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.FeerateEstimationUpdateTimeout -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.WalletOperationFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.WalletOperationTimeout -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.OnchainTxSigningFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.TxSyncFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.TxSyncTimeout -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.GossipUpdateFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.GossipUpdateTimeout -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.LiquidityRequestFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.UriParameterParsingFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidAddress -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidSocketAddress -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidPublicKey -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidSecretKey -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidOfferId -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidNodeId -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidPaymentId -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidPaymentHash -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidPaymentPreimage -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidPaymentSecret -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidAmount -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidInvoice -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidOffer -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidRefund -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidChannelId -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidNetwork -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidUri -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidQuantity -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidNodeAlias -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidDateTime -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidFeeRate -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.DuplicatePayment -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.UnsupportedCurrency -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InsufficientFunds -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.LiquiditySourceUnavailable -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.LiquidityFeeTooHigh -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidBlindedPaths -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.AsyncPaymentServicesDisabled -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.CannotRbfFundingTransaction -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.TransactionNotFound -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.TransactionAlreadyConfirmed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.NoSpendableOutputs -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.CoinSelectionFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidMnemonic -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.BackgroundSyncNotEnabled -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.AddressTypeAlreadyMonitored -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.AddressTypeIsPrimary -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.AddressTypeNotMonitored -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.OnchainWalletAccountNotRegistered -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.InvalidSeedBytes -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+            is NodeException.OnchainTxBroadcastRejected -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+            is NodeException.OnchainTxBroadcastFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+            is NodeException.OnchainTxBroadcastTimeout -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+            is NodeException.OnchainTxBroadcastNotDispatched -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+        }
     }
 
     override fun write(value: NodeException, buf: ByteBuffer) {
@@ -12480,6 +12880,26 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
             }
             is NodeException.InvalidSeedBytes -> {
                 buf.putInt(68)
+                Unit
+            }
+            is NodeException.OnchainTxBroadcastRejected -> {
+                buf.putInt(69)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                Unit
+            }
+            is NodeException.OnchainTxBroadcastFailed -> {
+                buf.putInt(70)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                Unit
+            }
+            is NodeException.OnchainTxBroadcastTimeout -> {
+                buf.putInt(71)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                Unit
+            }
+            is NodeException.OnchainTxBroadcastNotDispatched -> {
+                buf.putInt(72)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -14580,6 +15000,31 @@ object FfiConverterSequenceTypePeerDetails: FfiConverterRustBuffer<List<PeerDeta
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypePeerDetails.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypePendingBroadcastInfo: FfiConverterRustBuffer<List<PendingBroadcastInfo>> {
+    override fun read(buf: ByteBuffer): List<PendingBroadcastInfo> {
+        val len = buf.getInt()
+        return List<PendingBroadcastInfo>(len) {
+            FfiConverterTypePendingBroadcastInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<PendingBroadcastInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypePendingBroadcastInfo.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<PendingBroadcastInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypePendingBroadcastInfo.write(it, buf)
         }
     }
 }
