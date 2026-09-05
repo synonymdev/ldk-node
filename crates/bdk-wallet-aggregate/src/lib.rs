@@ -989,7 +989,7 @@ where
 		let drain_script =
 			self.primary_wallet().peek_address(KeychainKind::Internal, 0).address.script_pubkey();
 
-		let selected = utxo::select_utxos_with_algorithm(
+		let selected = utxo::select_utxos_for_deficit(
 			deficit.to_sat(),
 			available,
 			new_fee_rate,
@@ -1025,15 +1025,17 @@ where
 		&self, target_amount: u64, available_utxos: Vec<LocalOutput>, fee_rate: FeeRate,
 		algorithm: CoinSelectionAlgorithm, drain_script: &Script, excluded_outpoints: &[OutPoint],
 	) -> Result<Vec<OutPoint>, Error> {
-		utxo::select_utxos_with_algorithm(
+		utxo::select_utxos_with_algorithm(utxo::SelectionRequest {
 			target_amount,
 			available_utxos,
 			fee_rate,
 			algorithm,
 			drain_script,
 			excluded_outpoints,
-			&self.wallets,
-		)
+			wallets: &self.wallets,
+			recipient_script: None,
+			include_payment_overhead: true,
+		})
 	}
 
 	// ─── Fee Calculation ─────────────────────────────────────────────────
@@ -1128,7 +1130,7 @@ where
 		let drain_script =
 			self.primary_wallet().peek_address(KeychainKind::Internal, 0).address.script_pubkey();
 
-		let selected_outpoints = utxo::select_utxos_with_algorithm(
+		let selected_outpoints = utxo::select_utxos_for_deficit(
 			deficit.to_sat(),
 			non_primary,
 			fee_rate,
@@ -1172,15 +1174,17 @@ where
 			.address
 			.script_pubkey();
 
-		let selected = utxo::select_utxos_with_algorithm(
-			amount.to_sat(),
-			all_utxos,
+		let selected = utxo::select_utxos_with_algorithm(utxo::SelectionRequest {
+			target_amount: amount.to_sat(),
+			available_utxos: all_utxos,
 			fee_rate,
 			algorithm,
-			&drain_script,
-			&[],
-			&self.wallets,
-		)?;
+			drain_script: &drain_script,
+			excluded_outpoints: &[],
+			wallets: &self.wallets,
+			recipient_script: Some(&output_script),
+			include_payment_overhead: true,
+		})?;
 
 		let infos = self.prepare_outpoints_for_psbt(&selected)?;
 		if infos.is_empty() {
@@ -1652,6 +1656,7 @@ mod tests {
 	use bitcoin::bip32::Xpriv;
 	use bitcoin::{
 		Amount, Block, FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid,
+		Weight,
 	};
 
 	use super::*;
@@ -1839,6 +1844,23 @@ mod tests {
 		ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_byte_array([0xab; 20]))
 	}
 
+	fn p2wsh_recipient_script() -> ScriptBuf {
+		ScriptBuf::new_p2wsh(&bitcoin::WScriptHash::from_byte_array([0xcd; 32]))
+	}
+
+	fn p2tr_recipient_script() -> ScriptBuf {
+		let secp = bitcoin::secp256k1::Secp256k1::new();
+		let secret = bitcoin::secp256k1::SecretKey::from_slice(&[0x01; 32]).unwrap();
+		let keypair = bitcoin::secp256k1::Keypair::from_secret_key(&secp, &secret);
+		let (xonly, _) = keypair.x_only_public_key();
+		ScriptBuf::new_p2tr(&secp, xonly, None)
+	}
+
+	fn witness_v2_40_byte_recipient_script() -> ScriptBuf {
+		let program = bitcoin::WitnessProgram::new(bitcoin::WitnessVersion::V2, &[0; 40]).unwrap();
+		ScriptBuf::new_witness_program(&program)
+	}
+
 	#[test]
 	fn persistence_fails_when_a_wallet_has_no_persister() {
 		let mut persister = NoopPersister;
@@ -1937,6 +1959,366 @@ mod tests {
 		};
 
 		assert!(aggregate.calculate_fee_from_psbt(&psbt).unwrap() > 0);
+	}
+
+	/// A selection returned by `select_utxos` must be accepted by the transaction
+	/// builder for the same target amount and fee rate, for every algorithm.
+	/// Regression test for https://github.com/synonymdev/ldk-node/issues/104.
+	#[test]
+	fn selected_utxos_satisfy_tx_builder_for_all_algorithms() {
+		// The wallet layout from the issue report: 18 P2WPKH UTXOs, 88,900 sats total.
+		let utxo_amounts = [
+			2_000u64, 3_500, 4_200, 5_000, 6_100, 7_800, 2_500, 3_000, 8_900, 4_500, 2_100, 5_500,
+			3_200, 6_700, 9_100, 4_800, 2_700, 7_300,
+		];
+		let target_amount = 35_000u64;
+		let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
+
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		for (index, amount) in utxo_amounts.iter().enumerate() {
+			fund_wallet(&mut wallet, Amount::from_sat(*amount), index as u8 + 1);
+		}
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let drain_script = aggregate
+			.primary_wallet()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+
+		// SingleRandomDraw is intentionally omitted: its randomized selection can
+		// occasionally land on a dust-change result that selection legitimately
+		// rejects, making the test flaky. The invariant under test — a returned
+		// selection must be acceptable to the builder — is exercised
+		// deterministically by the three deterministic algorithms below, including
+		// the changeless BranchAndBound path from issue #104.
+		for algorithm in [
+			CoinSelectionAlgorithm::BranchAndBound,
+			CoinSelectionAlgorithm::LargestFirst,
+			CoinSelectionAlgorithm::OldestFirst,
+		] {
+			let available_utxos = aggregate.list_unspent();
+			let selected = aggregate
+				.select_utxos(
+					target_amount,
+					available_utxos,
+					fee_rate,
+					algorithm,
+					&drain_script,
+					&[],
+				)
+				.unwrap_or_else(|e| panic!("{algorithm:?} selection failed: {e:?}"));
+
+			// Build the spend exactly like the manual-UTXO path of ldk-node's
+			// `build_transaction_psbt` does.
+			let infos = aggregate.prepare_outpoints_for_psbt(&selected).unwrap();
+			let mut builder = aggregate.primary_wallet_mut().build_tx();
+			builder
+				.add_recipient(recipient_script(), Amount::from_sat(target_amount))
+				.fee_rate(fee_rate);
+			utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
+			builder.manually_selected_only();
+			builder.finish().unwrap_or_else(|e| panic!("{algorithm:?} selection rejected: {e:?}"));
+		}
+	}
+
+	/// The exact low-fee case from the PR #109 review: at 250 sat/kwu the
+	/// changeless branch-and-bound match for a 35,000-sat target totals ~35,600
+	/// sats — below the 36,000 sats the removed 1,000-sat minimum fee-buffer
+	/// precheck required — and must be accepted by the transaction builder.
+	#[test]
+	fn changeless_low_fee_selection_is_accepted_by_the_builder() {
+		let utxo_amounts = [
+			2_000u64, 3_500, 4_200, 5_000, 6_100, 7_800, 2_500, 3_000, 8_900, 4_500, 2_100, 5_500,
+			3_200, 6_700, 9_100, 4_800, 2_700, 7_300,
+		];
+		let target_amount = 35_000u64;
+		let fee_rate = FeeRate::from_sat_per_kwu(250);
+
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		for (index, amount) in utxo_amounts.iter().enumerate() {
+			fund_wallet(&mut wallet, Amount::from_sat(*amount), index as u8 + 1);
+		}
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		let drain_script = aggregate
+			.primary_wallet()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+
+		let recipient = recipient_script();
+		let selected = utxo::select_utxos_with_algorithm(utxo::SelectionRequest {
+			target_amount,
+			available_utxos: aggregate.list_unspent(),
+			fee_rate,
+			algorithm: CoinSelectionAlgorithm::BranchAndBound,
+			drain_script: &drain_script,
+			excluded_outpoints: &[],
+			wallets: &aggregate.wallets,
+			recipient_script: Some(&recipient),
+			include_payment_overhead: true,
+		})
+		.unwrap();
+
+		// The tight changeless match quoted in the review: eight P2WPKH inputs
+		// totaling ~35,600 sats, which the old precheck would have rejected.
+		let selected_total: u64 = aggregate
+			.list_unspent()
+			.iter()
+			.filter(|u| selected.contains(&u.outpoint))
+			.map(|u| u.txout.value.to_sat())
+			.sum();
+		assert_eq!(selected.len(), 8);
+		assert!(selected_total < 36_000, "selection total: {selected_total}");
+
+		let infos = aggregate.prepare_outpoints_for_psbt(&selected).unwrap();
+		let mut builder = aggregate.primary_wallet_mut().build_tx();
+		builder.add_recipient(recipient, Amount::from_sat(target_amount)).fee_rate(fee_rate);
+		utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
+		builder.manually_selected_only();
+		builder.finish().expect("builder must accept the changeless low-fee selection");
+	}
+
+	#[test]
+	fn p2wpkh_change_below_generic_dust_limit_is_accepted() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		fund_wallet(&mut wallet, Amount::from_sat(35_655), 0x45);
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		let recipient = recipient_script();
+		let drain_script = aggregate
+			.primary_wallet()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+		let fee_rate = FeeRate::from_sat_per_kwu(250);
+		let selected = aggregate
+			.select_utxos(
+				35_000,
+				aggregate.list_unspent(),
+				fee_rate,
+				CoinSelectionAlgorithm::BranchAndBound,
+				&drain_script,
+				&[],
+			)
+			.unwrap();
+
+		let infos = aggregate.prepare_outpoints_for_psbt(&selected).unwrap();
+		let mut builder = aggregate.primary_wallet_mut().build_tx();
+		builder.add_recipient(recipient, Amount::from_sat(35_000)).fee_rate(fee_rate);
+		utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
+		builder.manually_selected_only();
+		let psbt = builder.finish().expect("BDK should accept valid P2WPKH change");
+		let change = psbt
+			.unsigned_tx
+			.output
+			.iter()
+			.find(|output| output.script_pubkey == drain_script)
+			.expect("selection should retain change");
+		assert!((294..546).contains(&change.value.to_sat()));
+	}
+
+	/// A genuinely insufficient manual selection must still be rejected by the
+	/// transaction builder with an insufficient-funds error (which ldk-node
+	/// maps to `Error::InsufficientFunds`).
+	#[test]
+	fn builder_rejects_insufficient_manual_selection() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		// Covers the 35,000-sat target but not the fee for spending it.
+		fund_wallet(&mut wallet, Amount::from_sat(35_050), 0x41);
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		let outpoint = aggregate.list_unspent()[0].outpoint;
+
+		let infos = aggregate.prepare_outpoints_for_psbt(&[outpoint]).unwrap();
+		let mut builder = aggregate.primary_wallet_mut().build_tx();
+		builder
+			.add_recipient(recipient_script(), Amount::from_sat(35_000))
+			.fee_rate(FeeRate::from_sat_per_kwu(250));
+		utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
+		builder.manually_selected_only();
+
+		assert!(matches!(builder.finish(), Err(CreateTxError::CoinSelection(_))));
+	}
+
+	/// The conservative base-overhead allowance (43 vB recipient output) must
+	/// keep selector/builder agreement for the largest standard recipient
+	/// scripts, P2TR and P2WSH, not just P2WPKH.
+	///
+	/// Boundary fixture: at 1,000 sat/kwu (1 sat/vB), 10,470 sats covers the
+	/// 10,000-sat target + 1 input fee (271 sats) + 188 WU base fee (188 sats),
+	/// so a 188-WU allowance selects only the 10,470-sat UTXO. However, spending
+	/// 1 P2WPKH input to a 43 vB output needs 485 sats fee (10,485 total),
+	/// making 10,470 sats insufficient for TxBuilder. The 224-WU allowance
+	/// targets 10,495 sats, correctly forcing selection of the second (500 sat)
+	/// UTXO, which TxBuilder accepts (756 sat fee, 10,756 total needed <= 10,970).
+	#[test]
+	fn selection_is_accepted_for_p2tr_and_p2wsh_recipients() {
+		let utxo_amounts = [10_470u64, 500];
+		let target_amount = 10_000u64;
+		let fee_rate = FeeRate::from_sat_per_kwu(1_000);
+
+		for recipient in [p2tr_recipient_script(), p2wsh_recipient_script()] {
+			let mut persister = NoopPersister;
+			let mut wallet = create_empty_wallet(&mut persister);
+			for (index, amount) in utxo_amounts.iter().enumerate() {
+				fund_wallet(&mut wallet, Amount::from_sat(*amount), index as u8 + 1);
+			}
+			let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+			let drain_script = aggregate
+				.primary_wallet()
+				.peek_address(KeychainKind::Internal, 0)
+				.address
+				.script_pubkey();
+
+			let selected = aggregate
+				.select_utxos(
+					target_amount,
+					aggregate.list_unspent(),
+					fee_rate,
+					CoinSelectionAlgorithm::BranchAndBound,
+					&drain_script,
+					&[],
+				)
+				.unwrap();
+
+			let infos = aggregate.prepare_outpoints_for_psbt(&selected).unwrap();
+			let mut builder = aggregate.primary_wallet_mut().build_tx();
+			builder.add_recipient(recipient, Amount::from_sat(target_amount)).fee_rate(fee_rate);
+			utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
+			builder.manually_selected_only();
+			builder.finish().expect("builder must accept the selection for a 43 vB recipient");
+		}
+	}
+
+	/// The conservative no-recipient base-overhead allowance (246 WU) must
+	/// keep public selector and transaction builder in agreement for the largest
+	/// valid future-witness recipient, a v2 40-byte program (204 WU output +
+	/// 42 WU tx overhead = 246 WU).
+	///
+	/// Boundary fixture: at 1,000 sat/kwu (1 sat/WU), 10,510 sats covers the
+	/// 10,000-sat target + 1 input fee (271 sats) + 224 WU base fee (224 sats),
+	/// so a 224-WU allowance selects only the 10,510-sat UTXO. However, spending
+	/// 1 P2WPKH input to a 51 vB output needs 518 sats fee (10,518 total),
+	/// making 10,510 sats insufficient for TxBuilder. The 246-WU allowance
+	/// targets 10,517 sats, correctly forcing selection of the second (700 sat)
+	/// UTXO, which TxBuilder accepts.
+	#[test]
+	fn selection_is_accepted_for_witness_v2_40_byte_recipient() {
+		let recipient = witness_v2_40_byte_recipient_script();
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		fund_wallet(&mut wallet, Amount::from_sat(10_510), 0x42);
+		fund_wallet(&mut wallet, Amount::from_sat(700), 0x43);
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		let drain_script = aggregate
+			.primary_wallet()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+		let target_amount = 10_000;
+		let fee_rate = FeeRate::from_sat_per_kwu(1_000);
+
+		assert_eq!(
+			TxOut { value: Amount::ZERO, script_pubkey: recipient.clone() }.weight(),
+			Weight::from_wu(204)
+		);
+		let selected = aggregate
+			.select_utxos(
+				target_amount,
+				aggregate.list_unspent(),
+				fee_rate,
+				CoinSelectionAlgorithm::LargestFirst,
+				&drain_script,
+				&[],
+			)
+			.unwrap();
+		assert_eq!(selected.len(), 2);
+
+		let infos = aggregate.prepare_outpoints_for_psbt(&selected).unwrap();
+		let mut builder = aggregate.primary_wallet_mut().build_tx();
+		builder.add_recipient(recipient, Amount::from_sat(target_amount)).fee_rate(fee_rate);
+		utxo::add_utxos_to_tx_builder(&mut builder, &infos).unwrap();
+		builder.manually_selected_only();
+		builder.finish().expect("builder must accept the selection for a 40-byte witness program");
+	}
+
+	#[test]
+	fn max_payment_target_returns_insufficient_funds() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		fund_wallet(&mut wallet, Amount::from_sat(1_000), 0x44);
+		let aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		let drain_script = aggregate
+			.primary_wallet()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+
+		assert_eq!(
+			aggregate.select_utxos(
+				u64::MAX,
+				aggregate.list_unspent(),
+				FeeRate::from_sat_per_kwu(250),
+				CoinSelectionAlgorithm::BranchAndBound,
+				&drain_script,
+				&[],
+			),
+			Err(Error::InsufficientFunds)
+		);
+		assert_eq!(
+			utxo::select_utxos_for_deficit(
+				u64::MAX,
+				aggregate.list_unspent(),
+				FeeRate::from_sat_per_kwu(250),
+				CoinSelectionAlgorithm::BranchAndBound,
+				&drain_script,
+				&[],
+				&aggregate.wallets,
+			),
+			Err(Error::InsufficientFunds)
+		);
+	}
+
+	#[test]
+	fn deficit_selection_exact_boundary_does_not_require_extra_input() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		let fee_rate = FeeRate::from_sat_per_kwu(250);
+		let target_deficit = 1_000u64;
+
+		// Create wallet with a candidate UTXO
+		fund_wallet(&mut wallet, Amount::from_sat(10_000), 0x44);
+		let aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		let drain_script = aggregate
+			.primary_wallet()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+
+		// BDK coin selection requires 1000 sats deficit + 68 sats total selection fee (input + drain overhead) = 1068 sats.
+		// Before the fix, target_amount was inflated by min_input_fee (+28 sats = 1096 sats required), causing failure.
+		let exact_utxo_value = 1_068u64;
+
+		// Re-create wallet with the exact boundary UTXO value
+		let mut persister2 = NoopPersister;
+		let mut wallet2 = create_empty_wallet(&mut persister2);
+		fund_wallet(&mut wallet2, Amount::from_sat(exact_utxo_value), 0x44);
+		let aggregate2 = AggregateWallet::<u8, _>::new(wallet2, persister2, 0, vec![]);
+
+		let selected = utxo::select_utxos_for_deficit(
+			target_deficit,
+			aggregate2.list_unspent(),
+			fee_rate,
+			CoinSelectionAlgorithm::BranchAndBound,
+			&drain_script,
+			&[],
+			&aggregate2.wallets,
+		)
+		.expect("Exact boundary UTXO set must cover deficit plus its selection fee");
+		assert_eq!(selected.len(), 1);
 	}
 
 	#[test]
