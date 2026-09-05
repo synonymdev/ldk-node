@@ -964,7 +964,7 @@ mod tests {
 	use bitcoin::absolute::LockTime;
 	use bitcoin::hashes::Hash;
 	use bitcoin::transaction::Version;
-	use bitcoin::{Network, Transaction, Txid};
+	use bitcoin::{Amount, Network, ScriptBuf, Transaction, TxOut, Txid};
 	use lightning::io;
 	use lightning::util::persist::{KVStore, KVStoreSync};
 
@@ -975,7 +975,7 @@ mod tests {
 	use crate::io::test_utils::InMemoryStore;
 	use crate::tx_broadcaster::TxBroadcastError;
 	use crate::types::DynStore;
-	use crate::Node;
+	use crate::{Event, Node};
 
 	#[derive(Default)]
 	struct BroadcastWriteState {
@@ -1105,6 +1105,15 @@ mod tests {
 		}
 	}
 
+	fn tracked_test_transaction(script_pubkey: ScriptBuf) -> Transaction {
+		Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::from_consensus(47),
+			input: vec![],
+			output: vec![TxOut { value: Amount::from_sat(1), script_pubkey }],
+		}
+	}
+
 	#[test]
 	fn rebroadcast_errors_preserve_the_original_unknown_outcome() {
 		let txid = Txid::all_zeros();
@@ -1125,9 +1134,10 @@ mod tests {
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn failed_send_survives_eviction_restart_and_retry_until_accepted() {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
-		let tx = test_transaction();
-		let txid = tx.compute_txid();
 		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
 		let payment = node.onchain_payment();
 		let send_tx = tx.clone();
 		let admission = payment.begin_explicit_broadcast().unwrap();
@@ -1169,6 +1179,22 @@ mod tests {
 		drop(receivers);
 		assert_eq!(accepted_call.await.unwrap(), Ok(txid));
 		assert!(restarted_node.wallet.list_pending_broadcasts().unwrap().is_empty());
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&restarted_node.wallet,
+			&restarted_node.event_queue,
+			&restarted_node.logger,
+			Some(&restarted_node.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(matches!(
+			restarted_node.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
+		));
+		restarted_node.event_handled().unwrap();
+		assert!(restarted_node.next_event().is_none());
 		*restarted_node.is_running.write().unwrap() = false;
 	}
 

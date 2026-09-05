@@ -1353,7 +1353,10 @@ impl Wallet {
 	}
 
 	fn note_locally_applied_unconfirmed(&self, txid: Txid) {
-		self.locally_applied_unconfirmed_txids.lock().unwrap().push((txid, false));
+		let mut locally_applied = self.locally_applied_unconfirmed_txids.lock().unwrap();
+		if !locally_applied.iter().any(|(stored_txid, _)| *stored_txid == txid) {
+			locally_applied.push((txid, false));
+		}
 	}
 
 	pub(crate) fn publish_locally_applied_unconfirmed(&self, txid: Txid) {
@@ -1417,6 +1420,13 @@ impl Wallet {
 			})
 			.map(|(key, _)| *key)
 			.collect::<HashSet<_>>();
+		let unresolved_txids = pending_intents
+			.iter()
+			.filter(|(key, intent)| {
+				intent.has_pending_transaction() && !confirmed_intent_keys.contains(key)
+			})
+			.map(|(_, intent)| intent.active_txid())
+			.collect::<Vec<_>>();
 		let unresolved_txs = pending_intents
 			.into_iter()
 			.filter(|(key, intent)| {
@@ -1427,6 +1437,9 @@ impl Wallet {
 		self.reapply_unresolved_broadcasts(&mut locked_wallet, unresolved_txs)?;
 		self.update_payment_store(&locked_wallet)?;
 		drop(locked_wallet);
+		for txid in unresolved_txids {
+			self.note_locally_applied_unconfirmed(txid);
+		}
 		self.remove_broadcast_intents(confirmed_intent_keys)
 	}
 
