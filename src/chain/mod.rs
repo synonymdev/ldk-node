@@ -424,7 +424,7 @@ mod sync_tests {
 // Process BDK wallet events and emit corresponding ldk-node events via the event queue.
 // When a transaction touches multiple wallet accounts, each wallet emits its own
 // BdkWalletEvent, so we deduplicate by txid before forwarding to the event queue.
-async fn process_wallet_events<L2: Deref>(
+pub(crate) async fn process_wallet_events<L2: Deref>(
 	wallet_events: Vec<BdkWalletEvent>, wallet: &crate::wallet::Wallet,
 	event_queue: &EventQueue<L2>, logger: &Arc<Logger>,
 	channel_manager: Option<&Arc<ChannelManager>>, _chain_monitor: Option<&Arc<ChainMonitor>>,
