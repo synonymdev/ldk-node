@@ -270,6 +270,13 @@ where
 		})
 		.collect();
 
+	let total_available: u64 = weighted_utxos
+		.iter()
+		.fold(0u64, |acc, u| acc.saturating_add(u.utxo.txout().value.to_sat()));
+	if total_available < target_amount {
+		return Err(Error::InsufficientFunds);
+	}
+
 	// BDK's coin selection accounts for input fees, while the transaction
 	// builder also charges the fixed transaction envelope and recipient output.
 	let target = if include_payment_overhead {
@@ -279,14 +286,7 @@ where
 		let base_fee = fee_rate.fee_wu(payment_overhead).ok_or(Error::InvalidFeeRate)?;
 		Amount::from_sat(target_amount).checked_add(base_fee).ok_or(Error::InsufficientFunds)?
 	} else {
-		let min_input_fee = weighted_utxos
-			.iter()
-			.filter_map(|u| fee_rate.fee_wu(u.satisfaction_weight))
-			.min()
-			.unwrap_or(Amount::ZERO);
 		Amount::from_sat(target_amount)
-			.checked_add(min_input_fee)
-			.ok_or(Error::InsufficientFunds)?
 	};
 	let mut rng = OsRng;
 

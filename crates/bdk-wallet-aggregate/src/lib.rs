@@ -2283,6 +2283,45 @@ mod tests {
 	}
 
 	#[test]
+	fn deficit_selection_exact_boundary_does_not_require_extra_input() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		let fee_rate = FeeRate::from_sat_per_kwu(250);
+		let target_deficit = 1_000u64;
+
+		// Create wallet with a candidate UTXO
+		fund_wallet(&mut wallet, Amount::from_sat(10_000), 0x44);
+		let aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+		let drain_script = aggregate
+			.primary_wallet()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+
+		// BDK coin selection requires 1000 sats deficit + 68 sats total selection fee (input + drain overhead) = 1068 sats.
+		// Before the fix, target_amount was inflated by min_input_fee (+28 sats = 1096 sats required), causing failure.
+		let exact_utxo_value = 1_068u64;
+
+		// Re-create wallet with the exact boundary UTXO value
+		let mut persister2 = NoopPersister;
+		let mut wallet2 = create_empty_wallet(&mut persister2);
+		fund_wallet(&mut wallet2, Amount::from_sat(exact_utxo_value), 0x44);
+		let aggregate2 = AggregateWallet::<u8, _>::new(wallet2, persister2, 0, vec![]);
+
+		let selected = utxo::select_utxos_for_deficit(
+			target_deficit,
+			aggregate2.list_unspent(),
+			fee_rate,
+			CoinSelectionAlgorithm::BranchAndBound,
+			&drain_script,
+			&[],
+			&aggregate2.wallets,
+		)
+		.expect("Exact boundary UTXO set must cover deficit plus its selection fee");
+		assert_eq!(selected.len(), 1);
+	}
+
+	#[test]
 	fn only_coin_selection_errors_trigger_the_rbf_fallback() {
 		let insufficient = bdk_wallet::coin_selection::InsufficientFunds {
 			needed: Amount::from_sat(2),
