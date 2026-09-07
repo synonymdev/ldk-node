@@ -266,7 +266,7 @@ cargo ndk \
     -t armeabi-v7a \
     -t arm64-v8a \
     -t x86_64 \
-    build --profile release-smaller --features uniffi || exit 1
+    build --locked --profile release-smaller --features uniffi || exit 1
 
 validate_android_symbols
 create_native_debug_symbols_archive

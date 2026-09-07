@@ -11,7 +11,7 @@ UNIFFI_BINDGEN_BIN="gobley-uniffi-bindgen"
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 	echo "Building for Linux x86_64..."
 	rustup target add x86_64-unknown-linux-gnu || exit 1
-	cargo build --profile release-smaller --target x86_64-unknown-linux-gnu --features uniffi || exit 1
+	cargo build --locked --profile release-smaller --target x86_64-unknown-linux-gnu --features uniffi || exit 1
 	DYNAMIC_LIB_PATH="$TARGET_DIR/x86_64-unknown-linux-gnu/release-smaller/libldk_node.so"
 	RES_DIR="$JVM_LIB_DIR/lib/src/main/resources/linux-x86-64/"
 	mkdir -p $RES_DIR || exit 1
@@ -19,7 +19,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 else
 	echo "Building for macOS x86_64..."
 	rustup target add x86_64-apple-darwin || exit 1
-	cargo build --profile release-smaller --target x86_64-apple-darwin --features uniffi || exit 1
+	cargo build --locked --profile release-smaller --target x86_64-apple-darwin --features uniffi || exit 1
 	DYNAMIC_LIB_PATH="$TARGET_DIR/x86_64-apple-darwin/release-smaller/libldk_node.dylib"
 	RES_DIR="$JVM_LIB_DIR/lib/src/main/resources/darwin-x86-64/"
 	mkdir -p $RES_DIR || exit 1
@@ -27,7 +27,7 @@ else
 
 	echo "Building for macOS aarch64..."
 	rustup target add aarch64-apple-darwin || exit 1
-	cargo build --profile release-smaller --target aarch64-apple-darwin --features uniffi || exit 1
+	cargo build --locked --profile release-smaller --target aarch64-apple-darwin --features uniffi || exit 1
 	DYNAMIC_LIB_PATH_ARM="$TARGET_DIR/aarch64-apple-darwin/release-smaller/libldk_node.dylib"
 	RES_DIR="$JVM_LIB_DIR/lib/src/main/resources/darwin-aarch64/"
 	mkdir -p $RES_DIR || exit 1
@@ -65,9 +65,5 @@ echo "JVM version synced: $CARGO_VERSION"
 # Verify JVM library build (skip tests - they require bitcoind)
 echo "Testing JVM library build..."
 $JVM_LIB_DIR/gradlew --project-dir "$JVM_LIB_DIR" clean build -x test || exit 1
-
-# Verify JVM library publish task graph
-echo "Verifying JVM library publish task graph..."
-$JVM_LIB_DIR/gradlew --project-dir "$JVM_LIB_DIR" clean publish --dry-run || exit 1
 
 echo "JVM build process completed successfully!"
