@@ -563,8 +563,24 @@ impl Wallet {
 		Ok(())
 	}
 
-	pub(crate) fn end_broadcast_dispatch(&self, txid: &Txid) {
-		self.inflight_broadcast_txids.lock().unwrap().remove(txid);
+	pub(crate) fn end_broadcast_dispatches(&self, txids: &[Txid]) {
+		let _intent = self.broadcast_intent_lock.lock().unwrap();
+		{
+			let mut inflight = self.inflight_broadcast_txids.lock().unwrap();
+			for txid in txids {
+				inflight.remove(txid);
+			}
+		}
+		for txid in txids {
+			if let Err(e) = self.cleanup_delivered_broadcast_event_if_resolved(*txid) {
+				log_error!(
+					self.logger,
+					"Failed to clean delivered broadcast event {}: {}",
+					txid,
+					e
+				);
+			}
+		}
 	}
 
 	pub(crate) fn is_funding_transaction(
@@ -1514,7 +1530,8 @@ impl Wallet {
 			.unwrap()
 			.values()
 			.any(|intent| intent.transactions.iter().any(|tx| tx.compute_txid() == txid));
-		if belongs_to_intent {
+		let dispatch_inflight = self.inflight_broadcast_txids.lock().unwrap().contains(&txid);
+		if belongs_to_intent || dispatch_inflight {
 			self.write_broadcast_event_state(txid, BroadcastEventState::Delivered)
 		} else {
 			self.forget_locally_applied_unconfirmed(&[txid])
@@ -4333,6 +4350,33 @@ mod tests {
 		assert!(node.wallet.take_locally_applied_unconfirmed_txids().is_empty());
 		node.wallet.publish_locally_applied_unconfirmed(txid).unwrap();
 		assert_eq!(node.wallet.take_locally_applied_unconfirmed_txids(), vec![txid]);
+	}
+
+	#[test]
+	fn rbf_event_outbox_failures_keep_the_active_replacement_pending() {
+		let concrete_store = Arc::new(NamespaceFailStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = replacement_test_node(store);
+		let original = replacement_test_transaction(41);
+		let replacement = replacement_test_transaction(42);
+		let replacement_txid = replacement.compute_txid();
+		let intent = BroadcastIntent::replacement(None, original, replacement).unwrap();
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+		node.wallet.note_locally_applied_unconfirmed(replacement_txid).unwrap();
+
+		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+		assert_eq!(
+			node.wallet.clear_broadcast_intent(&replacement_txid),
+			Err(Error::PersistenceFailed)
+		);
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![replacement_txid]);
+
+		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+		assert_eq!(
+			node.wallet.publish_locally_applied_unconfirmed(replacement_txid),
+			Err(Error::PersistenceFailed)
+		);
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![replacement_txid]);
 	}
 
 	#[test]

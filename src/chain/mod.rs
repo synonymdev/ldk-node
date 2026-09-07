@@ -1334,9 +1334,7 @@ impl ChainSource {
 					self.tx_broadcaster.pause_explicit_broadcasts();
 					while let Ok(request) = explicit_receiver.try_recv() {
 						if request.try_claim() {
-							if let Some(result_sender) = request.result_sender {
-								let _ = result_sender.send(Err(crate::tx_broadcaster::TxBroadcastError::NotDispatched));
-							}
+							request.send_result(Err(crate::tx_broadcaster::TxBroadcastError::NotDispatched));
 						}
 					}
 					log_debug!(
@@ -1365,11 +1363,20 @@ impl ChainSource {
 			result_sender,
 			ldk_claim: _ldk_claim,
 			explicit_claim: _explicit_claim,
+			explicit_guard,
 		} = request;
 		let result = match &self.kind {
-			ChainSourceKind::Esplora(source) => source.process_broadcast_package(package).await,
-			ChainSourceKind::Electrum(source) => source.process_broadcast_package(package).await,
-			ChainSourceKind::Bitcoind(source) => source.process_broadcast_package(package).await,
+			ChainSourceKind::Esplora(source) => {
+				let _explicit_guard = explicit_guard;
+				source.process_broadcast_package(package).await
+			},
+			ChainSourceKind::Electrum(source) => {
+				source.process_broadcast_package(package, explicit_guard).await
+			},
+			ChainSourceKind::Bitcoind(source) => {
+				let _explicit_guard = explicit_guard;
+				source.process_broadcast_package(package).await
+			},
 		};
 		if let Some(result_sender) = result_sender {
 			let _ = result_sender.send(result);

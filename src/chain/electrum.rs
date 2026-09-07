@@ -42,7 +42,7 @@ use crate::fee_estimator::{
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
 use crate::tx_broadcaster::{
-	classify_rpc_broadcast_error, validate_broadcast_txid, TxBroadcastError,
+	classify_rpc_broadcast_error, validate_broadcast_txid, ExplicitBroadcastGuard, TxBroadcastError,
 };
 use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::NodeMetrics;
@@ -528,7 +528,7 @@ impl ElectrumChainSource {
 	}
 
 	pub(crate) async fn process_broadcast_package(
-		&self, package: Vec<Transaction>,
+		&self, package: Vec<Transaction>, explicit_guard: Option<ExplicitBroadcastGuard>,
 	) -> Result<(), TxBroadcastError> {
 		let electrum_client: Arc<ElectrumRuntimeClient> =
 			if let Some(client) = self.electrum_runtime_status.read().unwrap().client().as_ref() {
@@ -540,7 +540,7 @@ impl ElectrumChainSource {
 
 		let mut package_result = Ok(());
 		for tx in package {
-			let result = electrum_client.broadcast(tx).await;
+			let result = electrum_client.broadcast(tx, explicit_guard.clone()).await;
 			if package_result.is_ok() {
 				package_result = result;
 			}
@@ -841,14 +841,18 @@ impl ElectrumRuntimeClient {
 			})
 	}
 
-	async fn broadcast(&self, tx: Transaction) -> Result<(), TxBroadcastError> {
+	async fn broadcast(
+		&self, tx: Transaction, explicit_guard: Option<ExplicitBroadcastGuard>,
+	) -> Result<(), TxBroadcastError> {
 		let electrum_client = Arc::clone(&self.electrum_client);
 
 		let txid = tx.compute_txid();
 		let tx_bytes = tx.encode();
 
-		let spawn_fut =
-			self.runtime_handle.spawn_blocking(move || electrum_client.transaction_broadcast(&tx));
+		let spawn_fut = self.runtime_handle.spawn_blocking(move || {
+			let _explicit_guard = explicit_guard;
+			electrum_client.transaction_broadcast(&tx)
+		});
 
 		match spawn_fut.await {
 			Ok(broadcast_result) => {
@@ -1277,7 +1281,7 @@ mod tests {
 			output: vec![],
 		};
 
-		assert_eq!(runtime.block_on(client.broadcast(tx)), Err(TxBroadcastError::Rejected));
+		assert_eq!(runtime.block_on(client.broadcast(tx, None)), Err(TxBroadcastError::Rejected));
 		server_thread.join().unwrap();
 	}
 

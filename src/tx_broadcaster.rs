@@ -27,6 +27,8 @@ pub(crate) enum TxBroadcastError {
 	Timeout,
 }
 
+pub(crate) type ExplicitBroadcastGuard = Arc<dyn Send + Sync>;
+
 pub(crate) fn classify_rpc_broadcast_error(
 	code: Option<i64>, message: &str,
 ) -> Result<(), TxBroadcastError> {
@@ -143,6 +145,7 @@ pub(crate) struct BroadcastRequest {
 	pub(crate) package: Vec<Transaction>,
 	pub(crate) result_sender: Option<oneshot::Sender<Result<(), TxBroadcastError>>>,
 	pub(crate) explicit_claim: Option<Arc<ExplicitBroadcastClaim>>,
+	pub(crate) explicit_guard: Option<ExplicitBroadcastGuard>,
 	pub(crate) ldk_claim: Option<LdkBroadcastClaim>,
 }
 
@@ -160,6 +163,7 @@ impl Drop for LdkBroadcastClaim {
 impl BroadcastRequest {
 	fn explicit(
 		package: Vec<Transaction>, result_sender: oneshot::Sender<Result<(), TxBroadcastError>>,
+		explicit_guard: Option<ExplicitBroadcastGuard>,
 	) -> (Self, Arc<ExplicitBroadcastClaim>) {
 		let explicit_claim = Arc::new(ExplicitBroadcastClaim::new());
 		(
@@ -167,6 +171,7 @@ impl BroadcastRequest {
 				package,
 				result_sender: Some(result_sender),
 				explicit_claim: Some(Arc::clone(&explicit_claim)),
+				explicit_guard,
 				ldk_claim: None,
 			},
 			explicit_claim,
@@ -181,12 +186,21 @@ impl BroadcastRequest {
 			package,
 			result_sender: None,
 			explicit_claim: None,
+			explicit_guard: None,
 			ldk_claim: Some(LdkBroadcastClaim { key, queued_packages }),
 		}
 	}
 
 	pub(crate) fn try_claim(&self) -> bool {
 		self.explicit_claim.as_ref().map_or(true, |claim| claim.try_claim())
+	}
+
+	pub(crate) fn send_result(self, result: Result<(), TxBroadcastError>) {
+		let Self { result_sender, explicit_guard, .. } = self;
+		drop(explicit_guard);
+		if let Some(result_sender) = result_sender {
+			let _ = result_sender.send(result);
+		}
 	}
 }
 
@@ -219,9 +233,7 @@ impl BroadcastQueueReceivers {
 			if !request.try_claim() {
 				continue;
 			}
-			if let Some(result_sender) = request.result_sender {
-				let _ = result_sender.send(Err(TxBroadcastError::NotDispatched));
-			}
+			request.send_result(Err(TxBroadcastError::NotDispatched));
 		}
 	}
 }
@@ -300,20 +312,24 @@ where
 
 	pub(crate) async fn broadcast_transaction(
 		&self, admission: ExplicitBroadcastAdmission, tx: Transaction,
+		explicit_guard: Option<ExplicitBroadcastGuard>,
 	) -> Result<(), TxBroadcastError> {
 		self.broadcast_transaction_with_timeout(
 			admission,
 			tx,
 			Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
+			explicit_guard,
 		)
 		.await
 	}
 
 	async fn broadcast_transaction_with_timeout(
 		&self, admission: ExplicitBroadcastAdmission, tx: Transaction, timeout: Duration,
+		explicit_guard: Option<ExplicitBroadcastGuard>,
 	) -> Result<(), TxBroadcastError> {
 		let (result_sender, result_receiver) = oneshot::channel();
-		let (request, explicit_claim) = BroadcastRequest::explicit(vec![tx], result_sender);
+		let (request, explicit_claim) =
+			BroadcastRequest::explicit(vec![tx], result_sender, explicit_guard);
 		{
 			let active_run = self.explicit_broadcast_run.lock().unwrap();
 			if !active_run.as_ref().is_some_and(|active_run| Arc::ptr_eq(active_run, &admission.0))
@@ -412,11 +428,11 @@ mod tests {
 	async fn explicit_broadcast_returns_after_backend_acceptance() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
 		let admission = broadcaster.begin_explicit_broadcast().unwrap();
-		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction());
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction(), None);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
-			request.result_sender.unwrap().send(Ok(())).unwrap();
+			request.send_result(Ok(()));
 		};
 
 		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
@@ -427,11 +443,11 @@ mod tests {
 	async fn explicit_broadcast_propagates_backend_rejection() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
 		let admission = broadcaster.begin_explicit_broadcast().unwrap();
-		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction());
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction(), None);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
-			request.result_sender.unwrap().send(Err(TxBroadcastError::Rejected)).unwrap();
+			request.send_result(Err(TxBroadcastError::Rejected));
 		};
 
 		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
@@ -442,11 +458,11 @@ mod tests {
 	async fn explicit_broadcast_propagates_backend_failure() {
 		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
 		let admission = broadcaster.begin_explicit_broadcast().unwrap();
-		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction());
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction(), None);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
-			request.result_sender.unwrap().send(Err(TxBroadcastError::Failed)).unwrap();
+			request.send_result(Err(TxBroadcastError::Failed));
 		};
 
 		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
@@ -461,12 +477,13 @@ mod tests {
 			admission,
 			test_transaction(),
 			Duration::from_millis(10),
+			None,
 		);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
 			tokio::time::sleep(Duration::from_millis(20)).await;
-			request.result_sender.unwrap().send(Ok(())).unwrap();
+			request.send_result(Ok(()));
 		};
 
 		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
@@ -482,6 +499,7 @@ mod tests {
 				admission,
 				test_transaction(),
 				Duration::from_millis(10),
+				None,
 			)
 			.await;
 		assert_eq!(cancelled_result, Err(TxBroadcastError::NotDispatched));
@@ -492,12 +510,13 @@ mod tests {
 			admission,
 			live_tx.clone(),
 			Duration::from_secs(1),
+			None,
 		);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
 			assert_eq!(request.package, vec![live_tx]);
-			request.result_sender.unwrap().send(Ok(())).unwrap();
+			request.send_result(Ok(()));
 		};
 
 		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
@@ -515,6 +534,7 @@ mod tests {
 					admission,
 					test_transaction(),
 					Duration::from_secs(1),
+					None,
 				)
 				.await
 		});
@@ -529,12 +549,13 @@ mod tests {
 			admission,
 			live_tx.clone(),
 			Duration::from_secs(1),
+			None,
 		);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
 			assert_eq!(request.package, vec![live_tx]);
-			request.result_sender.unwrap().send(Ok(())).unwrap();
+			request.send_result(Ok(()));
 		};
 
 		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
@@ -549,6 +570,7 @@ mod tests {
 			admission,
 			test_transaction(),
 			Duration::from_secs(1),
+			None,
 		);
 		let stop_fut = async {
 			tokio::task::yield_now().await;
@@ -579,6 +601,7 @@ mod tests {
 					stale_admission,
 					test_transaction(),
 					Duration::from_secs(1),
+					None,
 				)
 				.await,
 			Err(TxBroadcastError::NotDispatched)
@@ -590,12 +613,13 @@ mod tests {
 			admission,
 			live_tx.clone(),
 			Duration::from_secs(1),
+			None,
 		);
 		let process_fut = async {
 			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
 			assert_eq!(request.package, vec![live_tx]);
-			request.result_sender.unwrap().send(Ok(())).unwrap();
+			request.send_result(Ok(()));
 		};
 
 		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
@@ -637,7 +661,7 @@ mod tests {
 		for _ in 0..EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE {
 			let (result_sender, _result_receiver) = tokio::sync::oneshot::channel();
 			let (request, _claim) =
-				BroadcastRequest::explicit(vec![test_transaction()], result_sender);
+				BroadcastRequest::explicit(vec![test_transaction()], result_sender, None);
 			broadcaster.explicit_sender.try_send(request).unwrap();
 		}
 
@@ -647,6 +671,7 @@ mod tests {
 					broadcaster.begin_explicit_broadcast().unwrap(),
 					test_transaction(),
 					Duration::from_secs(1),
+					None,
 				)
 				.await,
 			Err(TxBroadcastError::NotDispatched)

@@ -2757,7 +2757,7 @@ mod tests {
 		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let second_request = receivers.recv().await.unwrap();
 		assert_eq!(second_request.package, vec![tx]);
-		second_request.result_sender.unwrap().send(Ok(())).unwrap();
+		second_request.send_result(Ok(()));
 		drop(receivers);
 		assert_eq!(second_call.await.unwrap(), Ok(txid));
 		assert!(node.wallet.list_pending_broadcasts().unwrap().is_empty());

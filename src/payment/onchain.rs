@@ -7,7 +7,7 @@
 
 //! Holds a payment handler allowing to send and receive on-chain payments.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use bitcoin::{Address, Txid};
 
@@ -16,7 +16,7 @@ use crate::error::Error;
 use crate::fee_estimator::ConfirmationTarget;
 use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::runtime::RuntimeControl;
-use crate::tx_broadcaster::{ExplicitBroadcastAdmission, TxBroadcastError};
+use crate::tx_broadcaster::{ExplicitBroadcastAdmission, ExplicitBroadcastGuard, TxBroadcastError};
 use crate::types::{Broadcaster, ChannelManager, SpendableUtxo, Wallet};
 use crate::wallet::{CoinSelectionAlgorithm, OnchainSendAmount};
 
@@ -124,19 +124,28 @@ pub struct OnchainPayment {
 
 struct BroadcastDispatchLease {
 	wallet: Arc<Wallet>,
-	txid: Txid,
+	txids: Mutex<Vec<Txid>>,
 }
 
 impl BroadcastDispatchLease {
 	fn acquire(wallet: &Arc<Wallet>, txid: Txid) -> Result<Self, Error> {
 		wallet.begin_broadcast_dispatch(txid)?;
-		Ok(Self { wallet: Arc::clone(wallet), txid })
+		Ok(Self { wallet: Arc::clone(wallet), txids: Mutex::new(vec![txid]) })
+	}
+
+	fn include(&self, txid: Txid) -> Result<(), Error> {
+		let mut txids = self.txids.lock().unwrap();
+		if !txids.contains(&txid) {
+			self.wallet.begin_broadcast_dispatch(txid)?;
+			txids.push(txid);
+		}
+		Ok(())
 	}
 }
 
 impl Drop for BroadcastDispatchLease {
 	fn drop(&mut self) {
-		self.wallet.end_broadcast_dispatch(&self.txid);
+		self.wallet.end_broadcast_dispatches(&self.txids.lock().unwrap());
 	}
 }
 
@@ -157,12 +166,12 @@ impl OnchainPayment {
 		&self, admission: ExplicitBroadcastAdmission, tx: bitcoin::Transaction,
 	) -> Result<Txid, Error> {
 		let txid = tx.compute_txid();
-		let dispatch_lease = BroadcastDispatchLease::acquire(&self.wallet, txid)?;
+		let dispatch_lease = Arc::new(BroadcastDispatchLease::acquire(&self.wallet, txid)?);
 		self.wallet.prepare_pending_broadcast(&tx)?;
-		let dispatch_result = match self
-			.runtime
-			.try_block_on(self.tx_broadcaster.broadcast_transaction(admission, tx.clone()))
-		{
+		let explicit_guard: ExplicitBroadcastGuard = dispatch_lease.clone();
+		let dispatch_result = match self.runtime.try_block_on(
+			self.tx_broadcaster.broadcast_transaction(admission, tx.clone(), Some(explicit_guard)),
+		) {
 			Ok(result) => result,
 			Err(Error::NotRunning) => {
 				drop(dispatch_lease);
@@ -172,18 +181,7 @@ impl OnchainPayment {
 			Err(error) => return Err(error),
 		};
 		match dispatch_result {
-			Ok(()) => {
-				self.wallet.publish_locally_applied_unconfirmed(txid)?;
-				if let Err(e) = self.wallet.clear_broadcast_intent(&txid) {
-					log_error!(
-						self.logger,
-						"Failed to clear accepted broadcast intent {}: {}",
-						txid,
-						e
-					);
-				}
-				Ok(txid)
-			},
+			Ok(()) => Ok(self.record_accepted_broadcast(txid)),
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
 				drop(dispatch_lease);
 				if self.wallet.abandon_broadcast_intent(&tx).is_err() {
@@ -192,9 +190,27 @@ impl OnchainPayment {
 				Err(Self::initial_broadcast_error(error, txid))
 			},
 			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
-				self.wallet.publish_locally_applied_unconfirmed(txid)?;
+				self.record_unknown_broadcast(txid);
 				Err(Self::initial_broadcast_error(error, txid))
 			},
+		}
+	}
+
+	fn record_accepted_broadcast(&self, txid: Txid) -> Txid {
+		if let Err(e) = self.wallet.clear_broadcast_intent(&txid) {
+			log_error!(self.logger, "Failed to persist accepted broadcast outcome {}: {}", txid, e);
+		}
+		txid
+	}
+
+	fn record_unknown_broadcast(&self, txid: Txid) {
+		if let Err(e) = self.wallet.publish_locally_applied_unconfirmed(txid) {
+			log_error!(
+				self.logger,
+				"Failed to persist acceptance-unknown broadcast event {}: {}",
+				txid,
+				e
+			);
 		}
 	}
 
@@ -748,30 +764,22 @@ impl OnchainPayment {
 			return Err(Error::NotRunning);
 		}
 		let admission = self.begin_explicit_broadcast()?;
-		let _dispatch_lease = BroadcastDispatchLease::acquire(&self.wallet, *txid)?;
+		let dispatch_lease = Arc::new(BroadcastDispatchLease::acquire(&self.wallet, *txid)?);
 
 		let tx = self.wallet.recover_pending_broadcast(txid)?.ok_or(Error::TransactionNotFound)?;
-		let dispatch_result = match self
-			.runtime
-			.try_block_on(self.tx_broadcaster.broadcast_transaction(admission, tx))
-		{
+		let explicit_guard: ExplicitBroadcastGuard = dispatch_lease.clone();
+		let dispatch_result = match self.runtime.try_block_on(
+			self.tx_broadcaster.broadcast_transaction(admission, tx, Some(explicit_guard)),
+		) {
 			Ok(result) => result,
 			Err(error) => return Err(error),
 		};
 		match dispatch_result {
-			Ok(()) => {
-				self.wallet.publish_locally_applied_unconfirmed(*txid)?;
-				if let Err(e) = self.wallet.clear_broadcast_intent(txid) {
-					log_error!(
-						self.logger,
-						"Failed to clear accepted rebroadcast intent {}: {}",
-						txid,
-						e
-					);
-				}
-				Ok(*txid)
+			Ok(()) => Ok(self.record_accepted_broadcast(*txid)),
+			Err(error) => {
+				self.record_unknown_broadcast(*txid);
+				Err(Self::rebroadcast_error(error, *txid))
 			},
-			Err(error) => Err(Self::rebroadcast_error(error, *txid)),
 		}
 	}
 
@@ -866,7 +874,7 @@ impl OnchainPayment {
 			return Err(Error::NotRunning);
 		}
 		let admission = self.begin_explicit_broadcast()?;
-		let _dispatch_lease = BroadcastDispatchLease::acquire(&self.wallet, *txid)?;
+		let dispatch_lease = Arc::new(BroadcastDispatchLease::acquire(&self.wallet, *txid)?);
 
 		// Pass through to the wallet implementation
 		#[cfg(not(feature = "uniffi"))]
@@ -877,10 +885,11 @@ impl OnchainPayment {
 		let replacement =
 			self.wallet.prepare_rbf_broadcast(txid, fee_rate_param, &self.channel_manager)?;
 		let replacement_txid = replacement.compute_txid();
-		let dispatch_result = match self
-			.runtime
-			.try_block_on(self.tx_broadcaster.broadcast_transaction(admission, replacement))
-		{
+		dispatch_lease.include(replacement_txid)?;
+		let explicit_guard: ExplicitBroadcastGuard = dispatch_lease.clone();
+		let dispatch_result = match self.runtime.try_block_on(
+			self.tx_broadcaster.broadcast_transaction(admission, replacement, Some(explicit_guard)),
+		) {
 			Ok(result) => result,
 			Err(Error::NotRunning) => {
 				self.wallet.reject_rbf_broadcast(&replacement_txid)?;
@@ -889,18 +898,7 @@ impl OnchainPayment {
 			Err(error) => return Err(error),
 		};
 		match dispatch_result {
-			Ok(()) => {
-				self.wallet.publish_locally_applied_unconfirmed(replacement_txid)?;
-				if let Err(e) = self.wallet.clear_broadcast_intent(&replacement_txid) {
-					log_error!(
-						self.logger,
-						"Failed to clear accepted RBF broadcast intent {}: {}",
-						replacement_txid,
-						e
-					);
-				}
-				Ok(replacement_txid)
-			},
+			Ok(()) => Ok(self.record_accepted_broadcast(replacement_txid)),
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
 				if self.wallet.reject_rbf_broadcast(&replacement_txid).is_err() {
 					return Err(Error::OnchainTxBroadcastFailed { txid: replacement_txid });
@@ -908,7 +906,7 @@ impl OnchainPayment {
 				Err(Self::initial_broadcast_error(error, replacement_txid))
 			},
 			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
-				self.wallet.publish_locally_applied_unconfirmed(replacement_txid)?;
+				self.record_unknown_broadcast(replacement_txid);
 				Err(Self::initial_broadcast_error(error, replacement_txid))
 			},
 		}
@@ -1035,6 +1033,7 @@ mod tests {
 		inner: InMemoryStore,
 		state: Mutex<BroadcastWriteState>,
 		state_changed: Condvar,
+		fail_next_write_namespace: Mutex<Option<String>>,
 	}
 
 	impl BlockingBroadcastIntentStore {
@@ -1043,7 +1042,12 @@ mod tests {
 				inner: InMemoryStore::new(),
 				state: Mutex::new(BroadcastWriteState::default()),
 				state_changed: Condvar::new(),
+				fail_next_write_namespace: Mutex::new(None),
 			}
+		}
+
+		fn fail_next_write_in(&self, primary_namespace: &str) {
+			*self.fail_next_write_namespace.lock().unwrap() = Some(primary_namespace.to_owned());
 		}
 
 		fn block_next_broadcast_intent_write(&self) {
@@ -1078,6 +1082,16 @@ mod tests {
 				state = self.state_changed.wait(state).unwrap();
 			}
 			state.armed = false;
+		}
+
+		fn fail_armed_write(&self, primary_namespace: &str) -> io::Result<()> {
+			let mut namespace = self.fail_next_write_namespace.lock().unwrap();
+			if namespace.as_deref() == Some(primary_namespace) {
+				namespace.take();
+				Err(io::Error::new(io::ErrorKind::Other, "Injected namespace write failure"))
+			} else {
+				Ok(())
+			}
 		}
 	}
 
@@ -1118,6 +1132,7 @@ mod tests {
 			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
 		) -> io::Result<()> {
 			self.maybe_block_broadcast_intent_write(primary_namespace);
+			self.fail_armed_write(primary_namespace)?;
 			KVStoreSync::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
 		}
 
@@ -1194,7 +1209,7 @@ mod tests {
 		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let initial_request = receivers.recv().await.unwrap();
 		assert_eq!(initial_request.package, vec![tx.clone()]);
-		initial_request.result_sender.unwrap().send(Err(TxBroadcastError::Failed)).unwrap();
+		initial_request.send_result(Err(TxBroadcastError::Failed));
 		drop(receivers);
 		assert_eq!(initial_call.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
 		crate::chain::process_wallet_events(
@@ -1226,7 +1241,7 @@ mod tests {
 		let mut receivers = restarted_node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let retry_request = receivers.recv().await.unwrap();
 		assert_eq!(retry_request.package, vec![tx.clone()]);
-		retry_request.result_sender.unwrap().send(Err(TxBroadcastError::NotDispatched)).unwrap();
+		retry_request.send_result(Err(TxBroadcastError::NotDispatched));
 		drop(receivers);
 		assert_eq!(retry_call.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
 		assert_eq!(restarted_node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
@@ -1237,7 +1252,7 @@ mod tests {
 		let mut receivers = restarted_node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let accepted_request = receivers.recv().await.unwrap();
 		assert_eq!(accepted_request.package, vec![tx]);
-		accepted_request.result_sender.unwrap().send(Ok(())).unwrap();
+		accepted_request.send_result(Ok(()));
 		drop(receivers);
 		assert_eq!(accepted_call.await.unwrap(), Ok(txid));
 		assert!(restarted_node.wallet.list_pending_broadcasts().unwrap().is_empty());
@@ -1269,7 +1284,7 @@ mod tests {
 		});
 		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let request = receivers.recv().await.unwrap();
-		request.result_sender.unwrap().send(Ok(())).unwrap();
+		request.send_result(Ok(()));
 		drop(receivers);
 		assert_eq!(send.await.unwrap(), Ok(txid));
 		drop(node);
@@ -1337,9 +1352,195 @@ mod tests {
 			node.wallet.abandon_broadcast_intent_by_txid(&txid),
 			Err(Error::OnchainTxBroadcastFailed { txid })
 		);
-		request.result_sender.unwrap().send(Err(TxBroadcastError::Failed)).unwrap();
+		request.send_result(Err(TxBroadcastError::Failed));
 		drop(receivers);
 		assert_eq!(dispatch.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn stopped_worker_retains_dispatch_lease_until_blocking_backend_finishes() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = test_node(store);
+		let tx = test_transaction();
+		let txid = tx.compute_txid();
+		let payment = node.onchain_payment();
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		let dispatch = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, tx)
+		});
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		let crate::tx_broadcaster::BroadcastRequest {
+			result_sender,
+			explicit_guard,
+			package: _,
+			explicit_claim: _,
+			ldk_claim: _,
+		} = request;
+		let (release_sender, release_receiver) = std::sync::mpsc::channel();
+		let backend = tokio::task::spawn_blocking(move || {
+			let _explicit_guard = explicit_guard.unwrap();
+			release_receiver.recv().unwrap();
+		});
+		node.tx_broadcaster.pause_explicit_broadcasts();
+		drop(result_sender);
+		drop(receivers);
+
+		assert_eq!(dispatch.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		assert_eq!(
+			node.wallet.abandon_broadcast_intent_by_txid(&txid),
+			Err(Error::OnchainTxBroadcastFailed { txid })
+		);
+
+		release_sender.send(()).unwrap();
+		backend.await.unwrap();
+		node.wallet.abandon_broadcast_intent_by_txid(&txid).unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn accepted_send_preserves_result_when_event_outbox_write_fails() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		let payment = node.onchain_payment();
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		let send_tx = tx.clone();
+		let dispatch = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, send_tx)
+		});
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+		let crate::tx_broadcaster::BroadcastRequest {
+			result_sender,
+			explicit_guard,
+			package: _,
+			explicit_claim: _,
+			ldk_claim: _,
+		} = request;
+		result_sender.unwrap().send(Ok(())).unwrap();
+		drop(explicit_guard);
+		drop(receivers);
+
+		assert_eq!(dispatch.await.unwrap(), Ok(txid));
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		assert!(node.wallet.ready_locally_applied_unconfirmed_txids().unwrap().is_empty());
+		drop(node);
+
+		let restarted = test_node(store);
+		restarted.wallet.apply_mempool_txs(vec![(tx, 1)], Vec::new()).unwrap();
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&restarted.wallet,
+			&restarted.event_queue,
+			&restarted.logger,
+			Some(&restarted.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(matches!(
+			restarted.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
+		));
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn unknown_send_preserves_txid_error_when_event_outbox_write_fails() {
+		for backend_error in [TxBroadcastError::Failed, TxBroadcastError::Timeout] {
+			let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+			let store: Arc<DynStore> = concrete_store.clone();
+			let node = test_node(store);
+			let tx = test_transaction();
+			let txid = tx.compute_txid();
+			let payment = node.onchain_payment();
+			let admission = payment.begin_explicit_broadcast().unwrap();
+			let dispatch = tokio::task::spawn_blocking(move || {
+				payment.dispatch_prepared_transaction(admission, tx)
+			});
+			let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+			let crate::tx_broadcaster::BroadcastRequest {
+				result_sender,
+				explicit_guard,
+				package: _,
+				explicit_claim: _,
+				ldk_claim: _,
+			} = request;
+			result_sender.unwrap().send(Err(backend_error)).unwrap();
+			drop(explicit_guard);
+			drop(receivers);
+
+			let expected_error = match backend_error {
+				TxBroadcastError::Failed => Error::OnchainTxBroadcastFailed { txid },
+				TxBroadcastError::Timeout => Error::OnchainTxBroadcastTimeout { txid },
+				_ => unreachable!(),
+			};
+			assert_eq!(dispatch.await.unwrap(), Err(expected_error));
+			assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
+		}
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn sync_delivery_during_dispatch_is_not_republished_by_late_success() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = test_node(store);
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		let payment = node.onchain_payment();
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		let send_tx = tx.clone();
+		let dispatch = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, send_tx)
+		});
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+
+		node.wallet.apply_mempool_txs(vec![(tx, 1)], Vec::new()).unwrap();
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&node.wallet,
+			&node.event_queue,
+			&node.logger,
+			Some(&node.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
+		));
+		node.event_handled().unwrap();
+
+		let crate::tx_broadcaster::BroadcastRequest {
+			result_sender,
+			explicit_guard,
+			package: _,
+			explicit_claim: _,
+			ldk_claim: _,
+		} = request;
+		result_sender.unwrap().send(Ok(())).unwrap();
+		drop(explicit_guard);
+		drop(receivers);
+		assert_eq!(dispatch.await.unwrap(), Ok(txid));
+
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&node.wallet,
+			&node.event_queue,
+			&node.logger,
+			Some(&node.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(node.next_event().is_none());
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1355,7 +1556,7 @@ mod tests {
 		let retry = tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
 		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let request = receivers.recv().await.unwrap();
-		request.result_sender.unwrap().send(Err(TxBroadcastError::Rejected)).unwrap();
+		request.send_result(Err(TxBroadcastError::Rejected));
 		drop(receivers);
 
 		assert_eq!(retry.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
