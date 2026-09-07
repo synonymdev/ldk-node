@@ -248,11 +248,12 @@ To regenerate ALL bindings (Swift, Kotlin, Python), run from the repo root:
 ## Version Bumping Checklist
 When bumping the version, ALWAYS update ALL of these files:
 1. `Cargo.toml` - main crate version
-2. `bindings/kotlin/ldk-node-android/gradle.properties` - Android version
-3. `bindings/kotlin/ldk-node-jvm/gradle.properties` - JVM version
-4. `bindings/python/pyproject.toml` - Python version
-5. `Package.swift` - Swift tag (and checksum after building)
-6. `CHANGELOG.md` - Add release notes section at top
+2. `Cargo.lock` - refresh with `cargo update -w` after changing versions and before running `./bindgen.sh`
+3. `bindings/kotlin/ldk-node-android/gradle.properties` - Android version
+4. `bindings/kotlin/ldk-node-jvm/gradle.properties` - JVM version
+5. `bindings/python/pyproject.toml` - Python version
+6. `Package.swift` - Swift tag (and checksum after building)
+7. `CHANGELOG.md` - Add release notes section at top
 
 ## CHANGELOG
 - The Synonym fork maintains a SINGLE section at the top: `# X.X.X (Synonym Fork)`

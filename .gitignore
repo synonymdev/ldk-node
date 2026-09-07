@@ -2,6 +2,7 @@
 # will have compiled files and executables
 /target/
 /bindings/uniffi-bindgen/target/
+/bindings/uniffi-bindgen/Cargo.lock
 /bindings/kotlin/ldk-node-android/native-debug-symbols.zip
 # Built by publish-android.yml / uniffi_bindgen_generate_kotlin_android.sh
 /bindings/kotlin/ldk-node-android/lib/src/main/jniLibs/
