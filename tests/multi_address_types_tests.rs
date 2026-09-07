@@ -38,6 +38,15 @@ mod helpers {
 			.unwrap()
 	}
 
+	/// Standard regtest P2TR recipient address (43-byte output).
+	pub fn test_p2tr_recipient() -> Address {
+		let secp = bitcoin::secp256k1::Secp256k1::new();
+		let secret = bitcoin::secp256k1::SecretKey::from_slice(&[0x01; 32]).unwrap();
+		let keypair = bitcoin::secp256k1::Keypair::from_secret_key(&secp, &secret);
+		let (xonly, _) = keypair.x_only_public_key();
+		Address::p2tr(&secp, xonly, None, bitcoin::Network::Regtest)
+	}
+
 	/// Fund a single address, mine 6 blocks, sync the node, and sleep.
 	pub async fn fund_and_sync(
 		bitcoind: &BitcoinD, electrsd: &ElectrsD, node: &Node, addr: Address, amount: u64,
@@ -2548,17 +2557,22 @@ mod cpfp {
 // Coin Selection
 // ---------------------------------------------------------------------------
 mod coin_selection {
-	use bitcoin::FeeRate;
+	use std::collections::HashMap;
+
+	use bitcoin::{FeeRate, Txid};
 	use electrum_client::ElectrumApi;
+	use ldk_node::bitcoin::Amount;
 	use ldk_node::config::AddressType;
+	use ldk_node::NodeError;
+	use serde_json::{json, Value};
 
 	use crate::common::{
-		api_fee_rate, open_channel, setup_bitcoind_and_electrsd, setup_node, wait_for_tx,
-		TestChainSource,
+		api_fee_rate, generate_blocks_and_wait, open_channel, premine_blocks,
+		setup_bitcoind_and_electrsd, setup_node, wait_for_tx, TestChainSource,
 	};
 	use crate::helpers::{
 		fund_and_sync, fund_multiple_and_sync, fund_peer_node_and_sync, node_config,
-		test_recipient, CHANNEL_PEER_FUNDING_SATS,
+		test_p2tr_recipient, test_recipient, CHANNEL_PEER_FUNDING_SATS,
 	};
 
 	// --- API & fee calculation ---
@@ -2849,6 +2863,127 @@ mod coin_selection {
 
 		let tx = electrsd.client.transaction_get(&txid).unwrap();
 		assert!(tx.input.len() <= 3, "Should pick optimal UTXOs, got {}", tx.input.len());
+
+		node.stop().unwrap();
+	}
+
+	/// A selection from `select_utxos_with_algorithm` must be accepted by
+	/// `send_to_address` for the same target amount and fee rate, for every
+	/// supported algorithm. Regression test for
+	/// https://github.com/synonymdev/ldk-node/issues/104 (BranchAndBound always failed).
+	///
+	/// Boundary fixture: at 1,000 sat/kwu (1 sat/vB), 10,470 sats covers the
+	/// 10,000-sat target + 1 input fee (271 sats) + 188 WU base fee (188 sats),
+	/// so a 188-WU allowance selects only the 10,470-sat UTXO. However, spending
+	/// 1 P2WPKH input to a 43 vB P2TR output needs 485 sats fee (10,485 total),
+	/// making 10,470 sats insufficient for TxBuilder. The 224-WU allowance
+	/// targets 10,495 sats, correctly forcing selection of the second (500 sat)
+	/// UTXO, which TxBuilder accepts (756 sat fee, 10,756 total needed <= 10,970).
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_selected_utxos_are_accepted_by_send_to_address() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+
+		let utxo_amounts = [10_470u64, 500];
+		let algorithms = [
+			ldk_node::CoinSelectionAlgorithm::BranchAndBound,
+			ldk_node::CoinSelectionAlgorithm::LargestFirst,
+			ldk_node::CoinSelectionAlgorithm::OldestFirst,
+		];
+
+		// One node per algorithm, so each send starts from the identical wallet state.
+		let mut nodes = Vec::new();
+		for _ in &algorithms {
+			let config = node_config(AddressType::NativeSegwit, vec![]);
+			nodes.push(setup_node(&chain_source, config, None));
+		}
+
+		premine_blocks(&bitcoind.client, &electrsd.client).await;
+		let mut amounts = HashMap::<String, f64>::new();
+		for node in &nodes {
+			for amount in utxo_amounts {
+				let addr = node.onchain_payment().new_address().unwrap();
+				amounts.insert(addr.to_string(), Amount::from_sat(amount).to_btc());
+			}
+		}
+		let funding_txid: Txid = bitcoind
+			.client
+			.call::<Value>("sendmany", &[json!(""), json!(amounts)])
+			.unwrap()
+			.as_str()
+			.unwrap()
+			.parse()
+			.unwrap();
+		wait_for_tx(&electrsd.client, funding_txid).await;
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+		for node in &nodes {
+			node.sync_wallets().unwrap();
+		}
+		std::thread::sleep(std::time::Duration::from_secs(2));
+
+		let target_amount_sats = 10_000;
+		let fee_rate = api_fee_rate(FeeRate::from_sat_per_kwu(1_000));
+		let recipient = test_p2tr_recipient();
+
+		for (node, algorithm) in nodes.iter().zip(algorithms.iter()) {
+			let selected = node
+				.onchain_payment()
+				.select_utxos_with_algorithm(
+					target_amount_sats,
+					Some(fee_rate.clone()),
+					*algorithm,
+					None,
+				)
+				.unwrap_or_else(|e| panic!("{algorithm:?} selection failed: {e:?}"));
+
+			let txid = node
+				.onchain_payment()
+				.send_to_address(
+					&recipient,
+					target_amount_sats,
+					Some(fee_rate.clone()),
+					Some(selected),
+				)
+				.unwrap_or_else(|e| {
+					panic!("{algorithm:?} selection rejected by send_to_address: {e:?}")
+				});
+			wait_for_tx(&electrsd.client, txid).await;
+		}
+
+		for node in &nodes {
+			node.stop().unwrap();
+		}
+	}
+
+	/// A manually selected UTXO set that cannot cover the amount plus the
+	/// actual transaction fee must be rejected with `InsufficientFunds` by the
+	/// transaction builder, now that the fee-buffer precheck is gone.
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn test_insufficient_manual_selection_is_rejected() {
+		let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+		let chain_source = TestChainSource::Esplora(&electrsd);
+
+		let config = node_config(AddressType::NativeSegwit, vec![]);
+		let node = setup_node(&chain_source, config, None);
+
+		let addr = node.onchain_payment().new_address().unwrap();
+		fund_and_sync(&bitcoind, &electrsd, &node, addr, 35_050).await;
+
+		let utxos = node.onchain_payment().list_spendable_outputs().unwrap();
+		assert_eq!(utxos.len(), 1);
+
+		// 35,050 sats covers the 35,000-sat payment but not the fee for
+		// spending the input at this fee rate, so the builder must reject it.
+		let err = node
+			.onchain_payment()
+			.send_to_address(
+				&test_recipient(),
+				35_000,
+				Some(api_fee_rate(FeeRate::from_sat_per_kwu(250))),
+				Some(utxos),
+			)
+			.unwrap_err();
+		assert!(matches!(err, NodeError::InsufficientFunds), "unexpected error: {err:?}");
 
 		node.stop().unwrap();
 	}

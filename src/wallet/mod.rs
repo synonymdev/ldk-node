@@ -110,6 +110,26 @@ fn additional_input_weight(utxos: &[UtxoPsbtInfo]) -> Result<Weight, Error> {
 	Ok(Weight::from_wu(total))
 }
 
+fn checked_sum<I>(values: I) -> Result<u64, Error>
+where
+	I: IntoIterator<Item = u64>,
+{
+	values.into_iter().try_fold(0, u64::checked_add).ok_or(Error::InsufficientFunds)
+}
+
+fn checked_payment_target(
+	amount_sats: u64, recipient_spk: &Script, manual_utxo_infos: Option<&[UtxoPsbtInfo]>,
+	fee_rate: FeeRate,
+) -> Result<Amount, Error> {
+	let recipient_weight =
+		TxOut { value: Amount::ZERO, script_pubkey: recipient_spk.to_owned() }.weight();
+	let manual_input_weight =
+		manual_utxo_infos.map(additional_input_weight).transpose()?.unwrap_or(Weight::ZERO);
+	let min_weight = Weight::from_wu(42) + recipient_weight + manual_input_weight;
+	let min_fee = fee_rate.fee_wu(min_weight).ok_or(Error::InvalidFeeRate)?;
+	Amount::from_sat(amount_sats).checked_add(min_fee).ok_or(Error::InsufficientFunds)
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum OnchainSendAmount {
 	ExactRetainingReserve { amount_sats: u64, cur_anchor_reserve_sats: u64 },
@@ -1530,32 +1550,19 @@ impl Wallet {
 			}
 
 			// Calculate total value of selected UTXOs
-			let selected_value: u64 = all_utxos
-				.iter()
-				.filter(|u| outpoints.contains(&u.outpoint))
-				.map(|u| u.txout.value.to_sat())
-				.sum();
+			let selected_value = checked_sum(
+				all_utxos
+					.iter()
+					.filter(|u| outpoints.contains(&u.outpoint))
+					.map(|u| u.txout.value.to_sat()),
+			)?;
 
-			// For exact amounts, ensure we have enough value
-			if let OnchainSendAmount::ExactRetainingReserve { amount_sats, .. } = send_amount {
-				// Calculate a fee buffer based on fee rate
-				// Assume a typical tx with 1 input and 2 outputs (~200 vbytes)
-				let typical_tx_weight = Weight::from_vb(200).expect("Valid weight");
-				let fee_buffer =
-					fee_rate.fee_wu(typical_tx_weight).expect("Valid fee calculation").to_sat();
-				// Use at least 1000 sats as minimum buffer
-				let min_fee_buffer = fee_buffer.max(1000);
-				let min_required = amount_sats.saturating_add(min_fee_buffer);
-				if selected_value < min_required {
-					log_error!(
-						self.logger,
-						"Selected UTXOs have insufficient value. Have: {}sats, Need at least: {}sats",
-						selected_value,
-						min_required
-					);
-					return Err(Error::InsufficientFunds);
-				}
-			}
+			// No fee-buffer precheck here: the transaction builder below charges
+			// for the exact selected inputs and the actual recipient output, and
+			// returns `InsufficientFunds` if they cannot fund the payment. A
+			// heuristic estimate (e.g. clamping to a fixed minimum buffer) can
+			// reject selections the builder would accept, see the review
+			// discussion on https://github.com/synonymdev/ldk-node/pull/109.
 
 			log_debug!(
 				self.logger,
@@ -1595,6 +1602,15 @@ impl Wallet {
 			} else {
 				None
 			};
+
+		if let OnchainSendAmount::ExactRetainingReserve { amount_sats, .. } = send_amount {
+			checked_payment_target(
+				amount_sats,
+				&address.script_pubkey(),
+				manual_utxo_infos.as_deref(),
+				fee_rate,
+			)?;
+		}
 
 		let aggregate_balance = locked_wallet.balance();
 
@@ -2408,14 +2424,16 @@ impl ChangeDestinationSource for WalletKeysManager {
 
 #[cfg(test)]
 mod tests {
+	use bdk_wallet_aggregate::UtxoPsbtInfo;
+	use bitcoin::{psbt, OutPoint, TxIn, Weight};
+
 	use super::{
-		additional_input_weight, map_wallet_account_error, validate_derivation_index,
-		validate_derivation_range, BIP32_MAX_NORMAL_INDEX, MAX_ADDRESS_INFO_BATCH_COUNT,
+		additional_input_weight, checked_payment_target, checked_sum, map_wallet_account_error,
+		validate_derivation_index, validate_derivation_range, BIP32_MAX_NORMAL_INDEX,
+		MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
 	use crate::config::{AddressType, OnchainWalletAccount};
 	use crate::Error;
-	use bdk_wallet_aggregate::UtxoPsbtInfo;
-	use bitcoin::{psbt, OutPoint, TxIn, Weight};
 
 	#[test]
 	fn derivation_index_validation_rejects_hardened_range() {
@@ -2483,6 +2501,33 @@ mod tests {
 		assert_eq!(
 			additional_input_weight(&[utxo]).unwrap(),
 			TxIn::default().segwit_weight() + satisfaction_weight
+		);
+	}
+
+	#[test]
+	fn checked_sum_rejects_overflow() {
+		assert_eq!(checked_sum([u64::MAX, 1]), Err(Error::InsufficientFunds));
+	}
+
+	#[test]
+	fn checked_payment_target_rejects_overflow() {
+		let recipient = bitcoin::Address::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+			.unwrap()
+			.assume_checked();
+		let fee_rate = bitcoin::FeeRate::from_sat_per_kwu(250);
+		assert_eq!(
+			checked_payment_target(u64::MAX, recipient.script_pubkey(), None, fee_rate),
+			Err(Error::InsufficientFunds)
+		);
+		let utxo = UtxoPsbtInfo {
+			outpoint: OutPoint::null(),
+			psbt_input: psbt::Input::default(),
+			weight: Weight::from_wu(107),
+			is_primary: true,
+		};
+		assert_eq!(
+			checked_payment_target(u64::MAX, recipient.script_pubkey(), Some(&[utxo]), fee_rate),
+			Err(Error::InsufficientFunds)
 		);
 	}
 }
