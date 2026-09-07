@@ -8468,6 +8468,11 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
         })
     }
 
+    /**
+     * Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     override fun `bumpFeeByRbf`(`txid`: Txid, `feeRate`: FeeRate): Txid {
         return FfiConverterTypeTxid.lift(callWithPointer {
@@ -8694,6 +8699,11 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
         })
     }
 
+    /**
+     * Sends the available balance and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     override fun `sendAllToAddress`(`address`: Address, `retainReserve`: kotlin.Boolean, `feeRate`: FeeRate?): Txid {
         return FfiConverterTypeTxid.lift(callWithPointer {
@@ -8709,6 +8719,11 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
         })
     }
 
+    /**
+     * Sends an exact amount and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     override fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid {
         return FfiConverterTypeTxid.lift(callWithPointer {

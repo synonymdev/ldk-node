@@ -615,6 +615,11 @@ interface OnchainPaymentInterface {
     @Throws(NodeException::class)
     fun `addressInfosForType`(`addressType`: AddressType, `keychain`: KeychainKind, `startIndex`: kotlin.UInt, `count`: kotlin.UInt): List<AddressInfo>
 
+    /**
+     * Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     fun `bumpFeeByRbf`(`txid`: Txid, `feeRate`: FeeRate): Txid
 
@@ -670,9 +675,19 @@ interface OnchainPaymentInterface {
     @Throws(NodeException::class)
     fun `selectUtxosWithAlgorithm`(`targetAmountSats`: kotlin.ULong, `feeRate`: FeeRate?, `algorithm`: CoinSelectionAlgorithm, `utxos`: List<SpendableUtxo>?): List<SpendableUtxo>
 
+    /**
+     * Sends the available balance and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     fun `sendAllToAddress`(`address`: Address, `retainReserve`: kotlin.Boolean, `feeRate`: FeeRate?): Txid
 
+    /**
+     * Sends an exact amount and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid
 
@@ -2327,6 +2342,9 @@ sealed class NodeException: kotlin.Exception() {
             get() = ""
     }
 
+    /**
+     * The backend conclusively rejected the transaction.
+     */
     class OnchainTxBroadcastRejected(
         val `txid`: Txid,
     ) : NodeException() {
@@ -2334,6 +2352,10 @@ sealed class NodeException: kotlin.Exception() {
             get() = "txid=${ `txid` }"
     }
 
+    /**
+     * Dispatch occurred, but backend acceptance is unknown. Do not create a fresh spend;
+     * reconcile or rebroadcast this exact transaction ID.
+     */
     class OnchainTxBroadcastFailed(
         val `txid`: Txid,
     ) : NodeException() {
@@ -2341,6 +2363,10 @@ sealed class NodeException: kotlin.Exception() {
             get() = "txid=${ `txid` }"
     }
 
+    /**
+     * Dispatch occurred, but backend acceptance is unknown after the timeout. Do not create a
+     * fresh spend; reconcile or rebroadcast this exact transaction ID.
+     */
     class OnchainTxBroadcastTimeout(
         val `txid`: Txid,
     ) : NodeException() {
@@ -2348,6 +2374,9 @@ sealed class NodeException: kotlin.Exception() {
             get() = "txid=${ `txid` }"
     }
 
+    /**
+     * The transaction was conclusively not dispatched to the backend.
+     */
     class OnchainTxBroadcastNotDispatched(
         val `txid`: Txid,
     ) : NodeException() {

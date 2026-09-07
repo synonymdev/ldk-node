@@ -3371,6 +3371,11 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func addressInfosForType(addressType: AddressType, keychain: KeychainKind, startIndex: UInt32, count: UInt32) throws -> [AddressInfo]
 
+    /**
+     * Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     func bumpFeeByRbf(txid: Txid, feeRate: FeeRate) throws -> Txid
 
     func calculateCpfpFeeRate(parentTxid: Txid, urgent: Bool) throws -> FeeRate
@@ -3410,8 +3415,18 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func selectUtxosWithAlgorithm(targetAmountSats: UInt64, feeRate: FeeRate?, algorithm: CoinSelectionAlgorithm, utxos: [SpendableUtxo]?) throws -> [SpendableUtxo]
 
+    /**
+     * Sends the available balance and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     func sendAllToAddress(address: Address, retainReserve: Bool, feeRate: FeeRate?) throws -> Txid
 
+    /**
+     * Sends an exact amount and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     func sendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> Txid
 }
 
@@ -3524,6 +3539,11 @@ open class OnchainPayment:
         })
     }
 
+    /**
+     * Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     open func bumpFeeByRbf(txid: Txid, feeRate: FeeRate) throws -> Txid {
         return try FfiConverterTypeTxid.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf(self.uniffiClonePointer(),
@@ -3654,6 +3674,11 @@ open class OnchainPayment:
         })
     }
 
+    /**
+     * Sends the available balance and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     open func sendAllToAddress(address: Address, retainReserve: Bool, feeRate: FeeRate?) throws -> Txid {
         return try FfiConverterTypeTxid.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address(self.uniffiClonePointer(),
@@ -3663,6 +3688,11 @@ open class OnchainPayment:
         })
     }
 
+    /**
+     * Sends an exact amount and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     open func sendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> Txid {
         return try FfiConverterTypeTxid.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_send_to_address(self.uniffiClonePointer(),
@@ -9355,9 +9385,23 @@ public enum NodeError {
     case AddressTypeNotMonitored
     case OnchainWalletAccountNotRegistered
     case InvalidSeedBytes
+    /**
+     * The backend conclusively rejected the transaction.
+     */
     case OnchainTxBroadcastRejected(txid: Txid)
+    /**
+     * Dispatch occurred, but backend acceptance is unknown. Do not create a fresh spend;
+     * reconcile or rebroadcast this exact transaction ID.
+     */
     case OnchainTxBroadcastFailed(txid: Txid)
+    /**
+     * Dispatch occurred, but backend acceptance is unknown after the timeout. Do not create a
+     * fresh spend; reconcile or rebroadcast this exact transaction ID.
+     */
     case OnchainTxBroadcastTimeout(txid: Txid)
+    /**
+     * The transaction was conclusively not dispatched to the backend.
+     */
     case OnchainTxBroadcastNotDispatched(txid: Txid)
 }
 

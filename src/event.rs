@@ -7,13 +7,13 @@
 
 use core::future::Future;
 use core::task::{Poll, Waker};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Amount, OutPoint, TxIn, TxOut};
+use bitcoin::{Amount, OutPoint, TxIn, TxOut, Txid};
 use lightning::events::bump_transaction::BumpTransactionEvent;
 use lightning::events::{
 	ClosureReason, Event as LdkEvent, PaymentFailureReason, PaymentPurpose, ReplayEvent,
@@ -983,6 +983,7 @@ where
 	L::Target: LdkLogger,
 {
 	queue: Arc<Mutex<VecDeque<Event>>>,
+	idempotency_keys: Arc<Mutex<HashSet<Txid>>>,
 	waker: Arc<Mutex<Option<Waker>>>,
 	kv_store: Arc<DynStore>,
 	logger: L,
@@ -994,15 +995,17 @@ where
 {
 	pub(crate) fn new(kv_store: Arc<DynStore>, logger: L) -> Self {
 		let queue = Arc::new(Mutex::new(VecDeque::new()));
+		let idempotency_keys = Arc::new(Mutex::new(HashSet::new()));
 		let waker = Arc::new(Mutex::new(None));
-		Self { queue, waker, kv_store, logger }
+		Self { queue, idempotency_keys, waker, kv_store, logger }
 	}
 
 	pub(crate) async fn add_event(&self, event: Event) -> Result<(), Error> {
 		let data = {
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.push_back(event);
-			EventQueueSerWrapper(&locked_queue).encode()
+			let locked_keys = self.idempotency_keys.lock().unwrap();
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
 		};
 
 		self.persist_queue(data).await?;
@@ -1019,7 +1022,8 @@ where
 			if !locked_queue.contains(&event) {
 				locked_queue.push_back(event);
 			}
-			EventQueueSerWrapper(&locked_queue).encode()
+			let locked_keys = self.idempotency_keys.lock().unwrap();
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
 		};
 
 		self.persist_queue(data).await?;
@@ -1027,6 +1031,37 @@ where
 			waker.wake();
 		}
 		Ok(())
+	}
+
+	pub(crate) async fn add_event_with_idempotency_key(
+		&self, event: Event, idempotency_key: Txid,
+	) -> Result<(), Error> {
+		let data = {
+			let mut locked_queue = self.queue.lock().unwrap();
+			let mut locked_keys = self.idempotency_keys.lock().unwrap();
+			if locked_keys.insert(idempotency_key) && !locked_queue.contains(&event) {
+				locked_queue.push_back(event);
+			}
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
+		};
+
+		self.persist_queue(data).await?;
+		if let Some(waker) = self.waker.lock().unwrap().take() {
+			waker.wake();
+		}
+		Ok(())
+	}
+
+	pub(crate) async fn clear_idempotency_key(&self, idempotency_key: Txid) -> Result<(), Error> {
+		let data = {
+			let locked_queue = self.queue.lock().unwrap();
+			let mut locked_keys = self.idempotency_keys.lock().unwrap();
+			if !locked_keys.remove(&idempotency_key) {
+				return Ok(());
+			}
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
+		};
+		self.persist_queue(data).await
 	}
 
 	pub(crate) fn next_event(&self) -> Option<Event> {
@@ -1042,7 +1077,8 @@ where
 		let data = {
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.pop_front();
-			EventQueueSerWrapper(&locked_queue).encode()
+			let locked_keys = self.idempotency_keys.lock().unwrap();
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
 		};
 
 		self.persist_queue(data).await?;
@@ -1088,12 +1124,13 @@ where
 		let (kv_store, logger) = args;
 		let read_queue: EventQueueDeserWrapper = Readable::read(reader)?;
 		let queue = Arc::new(Mutex::new(read_queue.0));
+		let idempotency_keys = Arc::new(Mutex::new(read_queue.1));
 		let waker = Arc::new(Mutex::new(None));
-		Ok(Self { queue, waker, kv_store, logger })
+		Ok(Self { queue, idempotency_keys, waker, kv_store, logger })
 	}
 }
 
-struct EventQueueDeserWrapper(VecDeque<Event>);
+struct EventQueueDeserWrapper(VecDeque<Event>, HashSet<Txid>);
 
 impl Readable for EventQueueDeserWrapper {
 	fn read<R: lightning::io::Read>(
@@ -1104,17 +1141,45 @@ impl Readable for EventQueueDeserWrapper {
 		for _ in 0..len {
 			queue.push_back(Readable::read(reader)?);
 		}
-		Ok(Self(queue))
+		let extension_version = match u8::read(reader) {
+			Ok(version) => version,
+			Err(lightning::ln::msgs::DecodeError::ShortRead) => {
+				return Ok(Self(queue, HashSet::new()))
+			},
+			Err(error) => return Err(error),
+		};
+		if extension_version != 1 {
+			return Err(lightning::ln::msgs::DecodeError::InvalidValue);
+		}
+		let key_count: u16 = Readable::read(reader)?;
+		let mut idempotency_keys = HashSet::with_capacity(key_count as usize);
+		for _ in 0..key_count {
+			idempotency_keys.insert(Readable::read(reader)?);
+		}
+		Ok(Self(queue, idempotency_keys))
 	}
 }
 
-struct EventQueueSerWrapper<'a>(&'a VecDeque<Event>);
+struct EventQueueSerWrapper<'a>(&'a VecDeque<Event>, &'a HashSet<Txid>);
 
 impl Writeable for EventQueueSerWrapper<'_> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		(self.0.len() as u16).write(writer)?;
 		for e in self.0.iter() {
 			e.write(writer)?;
+		}
+		1u8.write(writer)?;
+		let mut idempotency_keys = self.1.iter().copied().collect::<Vec<_>>();
+		idempotency_keys.sort_unstable();
+		let key_count = u16::try_from(idempotency_keys.len()).map_err(|_| {
+			lightning::io::Error::new(
+				lightning::io::ErrorKind::InvalidData,
+				"too many event idempotency keys",
+			)
+		})?;
+		key_count.write(writer)?;
+		for key in idempotency_keys {
+			key.write(writer)?;
 		}
 		Ok(())
 	}
@@ -2562,6 +2627,25 @@ mod tests {
 
 		event_queue.event_handled().await.unwrap();
 		assert_eq!(event_queue.next_event(), None);
+	}
+
+	#[tokio::test]
+	async fn legacy_event_queue_without_idempotency_extension_is_readable() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let expected_event = Event::ChannelReady {
+			channel_id: ChannelId([24u8; 32]),
+			user_channel_id: UserChannelId(2424),
+			counterparty_node_id: None,
+			funding_txo: None,
+		};
+		let mut legacy_bytes = Vec::new();
+		1u16.write(&mut legacy_bytes).unwrap();
+		expected_event.write(&mut legacy_bytes).unwrap();
+
+		let event_queue = EventQueue::read(&mut &legacy_bytes[..], (store, logger)).unwrap();
+
+		assert_eq!(event_queue.next_event_async().await, expected_event);
 	}
 
 	#[tokio::test]

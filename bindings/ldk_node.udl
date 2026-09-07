@@ -382,8 +382,14 @@ interface OnchainPayment {
     sequence<SpendableUtxo> list_spendable_outputs();
     [Throws=NodeError]
     sequence<SpendableUtxo> select_utxos_with_algorithm(u64 target_amount_sats, FeeRate? fee_rate, CoinSelectionAlgorithm algorithm, sequence<SpendableUtxo>? utxos);
+    /// Sends an exact amount and waits for the configured backend's broadcast result.
+    /// `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+    /// reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
     [Throws=NodeError]
     Txid send_to_address([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate, sequence<SpendableUtxo>? utxos_to_spend);
+    /// Sends the available balance and waits for the configured backend's broadcast result.
+    /// `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+    /// reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
     [Throws=NodeError]
     Txid send_all_to_address([ByRef]Address address, boolean retain_reserve, FeeRate? fee_rate);
     /// Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
@@ -397,6 +403,9 @@ interface OnchainPayment {
     /// absent from both the mempool and chain and no other process can rebroadcast it.
     [Throws=NodeError]
     void abandon_pending_broadcast([ByRef]Txid txid);
+    /// Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+    /// `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+    /// reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
     [Throws=NodeError]
     Txid bump_fee_by_rbf([ByRef]Txid txid, FeeRate fee_rate);
     [Throws=NodeError]
@@ -520,9 +529,15 @@ interface NodeError {
 	AddressTypeNotMonitored();
 	OnchainWalletAccountNotRegistered();
 	InvalidSeedBytes();
+	/// The backend conclusively rejected the transaction.
 	OnchainTxBroadcastRejected(Txid txid);
+	/// Dispatch occurred, but backend acceptance is unknown. Do not create a fresh spend;
+	/// reconcile or rebroadcast this exact transaction ID.
 	OnchainTxBroadcastFailed(Txid txid);
+	/// Dispatch occurred, but backend acceptance is unknown after the timeout. Do not create a
+	/// fresh spend; reconcile or rebroadcast this exact transaction ID.
 	OnchainTxBroadcastTimeout(Txid txid);
+	/// The transaction was conclusively not dispatched to the backend.
 	OnchainTxBroadcastNotDispatched(Txid txid);
 };
 

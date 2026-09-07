@@ -1307,6 +1307,51 @@ mod tests {
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn handled_received_event_is_not_repeated_after_delivery_write_failure() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.publish_locally_applied_unconfirmed(txid).unwrap();
+		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+
+		assert_eq!(
+			crate::chain::process_wallet_events(
+				Vec::new(),
+				&node.wallet,
+				&node.event_queue,
+				&node.logger,
+				Some(&node.channel_manager),
+				None,
+			)
+			.await,
+			Err(Error::PersistenceFailed)
+		);
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
+		));
+		node.event_handled().unwrap();
+		drop(node);
+
+		let restarted = test_node(store);
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&restarted.wallet,
+			&restarted.event_queue,
+			&restarted.logger,
+			Some(&restarted.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(restarted.next_event().is_none());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn backend_observation_after_restart_publishes_failed_send_event() {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		let node = test_node(Arc::clone(&store));
@@ -1370,9 +1415,9 @@ mod tests {
 		});
 		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let request = receivers.recv().await.unwrap();
+		let explicit_guard = request.take_explicit_guard();
 		let crate::tx_broadcaster::BroadcastRequest {
 			result_sender,
-			explicit_guard,
 			package: _,
 			explicit_claim: _,
 			ldk_claim: _,
@@ -1414,9 +1459,9 @@ mod tests {
 		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let request = receivers.recv().await.unwrap();
 		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+		let explicit_guard = request.take_explicit_guard();
 		let crate::tx_broadcaster::BroadcastRequest {
 			result_sender,
-			explicit_guard,
 			package: _,
 			explicit_claim: _,
 			ldk_claim: _,
@@ -1464,9 +1509,9 @@ mod tests {
 			let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 			let request = receivers.recv().await.unwrap();
 			concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+			let explicit_guard = request.take_explicit_guard();
 			let crate::tx_broadcaster::BroadcastRequest {
 				result_sender,
-				explicit_guard,
 				package: _,
 				explicit_claim: _,
 				ldk_claim: _,
@@ -1518,9 +1563,9 @@ mod tests {
 		));
 		node.event_handled().unwrap();
 
+		let explicit_guard = request.take_explicit_guard();
 		let crate::tx_broadcaster::BroadcastRequest {
 			result_sender,
-			explicit_guard,
 			package: _,
 			explicit_claim: _,
 			ldk_claim: _,

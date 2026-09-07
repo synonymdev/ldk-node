@@ -6935,6 +6935,12 @@ class OnchainPaymentProtocol(typing.Protocol):
     def address_infos_for_type(self, address_type: "AddressType",keychain: "KeychainKind",start_index: "int",count: "int"):
         raise NotImplementedError
     def bump_fee_by_rbf(self, txid: "Txid",fee_rate: "FeeRate"):
+        """
+        Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         raise NotImplementedError
     def calculate_cpfp_fee_rate(self, parent_txid: "Txid",urgent: "bool"):
         raise NotImplementedError
@@ -6976,8 +6982,20 @@ class OnchainPaymentProtocol(typing.Protocol):
     def select_utxos_with_algorithm(self, target_amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",algorithm: "CoinSelectionAlgorithm",utxos: "typing.Optional[typing.List[SpendableUtxo]]"):
         raise NotImplementedError
     def send_all_to_address(self, address: "Address",retain_reserve: "bool",fee_rate: "typing.Optional[FeeRate]"):
+        """
+        Sends the available balance and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         raise NotImplementedError
     def send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]"):
+        """
+        Sends an exact amount and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         raise NotImplementedError
 
 
@@ -7125,6 +7143,12 @@ class OnchainPayment:
 
 
     def bump_fee_by_rbf(self, txid: "Txid",fee_rate: "FeeRate") -> "Txid":
+        """
+        Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         _UniffiConverterTypeTxid.check_lower(txid)
 
         _UniffiConverterTypeFeeRate.check_lower(fee_rate)
@@ -7357,6 +7381,12 @@ class OnchainPayment:
 
 
     def send_all_to_address(self, address: "Address",retain_reserve: "bool",fee_rate: "typing.Optional[FeeRate]") -> "Txid":
+        """
+        Sends the available balance and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         _UniffiConverterTypeAddress.check_lower(address)
 
         _UniffiConverterBool.check_lower(retain_reserve)
@@ -7375,6 +7405,12 @@ class OnchainPayment:
 
 
     def send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]") -> "Txid":
+        """
+        Sends an exact amount and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         _UniffiConverterTypeAddress.check_lower(address)
 
         _UniffiConverterUInt64.check_lower(amount_sats)
@@ -13791,6 +13827,10 @@ class NodeError:  # type: ignore
             return "NodeError.InvalidSeedBytes({})".format(str(self))
     _UniffiTempNodeError.InvalidSeedBytes = InvalidSeedBytes # type: ignore
     class OnchainTxBroadcastRejected(_UniffiTempNodeError):
+        """
+        The backend conclusively rejected the transaction.
+        """
+
         def __init__(self, txid):
             super().__init__(", ".join([
                 "txid={!r}".format(txid),
@@ -13801,6 +13841,11 @@ class NodeError:  # type: ignore
             return "NodeError.OnchainTxBroadcastRejected({})".format(str(self))
     _UniffiTempNodeError.OnchainTxBroadcastRejected = OnchainTxBroadcastRejected # type: ignore
     class OnchainTxBroadcastFailed(_UniffiTempNodeError):
+        """
+        Dispatch occurred, but backend acceptance is unknown. Do not create a fresh spend;
+        reconcile or rebroadcast this exact transaction ID.
+        """
+
         def __init__(self, txid):
             super().__init__(", ".join([
                 "txid={!r}".format(txid),
@@ -13811,6 +13856,11 @@ class NodeError:  # type: ignore
             return "NodeError.OnchainTxBroadcastFailed({})".format(str(self))
     _UniffiTempNodeError.OnchainTxBroadcastFailed = OnchainTxBroadcastFailed # type: ignore
     class OnchainTxBroadcastTimeout(_UniffiTempNodeError):
+        """
+        Dispatch occurred, but backend acceptance is unknown after the timeout. Do not create a
+        fresh spend; reconcile or rebroadcast this exact transaction ID.
+        """
+
         def __init__(self, txid):
             super().__init__(", ".join([
                 "txid={!r}".format(txid),
@@ -13821,6 +13871,10 @@ class NodeError:  # type: ignore
             return "NodeError.OnchainTxBroadcastTimeout({})".format(str(self))
     _UniffiTempNodeError.OnchainTxBroadcastTimeout = OnchainTxBroadcastTimeout # type: ignore
     class OnchainTxBroadcastNotDispatched(_UniffiTempNodeError):
+        """
+        The transaction was conclusively not dispatched to the backend.
+        """
+
         def __init__(self, txid):
             super().__init__(", ".join([
                 "txid={!r}".format(txid),

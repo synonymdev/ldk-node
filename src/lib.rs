@@ -2742,11 +2742,7 @@ mod tests {
 		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
 		let first_request = receivers.recv().await.unwrap();
 		assert_eq!(first_request.package, vec![tx.clone()]);
-		first_request
-			.result_sender
-			.unwrap()
-			.send(Err(crate::tx_broadcaster::TxBroadcastError::NotDispatched))
-			.unwrap();
+		first_request.send_result(Err(crate::tx_broadcaster::TxBroadcastError::NotDispatched));
 		drop(receivers);
 		assert_eq!(first_call.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
 		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);

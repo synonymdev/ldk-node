@@ -525,11 +525,14 @@ where
 						);
 
 						let event = Event::OnchainTransactionReceived { txid, details };
-						event_queue.add_event_if_absent(event).await.map_err(|e| {
-							log_error!(logger, "Failed to push onchain event to queue: {}", e);
-							e
-						})?;
+						event_queue.add_event_with_idempotency_key(event, txid).await.map_err(
+							|e| {
+								log_error!(logger, "Failed to push onchain event to queue: {}", e);
+								e
+							},
+						)?;
 						wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+						event_queue.clear_idempotency_key(txid).await?;
 					},
 				}
 			},
@@ -587,11 +590,12 @@ where
 			details.amount_sats
 		);
 		let event = Event::OnchainTransactionReceived { txid, details };
-		event_queue.add_event_if_absent(event).await.map_err(|e| {
+		event_queue.add_event_with_idempotency_key(event, txid).await.map_err(|e| {
 			log_error!(logger, "Failed to push onchain event to queue: {}", e);
 			e
 		})?;
 		wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+		event_queue.clear_idempotency_key(txid).await?;
 	}
 	Ok(())
 }
@@ -1346,7 +1350,8 @@ impl ChainSource {
 				Some(request) = ldk_receiver.recv() => {
 					self.process_broadcast_request(request).await;
 				}
-				Some(request) = explicit_receiver.recv() => {
+				Some(request) = explicit_receiver.recv(),
+					if explicit_jobs.len() < crate::tx_broadcaster::MAX_IN_FLIGHT_EXPLICIT_BROADCASTS => {
 					if request.try_claim() {
 						explicit_jobs.push(self.process_broadcast_request(request));
 					}
@@ -1358,12 +1363,12 @@ impl ChainSource {
 	}
 
 	async fn process_broadcast_request(&self, request: crate::tx_broadcaster::BroadcastRequest) {
+		let explicit_guard = request.take_explicit_guard();
 		let crate::tx_broadcaster::BroadcastRequest {
 			package,
 			result_sender,
 			ldk_claim: _ldk_claim,
 			explicit_claim: _explicit_claim,
-			explicit_guard,
 		} = request;
 		let result = match &self.kind {
 			ChainSourceKind::Esplora(source) => {
