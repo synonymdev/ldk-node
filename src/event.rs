@@ -1013,6 +1013,22 @@ where
 		Ok(())
 	}
 
+	pub(crate) async fn add_event_if_absent(&self, event: Event) -> Result<(), Error> {
+		let data = {
+			let mut locked_queue = self.queue.lock().unwrap();
+			if !locked_queue.contains(&event) {
+				locked_queue.push_back(event);
+			}
+			EventQueueSerWrapper(&locked_queue).encode()
+		};
+
+		self.persist_queue(data).await?;
+		if let Some(waker) = self.waker.lock().unwrap().take() {
+			waker.wake();
+		}
+		Ok(())
+	}
+
 	pub(crate) fn next_event(&self) -> Option<Event> {
 		let locked_queue = self.queue.lock().unwrap();
 		locked_queue.front().cloned()
@@ -2544,6 +2560,26 @@ mod tests {
 			EventQueue::read(&mut &persisted_bytes[..], (Arc::clone(&store), logger)).unwrap();
 		assert_eq!(deser_event_queue.next_event_async().await, expected_event);
 
+		event_queue.event_handled().await.unwrap();
+		assert_eq!(event_queue.next_event(), None);
+	}
+
+	#[tokio::test]
+	async fn idempotent_event_insert_does_not_duplicate_an_existing_queue_entry() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let event_queue = EventQueue::new(store, logger);
+		let event = Event::ChannelReady {
+			channel_id: ChannelId([42u8; 32]),
+			user_channel_id: UserChannelId(42),
+			counterparty_node_id: None,
+			funding_txo: None,
+		};
+
+		event_queue.add_event_if_absent(event.clone()).await.unwrap();
+		event_queue.add_event_if_absent(event.clone()).await.unwrap();
+
+		assert_eq!(event_queue.next_event(), Some(event));
 		event_queue.event_handled().await.unwrap();
 		assert_eq!(event_queue.next_event(), None);
 	}

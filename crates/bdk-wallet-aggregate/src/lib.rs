@@ -179,6 +179,20 @@ where
 		&mut self.wallets
 	}
 
+	/// Returns every loaded wallet that owns an input or output of `tx`.
+	pub fn wallet_keys_for_transaction(&self, tx: &Transaction) -> Vec<K> {
+		self.wallets
+			.iter()
+			.filter_map(|(key, wallet)| {
+				let owns_input =
+					tx.input.iter().any(|input| wallet.get_utxo(input.previous_output).is_some());
+				let owns_output =
+					tx.output.iter().any(|output| wallet.is_mine(output.script_pubkey.clone()));
+				(owns_input || owns_output).then_some(*key)
+			})
+			.collect()
+	}
+
 	/// Immutable access to the persister map.
 	pub fn persisters(&self) -> &HashMap<K, P> {
 		&self.persisters
@@ -639,12 +653,29 @@ where
 	/// replacements cannot leave the same input reserved after explicit reconciliation.
 	pub fn abandon_txs(&mut self, txs: &[Transaction]) -> Result<(), Error> {
 		let txids = txs.iter().map(Transaction::compute_txid).collect::<Vec<_>>();
-		let last_seen = self.next_transaction_update_timestamp(&txids)?;
-		let evicted_txs = txs.iter().map(|tx| (tx.compute_txid(), last_seen)).collect::<Vec<_>>();
+		let first_evicted_at = self.next_transaction_update_timestamp(&txids)?;
 		for (key, wallet) in self.wallets.iter_mut() {
-			wallet.apply_evicted_txs(evicted_txs.iter().copied());
-			for tx in txs {
-				wallet.cancel_tx(tx);
+			// Evict newest-to-oldest canonical conflicts until no lineage member remains. A single
+			// graph update can reveal a superseded predecessor, which must then be evicted too.
+			for pass in 0..=txs.len() {
+				let remaining = txs
+					.iter()
+					.filter(|tx| wallet.get_tx(tx.compute_txid()).is_some())
+					.collect::<Vec<_>>();
+				if remaining.is_empty() {
+					break;
+				}
+				if pass == txs.len() {
+					return Err(Error::WalletOperationFailed);
+				}
+				let evicted_at = first_evicted_at
+					.checked_add(u64::try_from(pass).map_err(|_| Error::WalletOperationFailed)?)
+					.ok_or(Error::WalletOperationFailed)?;
+				wallet
+					.apply_evicted_txs(remaining.iter().map(|tx| (tx.compute_txid(), evicted_at)));
+				for tx in remaining {
+					wallet.cancel_tx(tx);
+				}
 			}
 			let persister = self.persisters.get_mut(key).ok_or(Error::PersisterNotFound)?;
 			wallet.persist(persister).map_err(|e| {
@@ -1937,6 +1968,35 @@ mod tests {
 			.list_unspent()
 			.iter()
 			.any(|output| output.outpoint == tx.input[0].previous_output));
+	}
+
+	#[test]
+	fn abandoning_replacement_lineage_releases_predecessor_inputs() {
+		let mut persister = NoopPersister;
+		let wallet = create_funded_wallet(&mut persister, Amount::from_sat(100_000));
+		let mut aggregate = AggregateWallet::new(wallet, persister, 0u8, vec![]);
+		let original = aggregate
+			.build_and_sign_drain(
+				recipient_script(),
+				FeeRate::from_sat_per_vb(1).expect("valid fee rate"),
+			)
+			.unwrap();
+		let mut replacement = original.clone();
+		replacement.lock_time = LockTime::from_consensus(1);
+		let original_txid = original.compute_txid();
+		let replacement_txid = replacement.compute_txid();
+		let spent_outpoint = original.input[0].previous_output;
+
+		aggregate
+			.apply_mempool_txs(vec![(original.clone(), 1), (replacement.clone(), 2)], Vec::new())
+			.unwrap();
+		assert_eq!(aggregate.find_tx(replacement_txid), Some(replacement.clone()));
+
+		aggregate.abandon_txs(&[original, replacement]).unwrap();
+
+		assert_eq!(aggregate.find_tx(original_txid), None);
+		assert_eq!(aggregate.find_tx(replacement_txid), None);
+		assert!(aggregate.list_unspent().iter().any(|output| output.outpoint == spent_outpoint));
 	}
 
 	#[test]

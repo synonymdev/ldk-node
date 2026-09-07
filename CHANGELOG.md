@@ -11,10 +11,10 @@
   recovery after restart. Callers can explicitly abandon an externally reconciled intent, and RBF
   replacements use the same result-bearing, durable lifecycle while exposing only the canonical
   transaction in payment history.
-- `NodeError` is now a fielded mobile error type so broadcast failures can expose their transaction
-  ID. Swift error cases no longer contain the legacy generated `message` associated value, and
-  fieldless Kotlin exceptions have an empty generated `message`; callers should match the error
-  variant and use its typed fields.
+- `NodeError` is now a fielded bindings error type so broadcast failures can expose their
+  transaction ID. Swift error cases no longer contain the legacy generated `message` associated
+  value, while fieldless Kotlin and Python exceptions have an empty generated message; callers
+  should match the error variant and use its typed fields.
 - Electrum transaction rejections are now logged as failures instead of successful broadcasts.
 - Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
 - Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.

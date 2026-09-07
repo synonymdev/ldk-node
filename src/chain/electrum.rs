@@ -535,7 +535,7 @@ impl ElectrumChainSource {
 				Arc::clone(client)
 			} else {
 				debug_assert!(false, "We should have started the chain source before broadcasting");
-				return Err(TxBroadcastError::Failed);
+				return Err(TxBroadcastError::NotDispatched);
 			};
 
 		let mut package_result = Ok(());
@@ -986,6 +986,12 @@ fn classify_electrum_broadcast_result(
 		Err(electrum_client::Error::Protocol(value)) => {
 			let code = value.get("code").and_then(serde_json::Value::as_i64);
 			classify_rpc_broadcast_error(code, &value.to_string())
+		},
+		Err(error) if error.to_string().to_ascii_lowercase().contains("timed out") => {
+			Err(TxBroadcastError::Timeout)
+		},
+		Err(error) if error.to_string().to_ascii_lowercase().contains("timeout") => {
+			Err(TxBroadcastError::Timeout)
 		},
 		Err(_) => Err(TxBroadcastError::Failed),
 	}

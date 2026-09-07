@@ -386,10 +386,15 @@ interface OnchainPayment {
     Txid send_to_address([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate, sequence<SpendableUtxo>? utxos_to_spend);
     [Throws=NodeError]
     Txid send_all_to_address([ByRef]Address address, boolean retain_reserve, FeeRate? fee_rate);
+    /// Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+    /// Do not create another spend for the same payment while its pending entry remains.
     [Throws=NodeError]
     Txid rebroadcast_transaction([ByRef]Txid txid);
+    /// Lists unresolved broadcasts and every transaction in each RBF lineage.
     [Throws=NodeError]
     sequence<PendingBroadcastInfo> list_pending_broadcasts();
+    /// Releases a pending spend only after an independent source proves every lineage member
+    /// absent from both the mempool and chain and no other process can rebroadcast it.
     [Throws=NodeError]
     void abandon_pending_broadcast([ByRef]Txid txid);
     [Throws=NodeError]

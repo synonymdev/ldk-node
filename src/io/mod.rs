@@ -32,6 +32,10 @@ pub(crate) const PAYMENT_INFO_PERSISTENCE_SECONDARY_NAMESPACE: &str = "";
 pub(crate) const ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE: &str = "onchain_broadcast_intents";
 pub(crate) const ONCHAIN_BROADCAST_INTENT_SECONDARY_NAMESPACE: &str = "";
 
+/// Durable delivery state for locally prepared on-chain receive events.
+pub(crate) const ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE: &str = "onchain_broadcast_events";
+pub(crate) const ONCHAIN_BROADCAST_EVENT_SECONDARY_NAMESPACE: &str = "";
+
 /// The node metrics will be persisted under this key.
 pub(crate) const NODE_METRICS_PRIMARY_NAMESPACE: &str = "";
 pub(crate) const NODE_METRICS_SECONDARY_NAMESPACE: &str = "";

@@ -122,6 +122,24 @@ pub struct OnchainPayment {
 	logger: Arc<Logger>,
 }
 
+struct BroadcastDispatchLease {
+	wallet: Arc<Wallet>,
+	txid: Txid,
+}
+
+impl BroadcastDispatchLease {
+	fn acquire(wallet: &Arc<Wallet>, txid: Txid) -> Result<Self, Error> {
+		wallet.begin_broadcast_dispatch(txid)?;
+		Ok(Self { wallet: Arc::clone(wallet), txid })
+	}
+}
+
+impl Drop for BroadcastDispatchLease {
+	fn drop(&mut self) {
+		self.wallet.end_broadcast_dispatch(&self.txid);
+	}
+}
+
 impl OnchainPayment {
 	pub(crate) fn new(
 		wallet: Arc<Wallet>, tx_broadcaster: Arc<Broadcaster>, runtime: Arc<RuntimeControl>,
@@ -139,12 +157,23 @@ impl OnchainPayment {
 		&self, admission: ExplicitBroadcastAdmission, tx: bitcoin::Transaction,
 	) -> Result<Txid, Error> {
 		let txid = tx.compute_txid();
+		let dispatch_lease = BroadcastDispatchLease::acquire(&self.wallet, txid)?;
 		self.wallet.prepare_pending_broadcast(&tx)?;
-		match self
+		let dispatch_result = match self
 			.runtime
-			.block_on(self.tx_broadcaster.broadcast_transaction(admission, tx.clone()))
+			.try_block_on(self.tx_broadcaster.broadcast_transaction(admission, tx.clone()))
 		{
+			Ok(result) => result,
+			Err(Error::NotRunning) => {
+				drop(dispatch_lease);
+				self.wallet.abandon_broadcast_intent(&tx)?;
+				return Err(Error::NotRunning);
+			},
+			Err(error) => return Err(error),
+		};
+		match dispatch_result {
 			Ok(()) => {
+				self.wallet.publish_locally_applied_unconfirmed(txid)?;
 				if let Err(e) = self.wallet.clear_broadcast_intent(&txid) {
 					log_error!(
 						self.logger,
@@ -153,17 +182,17 @@ impl OnchainPayment {
 						e
 					);
 				}
-				self.wallet.publish_locally_applied_unconfirmed(txid);
 				Ok(txid)
 			},
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
+				drop(dispatch_lease);
 				if self.wallet.abandon_broadcast_intent(&tx).is_err() {
 					return Err(Error::OnchainTxBroadcastFailed { txid });
 				}
 				Err(Self::initial_broadcast_error(error, txid))
 			},
 			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
-				self.wallet.publish_locally_applied_unconfirmed(txid);
+				self.wallet.publish_locally_applied_unconfirmed(txid)?;
 				Err(Self::initial_broadcast_error(error, txid))
 			},
 		}
@@ -719,10 +748,19 @@ impl OnchainPayment {
 			return Err(Error::NotRunning);
 		}
 		let admission = self.begin_explicit_broadcast()?;
+		let _dispatch_lease = BroadcastDispatchLease::acquire(&self.wallet, *txid)?;
 
 		let tx = self.wallet.recover_pending_broadcast(txid)?.ok_or(Error::TransactionNotFound)?;
-		match self.runtime.block_on(self.tx_broadcaster.broadcast_transaction(admission, tx)) {
+		let dispatch_result = match self
+			.runtime
+			.try_block_on(self.tx_broadcaster.broadcast_transaction(admission, tx))
+		{
+			Ok(result) => result,
+			Err(error) => return Err(error),
+		};
+		match dispatch_result {
 			Ok(()) => {
+				self.wallet.publish_locally_applied_unconfirmed(*txid)?;
 				if let Err(e) = self.wallet.clear_broadcast_intent(txid) {
 					log_error!(
 						self.logger,
@@ -731,7 +769,6 @@ impl OnchainPayment {
 						e
 					);
 				}
-				self.wallet.publish_locally_applied_unconfirmed(*txid);
 				Ok(*txid)
 			},
 			Err(error) => Err(Self::rebroadcast_error(error, *txid)),
@@ -765,8 +802,9 @@ impl OnchainPayment {
 	/// their pending payment records. If the active transaction is later observed, ordinary wallet
 	/// sync will record it again.
 	///
-	/// Returns [`Error::NotRunning`] if the node is stopped and [`Error::TransactionNotFound`] if
-	/// `txid` is not the active transaction returned by [`Self::list_pending_broadcasts`].
+	/// Returns [`Error::NotRunning`] if the node is stopped, [`Error::TransactionNotFound`] if
+	/// `txid` is not the active transaction returned by [`Self::list_pending_broadcasts`], and
+	/// [`Error::OnchainTxBroadcastFailed`] while the transaction is being dispatched.
 	///
 	/// # Safety and trust boundary
 	///
@@ -828,6 +866,7 @@ impl OnchainPayment {
 			return Err(Error::NotRunning);
 		}
 		let admission = self.begin_explicit_broadcast()?;
+		let _dispatch_lease = BroadcastDispatchLease::acquire(&self.wallet, *txid)?;
 
 		// Pass through to the wallet implementation
 		#[cfg(not(feature = "uniffi"))]
@@ -838,11 +877,20 @@ impl OnchainPayment {
 		let replacement =
 			self.wallet.prepare_rbf_broadcast(txid, fee_rate_param, &self.channel_manager)?;
 		let replacement_txid = replacement.compute_txid();
-		match self
+		let dispatch_result = match self
 			.runtime
-			.block_on(self.tx_broadcaster.broadcast_transaction(admission, replacement))
+			.try_block_on(self.tx_broadcaster.broadcast_transaction(admission, replacement))
 		{
+			Ok(result) => result,
+			Err(Error::NotRunning) => {
+				self.wallet.reject_rbf_broadcast(&replacement_txid)?;
+				return Err(Error::NotRunning);
+			},
+			Err(error) => return Err(error),
+		};
+		match dispatch_result {
 			Ok(()) => {
+				self.wallet.publish_locally_applied_unconfirmed(replacement_txid)?;
 				if let Err(e) = self.wallet.clear_broadcast_intent(&replacement_txid) {
 					log_error!(
 						self.logger,
@@ -851,7 +899,6 @@ impl OnchainPayment {
 						e
 					);
 				}
-				self.wallet.publish_locally_applied_unconfirmed(replacement_txid);
 				Ok(replacement_txid)
 			},
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
@@ -861,7 +908,7 @@ impl OnchainPayment {
 				Err(Self::initial_broadcast_error(error, replacement_txid))
 			},
 			Err(error @ (TxBroadcastError::Failed | TxBroadcastError::Timeout)) => {
-				self.wallet.publish_locally_applied_unconfirmed(replacement_txid);
+				self.wallet.publish_locally_applied_unconfirmed(replacement_txid)?;
 				Err(Self::initial_broadcast_error(error, replacement_txid))
 			},
 		}
@@ -1150,6 +1197,21 @@ mod tests {
 		initial_request.result_sender.unwrap().send(Err(TxBroadcastError::Failed)).unwrap();
 		drop(receivers);
 		assert_eq!(initial_call.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&node.wallet,
+			&node.event_queue,
+			&node.logger,
+			Some(&node.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
+		));
+		node.event_handled().unwrap();
 		node.wallet.apply_mempool_txs(Vec::new(), vec![(txid, 1)]).unwrap();
 		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![txid]);
 		drop(node);
@@ -1189,13 +1251,95 @@ mod tests {
 		)
 		.await
 		.unwrap();
-		assert!(matches!(
-			restarted_node.next_event(),
-			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
-		));
-		restarted_node.event_handled().unwrap();
 		assert!(restarted_node.next_event().is_none());
 		*restarted_node.is_running.write().unwrap() = false;
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn accepted_send_publishes_received_event_after_restart() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		let payment = node.onchain_payment();
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		let send = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, tx)
+		});
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		request.result_sender.unwrap().send(Ok(())).unwrap();
+		drop(receivers);
+		assert_eq!(send.await.unwrap(), Ok(txid));
+		drop(node);
+
+		let restarted = test_node(store);
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&restarted.wallet,
+			&restarted.event_queue,
+			&restarted.logger,
+			Some(&restarted.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(matches!(
+			restarted.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
+		));
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn backend_observation_after_restart_publishes_failed_send_event() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.publish_locally_applied_unconfirmed(txid).unwrap();
+		drop(node);
+
+		let restarted = test_node(store);
+		restarted.wallet.apply_mempool_txs(vec![(tx, 1)], Vec::new()).unwrap();
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&restarted.wallet,
+			&restarted.event_queue,
+			&restarted.logger,
+			Some(&restarted.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(matches!(
+			restarted.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
+		));
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn claimed_dispatch_cannot_be_abandoned() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = test_node(store);
+		let tx = test_transaction();
+		let txid = tx.compute_txid();
+		let payment = node.onchain_payment();
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		let dispatch = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, tx)
+		});
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		assert_eq!(
+			node.wallet.abandon_broadcast_intent_by_txid(&txid),
+			Err(Error::OnchainTxBroadcastFailed { txid })
+		);
+		request.result_sender.unwrap().send(Err(TxBroadcastError::Failed)).unwrap();
+		drop(receivers);
+		assert_eq!(dispatch.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]

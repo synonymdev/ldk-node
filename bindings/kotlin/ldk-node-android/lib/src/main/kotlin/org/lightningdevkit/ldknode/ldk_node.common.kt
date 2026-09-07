@@ -593,6 +593,10 @@ interface OfferInterface {
 
 interface OnchainPaymentInterface {
 
+    /**
+     * Releases a pending spend only after an independent source proves every lineage member
+     * absent from both the mempool and chain and no other process can rebroadcast it.
+     */
     @Throws(NodeException::class)
     fun `abandonPendingBroadcast`(`txid`: Txid)
 
@@ -623,6 +627,9 @@ interface OnchainPaymentInterface {
     @Throws(NodeException::class)
     fun `calculateTotalFee`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): kotlin.ULong
 
+    /**
+     * Lists unresolved broadcasts and every transaction in each RBF lineage.
+     */
     @Throws(NodeException::class)
     fun `listPendingBroadcasts`(): List<PendingBroadcastInfo>
 
@@ -647,6 +654,10 @@ interface OnchainPaymentInterface {
     @Throws(NodeException::class)
     fun `newAddressInfoForType`(`addressType`: AddressType): AddressInfo
 
+    /**
+     * Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+     * Do not create another spend for the same payment while its pending entry remains.
+     */
     @Throws(NodeException::class)
     fun `rebroadcastTransaction`(`txid`: Txid): Txid
 

@@ -1919,6 +1919,7 @@ dependencies = [
  "electrsd",
  "electrum-client 0.24.1",
  "esplora-client 0.12.3",
+ "futures-util",
  "ldk-node 0.6.2",
  "libc",
  "lightning 0.2.5",

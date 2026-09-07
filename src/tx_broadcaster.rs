@@ -38,6 +38,7 @@ pub(crate) fn classify_rpc_broadcast_error(
 	let contains_code = |candidate| {
 		code == Some(candidate)
 			|| compact_message.contains(&format!("\"code\":{}", candidate))
+			|| compact_message.contains(&format!("\\\"code\\\":{}", candidate))
 			|| normalized_message.contains(&format!("rpc error {}", candidate))
 	};
 
@@ -69,6 +70,9 @@ pub(crate) fn classify_rpc_broadcast_error(
 			"non-final",
 			"non-mandatory-script-verify-flag",
 			"txn-mempool-conflict",
+			"too-long-mempool-chain",
+			"absurdly-high-fee",
+			"tx-size",
 		]
 		.iter()
 		.any(|marker| normalized_message.contains(marker))
@@ -93,7 +97,7 @@ const EXPLICIT_BROADCAST_QUEUED: u8 = 0;
 const EXPLICIT_BROADCAST_CLAIMED: u8 = 1;
 const EXPLICIT_BROADCAST_CANCELLED: u8 = 2;
 
-struct ExplicitBroadcastClaim {
+pub(crate) struct ExplicitBroadcastClaim {
 	state: AtomicU8,
 }
 
@@ -138,7 +142,19 @@ impl Drop for CancelExplicitBroadcastOnDrop {
 pub(crate) struct BroadcastRequest {
 	pub(crate) package: Vec<Transaction>,
 	pub(crate) result_sender: Option<oneshot::Sender<Result<(), TxBroadcastError>>>,
-	explicit_claim: Option<Arc<ExplicitBroadcastClaim>>,
+	pub(crate) explicit_claim: Option<Arc<ExplicitBroadcastClaim>>,
+	pub(crate) ldk_claim: Option<LdkBroadcastClaim>,
+}
+
+pub(crate) struct LdkBroadcastClaim {
+	key: Vec<Txid>,
+	queued_packages: Arc<std::sync::Mutex<std::collections::HashSet<Vec<Txid>>>>,
+}
+
+impl Drop for LdkBroadcastClaim {
+	fn drop(&mut self) {
+		self.queued_packages.lock().unwrap().remove(&self.key);
+	}
 }
 
 impl BroadcastRequest {
@@ -151,28 +167,37 @@ impl BroadcastRequest {
 				package,
 				result_sender: Some(result_sender),
 				explicit_claim: Some(Arc::clone(&explicit_claim)),
+				ldk_claim: None,
 			},
 			explicit_claim,
 		)
 	}
 
-	fn ldk(package: Vec<Transaction>) -> Self {
-		Self { package, result_sender: None, explicit_claim: None }
+	fn ldk(
+		package: Vec<Transaction>, key: Vec<Txid>,
+		queued_packages: Arc<std::sync::Mutex<std::collections::HashSet<Vec<Txid>>>>,
+	) -> Self {
+		Self {
+			package,
+			result_sender: None,
+			explicit_claim: None,
+			ldk_claim: Some(LdkBroadcastClaim { key, queued_packages }),
+		}
 	}
 
-	fn try_claim(&self) -> bool {
+	pub(crate) fn try_claim(&self) -> bool {
 		self.explicit_claim.as_ref().map_or(true, |claim| claim.try_claim())
 	}
 }
 
 /// Separate receivers for safety-critical LDK traffic and bounded explicit user sends.
 pub(crate) struct BroadcastQueueReceivers {
-	ldk_receiver: mpsc::UnboundedReceiver<BroadcastRequest>,
-	explicit_receiver: mpsc::Receiver<BroadcastRequest>,
+	pub(crate) ldk_receiver: mpsc::UnboundedReceiver<BroadcastRequest>,
+	pub(crate) explicit_receiver: mpsc::Receiver<BroadcastRequest>,
 }
 
 impl BroadcastQueueReceivers {
-	/// Returns the next request, prioritizing LDK traffic when both queues are ready.
+	#[cfg(test)]
 	pub(crate) async fn recv(&mut self) -> Option<BroadcastRequest> {
 		loop {
 			let request = tokio::select! {
@@ -206,6 +231,7 @@ where
 	L::Target: LdkLogger,
 {
 	ldk_sender: mpsc::UnboundedSender<BroadcastRequest>,
+	ldk_queued_packages: Arc<std::sync::Mutex<std::collections::HashSet<Vec<Txid>>>>,
 	explicit_sender: mpsc::Sender<BroadcastRequest>,
 	queue_receivers: Mutex<BroadcastQueueReceivers>,
 	explicit_broadcast_run: std::sync::Mutex<Option<Arc<ExplicitBroadcastRun>>>,
@@ -223,11 +249,13 @@ where
 {
 	pub(crate) fn new(logger: L) -> Self {
 		let (ldk_sender, ldk_receiver) = mpsc::unbounded_channel();
+		let ldk_queued_packages = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
 		let (explicit_sender, explicit_receiver) = mpsc::channel(EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE);
 		let queue_receivers =
 			Mutex::new(BroadcastQueueReceivers { ldk_receiver, explicit_receiver });
 		Self {
 			ldk_sender,
+			ldk_queued_packages,
 			explicit_sender,
 			queue_receivers,
 			explicit_broadcast_run: std::sync::Mutex::new(Some(Arc::new(ExplicitBroadcastRun))),
@@ -313,7 +341,11 @@ where
 {
 	fn broadcast_transactions(&self, txs: &[&Transaction]) {
 		let package = txs.iter().map(|&t| t.clone()).collect::<Vec<Transaction>>();
-		let request = BroadcastRequest::ldk(package);
+		let key = package.iter().map(Transaction::compute_txid).collect::<Vec<_>>();
+		if !self.ldk_queued_packages.lock().unwrap().insert(key.clone()) {
+			return;
+		}
+		let request = BroadcastRequest::ldk(package, key, Arc::clone(&self.ldk_queued_packages));
 		self.ldk_sender.send(request).unwrap_or_else(|e| {
 			log_error!(self.logger, "Failed to broadcast transactions: {}", e);
 		});
@@ -361,6 +393,13 @@ mod tests {
 		);
 		assert_eq!(
 			classify_rpc_broadcast_error(None, "non-final"),
+			Err(TxBroadcastError::Rejected)
+		);
+		assert_eq!(
+			classify_rpc_broadcast_error(
+				None,
+				r#"sendrawtransaction: {\"code\":-26,\"message\":\"too-long-mempool-chain\"}"#,
+			),
 			Err(TxBroadcastError::Rejected)
 		);
 		assert_eq!(
@@ -573,6 +612,23 @@ mod tests {
 		let request = receivers.recv().await.unwrap();
 		assert_eq!(request.package, vec![tx]);
 		assert!(request.result_sender.is_none());
+	}
+
+	#[tokio::test]
+	async fn duplicate_ldk_packages_are_coalesced_until_dispatch_finishes() {
+		let broadcaster = TransactionBroadcaster::new(Arc::new(TestLogger::new()));
+		let tx = test_transaction();
+		broadcaster.broadcast_transactions(&[&tx]);
+		broadcaster.broadcast_transactions(&[&tx]);
+
+		let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		assert_eq!(request.package, vec![tx.clone()]);
+		assert!(tokio::time::timeout(Duration::from_millis(20), receivers.recv()).await.is_err());
+
+		drop(request);
+		broadcaster.broadcast_transactions(&[&tx]);
+		assert_eq!(receivers.recv().await.unwrap().package, vec![tx]);
 	}
 
 	#[tokio::test]

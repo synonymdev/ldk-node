@@ -128,6 +128,25 @@ pub enum AddressType {
 }
 
 impl AddressType {
+	pub(crate) fn serialization_tag(self) -> u8 {
+		match self {
+			AddressType::Legacy => 0,
+			AddressType::NestedSegwit => 1,
+			AddressType::NativeSegwit => 2,
+			AddressType::Taproot => 3,
+		}
+	}
+
+	pub(crate) fn from_serialization_tag(tag: u8) -> Option<Self> {
+		match tag {
+			0 => Some(AddressType::Legacy),
+			1 => Some(AddressType::NestedSegwit),
+			2 => Some(AddressType::NativeSegwit),
+			3 => Some(AddressType::Taproot),
+			_ => None,
+		}
+	}
+
 	/// Returns `true` for address types with a native witness `scriptPubKey`
 	/// (`NativeSegwit` and `Taproot`). Required by BOLT 2 for channel scripts.
 	pub fn is_native_witness(&self) -> bool {

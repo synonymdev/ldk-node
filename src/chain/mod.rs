@@ -478,10 +478,11 @@ where
 					confirmation_time: block_time.confirmation_time,
 					details,
 				};
-				event_queue.add_event(event).await.map_err(|e| {
+				event_queue.add_event_if_absent(event).await.map_err(|e| {
 					log_error!(logger, "Failed to push onchain event to queue: {}", e);
 					e
 				})?;
+				wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
 			},
 			BdkWalletEvent::TxUnconfirmed { txid, old_block_time, .. } => {
 				match old_block_time {
@@ -524,10 +525,11 @@ where
 						);
 
 						let event = Event::OnchainTransactionReceived { txid, details };
-						event_queue.add_event(event).await.map_err(|e| {
+						event_queue.add_event_if_absent(event).await.map_err(|e| {
 							log_error!(logger, "Failed to push onchain event to queue: {}", e);
 							e
 						})?;
+						wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
 					},
 				}
 			},
@@ -566,11 +568,13 @@ where
 		}
 	}
 
-	for txid in wallet.take_locally_applied_unconfirmed_txids() {
+	for txid in wallet.ready_locally_applied_unconfirmed_txids()? {
 		if !seen_received_txids.insert(txid) {
+			wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
 			continue;
 		}
 		if seen_confirmed_txids.contains(&txid) || transaction_confirmations.contains_key(&txid) {
+			wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
 			continue;
 		}
 		let Some(details) = get_transaction_details(&txid, wallet, channel_manager) else {
@@ -583,10 +587,11 @@ where
 			details.amount_sats
 		);
 		let event = Event::OnchainTransactionReceived { txid, details };
-		event_queue.add_event(event).await.map_err(|e| {
+		event_queue.add_event_if_absent(event).await.map_err(|e| {
 			log_error!(logger, "Failed to push onchain event to queue: {}", e);
 			e
 		})?;
+		wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
 	}
 	Ok(())
 }
@@ -1319,37 +1324,55 @@ impl ChainSource {
 		&self, mut stop_tx_bcast_receiver: tokio::sync::watch::Receiver<()>,
 	) {
 		let mut receivers = self.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let mut explicit_jobs = futures_util::stream::FuturesUnordered::new();
 		loop {
 			let tx_bcast_logger = Arc::clone(&self.logger);
+			let crate::tx_broadcaster::BroadcastQueueReceivers { ldk_receiver, explicit_receiver } =
+				&mut *receivers;
 			tokio::select! {
 				_ = stop_tx_bcast_receiver.changed() => {
 					self.tx_broadcaster.pause_explicit_broadcasts();
-					receivers.fail_queued_explicit_requests();
+					while let Ok(request) = explicit_receiver.try_recv() {
+						if request.try_claim() {
+							if let Some(result_sender) = request.result_sender {
+								let _ = result_sender.send(Err(crate::tx_broadcaster::TxBroadcastError::NotDispatched));
+							}
+						}
+					}
 					log_debug!(
 						tx_bcast_logger,
 						"Stopping broadcasting transactions.",
 					);
 					return;
 				}
-				Some(request) = receivers.recv() => {
-					let package = request.package;
-					let result_sender = request.result_sender;
-					let result = match &self.kind {
-						ChainSourceKind::Esplora(esplora_chain_source) => {
-							esplora_chain_source.process_broadcast_package(package).await
-						},
-						ChainSourceKind::Electrum(electrum_chain_source) => {
-							electrum_chain_source.process_broadcast_package(package).await
-						},
-						ChainSourceKind::Bitcoind(bitcoind_chain_source) => {
-							bitcoind_chain_source.process_broadcast_package(package).await
-						},
-					};
-					if let Some(result_sender) = result_sender {
-						let _ = result_sender.send(result);
+				Some(request) = ldk_receiver.recv() => {
+					self.process_broadcast_request(request).await;
+				}
+				Some(request) = explicit_receiver.recv() => {
+					if request.try_claim() {
+						explicit_jobs.push(self.process_broadcast_request(request));
 					}
 				}
+				Some(()) = futures_util::StreamExt::next(&mut explicit_jobs), if !explicit_jobs.is_empty() => {
+				}
 			}
+		}
+	}
+
+	async fn process_broadcast_request(&self, request: crate::tx_broadcaster::BroadcastRequest) {
+		let crate::tx_broadcaster::BroadcastRequest {
+			package,
+			result_sender,
+			ldk_claim: _ldk_claim,
+			explicit_claim: _explicit_claim,
+		} = request;
+		let result = match &self.kind {
+			ChainSourceKind::Esplora(source) => source.process_broadcast_package(package).await,
+			ChainSourceKind::Electrum(source) => source.process_broadcast_package(package).await,
+			ChainSourceKind::Bitcoind(source) => source.process_broadcast_package(package).await,
+		};
+		if let Some(result_sender) = result_sender {
+			let _ = result_sender.send(result);
 		}
 	}
 }

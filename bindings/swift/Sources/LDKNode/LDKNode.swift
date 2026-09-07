@@ -3355,6 +3355,10 @@ public func FfiConverterTypeOffer_lower(_ value: Offer) -> UnsafeMutableRawPoint
 }
 
 public protocol OnchainPaymentProtocol: AnyObject {
+    /**
+     * Releases a pending spend only after an independent source proves every lineage member
+     * absent from both the mempool and chain and no other process can rebroadcast it.
+     */
     func abandonPendingBroadcast(txid: Txid) throws
 
     func accelerateByCpfp(txid: Txid, feeRate: FeeRate?, destinationAddress: Address?) throws -> Txid
@@ -3375,6 +3379,9 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func calculateTotalFee(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> UInt64
 
+    /**
+     * Lists unresolved broadcasts and every transaction in each RBF lineage.
+     */
     func listPendingBroadcasts() throws -> [PendingBroadcastInfo]
 
     func listSpendableOutputs() throws -> [SpendableUtxo]
@@ -3391,6 +3398,10 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func newAddressInfoForType(addressType: AddressType) throws -> AddressInfo
 
+    /**
+     * Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+     * Do not create another spend for the same payment while its pending entry remains.
+     */
     func rebroadcastTransaction(txid: Txid) throws -> Txid
 
     func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws
@@ -3453,6 +3464,10 @@ open class OnchainPayment:
         try! rustCall { uniffi_ldk_node_fn_free_onchainpayment(pointer, $0) }
     }
 
+    /**
+     * Releases a pending spend only after an independent source proves every lineage member
+     * absent from both the mempool and chain and no other process can rebroadcast it.
+     */
     open func abandonPendingBroadcast(txid: Txid) throws {
         try rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_abandon_pending_broadcast(self.uniffiClonePointer(),
@@ -3544,6 +3559,9 @@ open class OnchainPayment:
         })
     }
 
+    /**
+     * Lists unresolved broadcasts and every transaction in each RBF lineage.
+     */
     open func listPendingBroadcasts() throws -> [PendingBroadcastInfo] {
         return try FfiConverterSequenceTypePendingBroadcastInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts(self.uniffiClonePointer(), $0)
@@ -3598,6 +3616,10 @@ open class OnchainPayment:
         })
     }
 
+    /**
+     * Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+     * Do not create another spend for the same payment while its pending entry remains.
+     */
     open func rebroadcastTransaction(txid: Txid) throws -> Txid {
         return try FfiConverterTypeTxid.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_rebroadcast_transaction(self.uniffiClonePointer(),

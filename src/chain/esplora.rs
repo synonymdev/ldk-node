@@ -590,6 +590,12 @@ fn classify_esplora_broadcast_error(error: &esplora_client::Error) -> Result<(),
 		esplora_client::Error::HttpResponse { status: 400, message } => {
 			classify_rpc_broadcast_error(None, message)
 		},
+		_ if error.to_string().to_ascii_lowercase().contains("timed out") => {
+			Err(TxBroadcastError::Timeout)
+		},
+		_ if error.to_string().to_ascii_lowercase().contains("timeout") => {
+			Err(TxBroadcastError::Timeout)
+		},
 		_ => Err(TxBroadcastError::Failed),
 	}
 }

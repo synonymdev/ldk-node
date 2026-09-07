@@ -8372,6 +8372,10 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
     }
 
 
+    /**
+     * Releases a pending spend only after an independent source proves every lineage member
+     * absent from both the mempool and chain and no other process can rebroadcast it.
+     */
     @Throws(NodeException::class)
     override fun `abandonPendingBroadcast`(`txid`: Txid) {
         callWithPointer {
@@ -8523,6 +8527,9 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
         })
     }
 
+    /**
+     * Lists unresolved broadcasts and every transaction in each RBF lineage.
+     */
     @Throws(NodeException::class)
     override fun `listPendingBroadcasts`(): List<PendingBroadcastInfo> {
         return FfiConverterSequenceTypePendingBroadcastInfo.lift(callWithPointer {
@@ -8625,6 +8632,10 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
         })
     }
 
+    /**
+     * Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+     * Do not create another spend for the same payment while its pending entry remains.
+     */
     @Throws(NodeException::class)
     override fun `rebroadcastTransaction`(`txid`: Txid): Txid {
         return FfiConverterTypeTxid.lift(callWithPointer {

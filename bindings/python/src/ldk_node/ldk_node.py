@@ -6918,6 +6918,11 @@ class _UniffiConverterTypeOffer:
 
 class OnchainPaymentProtocol(typing.Protocol):
     def abandon_pending_broadcast(self, txid: "Txid"):
+        """
+        Releases a pending spend only after an independent source proves every lineage member
+        absent from both the mempool and chain and no other process can rebroadcast it.
+        """
+
         raise NotImplementedError
     def accelerate_by_cpfp(self, txid: "Txid",fee_rate: "typing.Optional[FeeRate]",destination_address: "typing.Optional[Address]"):
         raise NotImplementedError
@@ -6938,6 +6943,10 @@ class OnchainPaymentProtocol(typing.Protocol):
     def calculate_total_fee(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]"):
         raise NotImplementedError
     def list_pending_broadcasts(self, ):
+        """
+        Lists unresolved broadcasts and every transaction in each RBF lineage.
+        """
+
         raise NotImplementedError
     def list_spendable_outputs(self, ):
         raise NotImplementedError
@@ -6954,6 +6963,11 @@ class OnchainPaymentProtocol(typing.Protocol):
     def new_address_info_for_type(self, address_type: "AddressType"):
         raise NotImplementedError
     def rebroadcast_transaction(self, txid: "Txid"):
+        """
+        Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+        Do not create another spend for the same payment while its pending entry remains.
+        """
+
         raise NotImplementedError
     def reveal_receive_addresses_to(self, address_type: "AddressType",index: "int"):
         raise NotImplementedError
@@ -6993,6 +7007,11 @@ class OnchainPayment:
 
 
     def abandon_pending_broadcast(self, txid: "Txid") -> None:
+        """
+        Releases a pending spend only after an independent source proves every lineage member
+        absent from both the mempool and chain and no other process can rebroadcast it.
+        """
+
         _UniffiConverterTypeTxid.check_lower(txid)
 
         _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_abandon_pending_broadcast,self._uniffi_clone_pointer(),
@@ -7175,6 +7194,10 @@ class OnchainPayment:
 
 
     def list_pending_broadcasts(self, ) -> "typing.List[PendingBroadcastInfo]":
+        """
+        Lists unresolved broadcasts and every transaction in each RBF lineage.
+        """
+
         return _UniffiConverterSequenceTypePendingBroadcastInfo.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts,self._uniffi_clone_pointer(),)
         )
@@ -7265,6 +7288,11 @@ class OnchainPayment:
 
 
     def rebroadcast_transaction(self, txid: "Txid") -> "Txid":
+        """
+        Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+        Do not create another spend for the same payment while its pending entry remains.
+        """
+
         _UniffiConverterTypeTxid.check_lower(txid)
 
         return _UniffiConverterTypeTxid.lift(
