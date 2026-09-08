@@ -984,6 +984,7 @@ where
 {
 	queue: Arc<Mutex<VecDeque<Event>>>,
 	idempotency_keys: Arc<Mutex<HashSet<Txid>>>,
+	mutation_lock: tokio::sync::Mutex<()>,
 	waker: Arc<Mutex<Option<Waker>>>,
 	kv_store: Arc<DynStore>,
 	logger: L,
@@ -996,11 +997,13 @@ where
 	pub(crate) fn new(kv_store: Arc<DynStore>, logger: L) -> Self {
 		let queue = Arc::new(Mutex::new(VecDeque::new()));
 		let idempotency_keys = Arc::new(Mutex::new(HashSet::new()));
+		let mutation_lock = tokio::sync::Mutex::new(());
 		let waker = Arc::new(Mutex::new(None));
-		Self { queue, idempotency_keys, waker, kv_store, logger }
+		Self { queue, idempotency_keys, mutation_lock, waker, kv_store, logger }
 	}
 
 	pub(crate) async fn add_event(&self, event: Event) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
 		let data = {
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.push_back(event);
@@ -1017,6 +1020,7 @@ where
 	}
 
 	pub(crate) async fn add_event_if_absent(&self, event: Event) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
 		let data = {
 			let mut locked_queue = self.queue.lock().unwrap();
 			if !locked_queue.contains(&event) {
@@ -1036,6 +1040,7 @@ where
 	pub(crate) async fn add_event_with_idempotency_key(
 		&self, event: Event, idempotency_key: Txid,
 	) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
 		let data = {
 			let mut locked_queue = self.queue.lock().unwrap();
 			let mut locked_keys = self.idempotency_keys.lock().unwrap();
@@ -1053,6 +1058,7 @@ where
 	}
 
 	pub(crate) async fn clear_idempotency_key(&self, idempotency_key: Txid) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
 		let data = {
 			let locked_queue = self.queue.lock().unwrap();
 			let mut locked_keys = self.idempotency_keys.lock().unwrap();
@@ -1074,6 +1080,7 @@ where
 	}
 
 	pub(crate) async fn event_handled(&self) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
 		let data = {
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.pop_front();
@@ -1125,8 +1132,9 @@ where
 		let read_queue: EventQueueDeserWrapper = Readable::read(reader)?;
 		let queue = Arc::new(Mutex::new(read_queue.0));
 		let idempotency_keys = Arc::new(Mutex::new(read_queue.1));
+		let mutation_lock = tokio::sync::Mutex::new(());
 		let waker = Arc::new(Mutex::new(None));
-		Ok(Self { queue, idempotency_keys, waker, kv_store, logger })
+		Ok(Self { queue, idempotency_keys, mutation_lock, waker, kv_store, logger })
 	}
 }
 
@@ -2583,13 +2591,120 @@ where
 
 #[cfg(test)]
 mod tests {
-	use std::sync::atomic::{AtomicU16, Ordering};
+	use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 	use std::time::Duration;
 
+	use bitcoin::hashes::Hash;
 	use lightning::util::test_utils::TestLogger;
 
 	use super::*;
 	use crate::io::test_utils::InMemoryStore;
+
+	struct DelayedWriteStore {
+		inner: Arc<InMemoryStore>,
+		block_next_write: AtomicBool,
+		write_started: Arc<tokio::sync::Notify>,
+		release_write: Arc<tokio::sync::Notify>,
+	}
+
+	impl DelayedWriteStore {
+		fn new() -> Self {
+			Self {
+				inner: Arc::new(InMemoryStore::new()),
+				block_next_write: AtomicBool::new(false),
+				write_started: Arc::new(tokio::sync::Notify::new()),
+				release_write: Arc::new(tokio::sync::Notify::new()),
+			}
+		}
+	}
+
+	impl KVStore for DelayedWriteStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<u8>, lightning::io::Error>> + Send>>
+		{
+			KVStore::read(&*self.inner, primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<(), lightning::io::Error>> + Send>> {
+			let inner = Arc::clone(&self.inner);
+			let primary_namespace = primary_namespace.to_string();
+			let secondary_namespace = secondary_namespace.to_string();
+			let key = key.to_string();
+			let should_block = self.block_next_write.swap(false, Ordering::SeqCst);
+			let write_started = Arc::clone(&self.write_started);
+			let release_write = Arc::clone(&self.release_write);
+			Box::pin(async move {
+				if should_block {
+					write_started.notify_one();
+					release_write.notified().await;
+				}
+				KVStore::write(&*inner, &primary_namespace, &secondary_namespace, &key, buf).await
+			})
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<(), lightning::io::Error>> + Send>> {
+			KVStore::remove(&*self.inner, primary_namespace, secondary_namespace, key, lazy)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<String>, lightning::io::Error>> + Send>>
+		{
+			KVStore::list(&*self.inner, primary_namespace, secondary_namespace)
+		}
+	}
+
+	impl lightning::util::persist::KVStoreSync for DelayedWriteStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> Result<Vec<u8>, lightning::io::Error> {
+			lightning::util::persist::KVStoreSync::read(
+				&*self.inner,
+				primary_namespace,
+				secondary_namespace,
+				key,
+			)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> Result<(), lightning::io::Error> {
+			lightning::util::persist::KVStoreSync::write(
+				&*self.inner,
+				primary_namespace,
+				secondary_namespace,
+				key,
+				buf,
+			)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> Result<(), lightning::io::Error> {
+			lightning::util::persist::KVStoreSync::remove(
+				&*self.inner,
+				primary_namespace,
+				secondary_namespace,
+				key,
+				lazy,
+			)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> Result<Vec<String>, lightning::io::Error> {
+			lightning::util::persist::KVStoreSync::list(
+				&*self.inner,
+				primary_namespace,
+				secondary_namespace,
+			)
+		}
+	}
 
 	#[tokio::test]
 	async fn event_queue_persistence() {
@@ -2666,6 +2781,51 @@ mod tests {
 		assert_eq!(event_queue.next_event(), Some(event));
 		event_queue.event_handled().await.unwrap();
 		assert_eq!(event_queue.next_event(), None);
+	}
+
+	#[tokio::test]
+	async fn handled_event_is_not_restored_by_concurrent_idempotency_cleanup() {
+		let store = Arc::new(DelayedWriteStore::new());
+		let dyn_store: Arc<DynStore> = store.clone();
+		let logger = Arc::new(TestLogger::new());
+		let event_queue = Arc::new(EventQueue::new(Arc::clone(&dyn_store), Arc::clone(&logger)));
+		let txid = Txid::from_byte_array([42; 32]);
+		let event = Event::OnchainTransactionReceived {
+			txid,
+			details: TransactionDetails {
+				amount_sats: 42,
+				inputs: Vec::new(),
+				outputs: Vec::new(),
+			},
+		};
+		event_queue.add_event_with_idempotency_key(event, txid).await.unwrap();
+
+		store.block_next_write.store(true, Ordering::SeqCst);
+		let cleanup_queue = Arc::clone(&event_queue);
+		let cleanup = tokio::spawn(async move { cleanup_queue.clear_idempotency_key(txid).await });
+		store.write_started.notified().await;
+
+		let handled_queue = Arc::clone(&event_queue);
+		let mut handled = tokio::spawn(async move { handled_queue.event_handled().await });
+		assert!(
+			tokio::time::timeout(Duration::from_millis(200), &mut handled).await.is_err(),
+			"event acknowledgement must wait for the cleanup write"
+		);
+		store.release_write.notify_one();
+		cleanup.await.unwrap().unwrap();
+		handled.await.unwrap().unwrap();
+
+		let persisted_bytes = KVStore::read(
+			&*dyn_store,
+			EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_KEY,
+		)
+		.await
+		.unwrap();
+		let restored_queue =
+			EventQueue::read(&mut &persisted_bytes[..], (dyn_store, logger)).unwrap();
+		assert_eq!(restored_queue.next_event(), None);
 	}
 
 	#[tokio::test]
