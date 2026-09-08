@@ -17,7 +17,10 @@ mod unified_qr;
 
 pub use bolt11::Bolt11Payment;
 pub use bolt12::Bolt12Payment;
-pub use onchain::{AddressInfo, KeychainKind, OnchainPayment, PendingBroadcastInfo};
+pub use onchain::{
+	AddressInfo, BroadcastOutcome, BroadcastOutcomeStatus, KeychainKind, OnchainPayment,
+	PendingBroadcastInfo,
+};
 pub use spontaneous::SpontaneousPayment;
 pub use store::{
 	ConfirmationStatus, LSPFeeLimits, PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus,

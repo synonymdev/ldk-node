@@ -603,6 +603,13 @@ interface OnchainPaymentInterface {
     @Throws(NodeException::class)
     fun `accelerateByCpfp`(`txid`: Txid, `feeRate`: FeeRate?, `destinationAddress`: Address?): Txid
 
+    /**
+     * Removes a terminal outcome after the consumer has durably handled it.
+     * Fails while the lineage is still active and is idempotent after removal.
+     */
+    @Throws(NodeException::class)
+    fun `acknowledgeBroadcastOutcome`(`txid`: Txid)
+
     @Throws(NodeException::class)
     fun `addressInfoForAccountAtIndex`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `keychain`: KeychainKind, `index`: kotlin.UInt): AddressInfo
 
@@ -614,6 +621,13 @@ interface OnchainPaymentInterface {
 
     @Throws(NodeException::class)
     fun `addressInfosForType`(`addressType`: AddressType, `keychain`: KeychainKind, `startIndex`: kotlin.UInt, `count`: kotlin.UInt): List<AddressInfo>
+
+    /**
+     * Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+     * Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+     */
+    @Throws(NodeException::class)
+    fun `broadcastOutcome`(`txid`: Txid): BroadcastOutcome?
 
     /**
      * Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
@@ -833,6 +847,17 @@ data class BalanceDetails (
 data class BestBlock (
     val `blockHash`: BlockHash,
     val `height`: kotlin.UInt
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class BroadcastOutcome (
+    val `status`: BroadcastOutcomeStatus,
+    val `txid`: Txid,
+    val `lineage`: List<Txid>
 ) {
     companion object
 }
@@ -1434,6 +1459,21 @@ sealed class Bolt11InvoiceDescription {
     ) : Bolt11InvoiceDescription() {
     }
 
+}
+
+
+
+
+
+
+
+@kotlinx.serialization.Serializable
+enum class BroadcastOutcomeStatus {
+
+    PENDING,
+    ACCEPTED,
+    ABANDONED;
+    companion object
 }
 
 
@@ -2622,6 +2662,8 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
 
 
 

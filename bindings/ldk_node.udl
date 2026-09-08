@@ -399,6 +399,14 @@ interface OnchainPayment {
     /// Lists unresolved broadcasts and every transaction in each RBF lineage.
     [Throws=NodeError]
     sequence<PendingBroadcastInfo> list_pending_broadcasts();
+    /// Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+    /// Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+    [Throws=NodeError]
+    BroadcastOutcome? broadcast_outcome([ByRef]Txid txid);
+    /// Removes a terminal outcome after the consumer has durably handled it.
+    /// Fails while the lineage is still active and is idempotent after removal.
+    [Throws=NodeError]
+    void acknowledge_broadcast_outcome([ByRef]Txid txid);
     /// Releases a pending spend only after an independent source proves every lineage member
     /// absent from both the mempool and chain and no other process can rebroadcast it.
     [Throws=NodeError]
@@ -426,6 +434,18 @@ enum CoinSelectionAlgorithm {
 };
 
 dictionary PendingBroadcastInfo {
+    Txid txid;
+    sequence<Txid> lineage;
+};
+
+enum BroadcastOutcomeStatus {
+    "Pending",
+    "Accepted",
+    "Abandoned",
+};
+
+dictionary BroadcastOutcome {
+    BroadcastOutcomeStatus status;
     Txid txid;
     sequence<Txid> lineage;
 };

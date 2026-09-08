@@ -32,6 +32,10 @@ pub(crate) const PAYMENT_INFO_PERSISTENCE_SECONDARY_NAMESPACE: &str = "";
 pub(crate) const ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE: &str = "onchain_broadcast_intents";
 pub(crate) const ONCHAIN_BROADCAST_INTENT_SECONDARY_NAMESPACE: &str = "";
 
+/// Durable terminal outcomes for acceptance-unknown on-chain broadcasts.
+pub(crate) const ONCHAIN_BROADCAST_OUTCOME_PRIMARY_NAMESPACE: &str = "onchain_broadcast_outcomes";
+pub(crate) const ONCHAIN_BROADCAST_OUTCOME_SECONDARY_NAMESPACE: &str = "";
+
 /// Durable delivery state for locally prepared on-chain receive events.
 pub(crate) const ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE: &str = "onchain_broadcast_events";
 pub(crate) const ONCHAIN_BROADCAST_EVENT_SECONDARY_NAMESPACE: &str = "";

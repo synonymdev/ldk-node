@@ -809,6 +809,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome() != 30310:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index() != 63246:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_type_at_index() != 42692:
@@ -816,6 +818,8 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_account() != 39321:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type() != 3701:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome() != 15076:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -2269,6 +2273,12 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_accelerate_by_cpfp.argtypes 
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_accelerate_by_cpfp.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_address_info_for_account_at_index.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2305,6 +2315,12 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type.argty
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -3418,6 +3434,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_abandon_pending_broadc
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index.restype = ctypes.c_uint16
@@ -3430,6 +3449,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_acco
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf.restype = ctypes.c_uint16
@@ -6926,6 +6948,13 @@ class OnchainPaymentProtocol(typing.Protocol):
         raise NotImplementedError
     def accelerate_by_cpfp(self, txid: "Txid",fee_rate: "typing.Optional[FeeRate]",destination_address: "typing.Optional[Address]"):
         raise NotImplementedError
+    def acknowledge_broadcast_outcome(self, txid: "Txid"):
+        """
+        Removes a terminal outcome after the consumer has durably handled it.
+        Fails while the lineage is still active and is idempotent after removal.
+        """
+
+        raise NotImplementedError
     def address_info_for_account_at_index(self, address_type: "AddressType",account_index: "int",keychain: "KeychainKind",index: "int"):
         raise NotImplementedError
     def address_info_for_type_at_index(self, address_type: "AddressType",keychain: "KeychainKind",index: "int"):
@@ -6933,6 +6962,13 @@ class OnchainPaymentProtocol(typing.Protocol):
     def address_infos_for_account(self, address_type: "AddressType",account_index: "int",keychain: "KeychainKind",start_index: "int",count: "int"):
         raise NotImplementedError
     def address_infos_for_type(self, address_type: "AddressType",keychain: "KeychainKind",start_index: "int",count: "int"):
+        raise NotImplementedError
+    def broadcast_outcome(self, txid: "Txid"):
+        """
+        Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+        Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+        """
+
         raise NotImplementedError
     def bump_fee_by_rbf(self, txid: "Txid",fee_rate: "FeeRate"):
         """
@@ -7058,6 +7094,22 @@ class OnchainPayment:
 
 
 
+    def acknowledge_broadcast_outcome(self, txid: "Txid") -> None:
+        """
+        Removes a terminal outcome after the consumer has durably handled it.
+        Fails while the lineage is still active and is idempotent after removal.
+        """
+
+        _UniffiConverterTypeTxid.check_lower(txid)
+
+        _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeTxid.lower(txid))
+
+
+
+
+
+
     def address_info_for_account_at_index(self, address_type: "AddressType",account_index: "int",keychain: "KeychainKind",index: "int") -> "AddressInfo":
         _UniffiConverterTypeAddressType.check_lower(address_type)
 
@@ -7136,6 +7188,23 @@ class OnchainPayment:
         _UniffiConverterTypeKeychainKind.lower(keychain),
         _UniffiConverterUInt32.lower(start_index),
         _UniffiConverterUInt32.lower(count))
+        )
+
+
+
+
+
+    def broadcast_outcome(self, txid: "Txid") -> "typing.Optional[BroadcastOutcome]":
+        """
+        Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+        Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+        """
+
+        _UniffiConverterTypeTxid.check_lower(txid)
+
+        return _UniffiConverterOptionalTypeBroadcastOutcome.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeTxid.lower(txid))
         )
 
 
@@ -8272,6 +8341,49 @@ class _UniffiConverterTypeBestBlock(_UniffiConverterRustBuffer):
     def write(value, buf):
         _UniffiConverterTypeBlockHash.write(value.block_hash, buf)
         _UniffiConverterUInt32.write(value.height, buf)
+
+
+class BroadcastOutcome:
+    status: "BroadcastOutcomeStatus"
+    txid: "Txid"
+    lineage: "typing.List[Txid]"
+    def __init__(self, *, status: "BroadcastOutcomeStatus", txid: "Txid", lineage: "typing.List[Txid]"):
+        self.status = status
+        self.txid = txid
+        self.lineage = lineage
+
+    def __str__(self):
+        return "BroadcastOutcome(status={}, txid={}, lineage={})".format(self.status, self.txid, self.lineage)
+
+    def __eq__(self, other):
+        if self.status != other.status:
+            return False
+        if self.txid != other.txid:
+            return False
+        if self.lineage != other.lineage:
+            return False
+        return True
+
+class _UniffiConverterTypeBroadcastOutcome(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return BroadcastOutcome(
+            status=_UniffiConverterTypeBroadcastOutcomeStatus.read(buf),
+            txid=_UniffiConverterTypeTxid.read(buf),
+            lineage=_UniffiConverterSequenceTypeTxid.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterTypeBroadcastOutcomeStatus.check_lower(value.status)
+        _UniffiConverterTypeTxid.check_lower(value.txid)
+        _UniffiConverterSequenceTypeTxid.check_lower(value.lineage)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterTypeBroadcastOutcomeStatus.write(value.status, buf)
+        _UniffiConverterTypeTxid.write(value.txid, buf)
+        _UniffiConverterSequenceTypeTxid.write(value.lineage, buf)
 
 
 class ChannelConfig:
@@ -10719,6 +10831,52 @@ class _UniffiConverterTypeBolt11InvoiceDescription(_UniffiConverterRustBuffer):
         if value.is_direct():
             buf.write_i32(2)
             _UniffiConverterString.write(value.description, buf)
+
+
+
+
+
+
+
+class BroadcastOutcomeStatus(enum.Enum):
+    PENDING = 0
+
+    ACCEPTED = 1
+
+    ABANDONED = 2
+
+
+
+class _UniffiConverterTypeBroadcastOutcomeStatus(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        variant = buf.read_i32()
+        if variant == 1:
+            return BroadcastOutcomeStatus.PENDING
+        if variant == 2:
+            return BroadcastOutcomeStatus.ACCEPTED
+        if variant == 3:
+            return BroadcastOutcomeStatus.ABANDONED
+        raise InternalError("Raw enum value doesn't match any cases")
+
+    @staticmethod
+    def check_lower(value):
+        if value == BroadcastOutcomeStatus.PENDING:
+            return
+        if value == BroadcastOutcomeStatus.ACCEPTED:
+            return
+        if value == BroadcastOutcomeStatus.ABANDONED:
+            return
+        raise ValueError(value)
+
+    @staticmethod
+    def write(value, buf):
+        if value == BroadcastOutcomeStatus.PENDING:
+            buf.write_i32(1)
+        if value == BroadcastOutcomeStatus.ACCEPTED:
+            buf.write_i32(2)
+        if value == BroadcastOutcomeStatus.ABANDONED:
+            buf.write_i32(3)
 
 
 
@@ -15775,6 +15933,33 @@ class _UniffiConverterOptionalTypeBackgroundSyncConfig(_UniffiConverterRustBuffe
 
 
 
+class _UniffiConverterOptionalTypeBroadcastOutcome(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        if value is not None:
+            _UniffiConverterTypeBroadcastOutcome.check_lower(value)
+
+    @classmethod
+    def write(cls, value, buf):
+        if value is None:
+            buf.write_u8(0)
+            return
+
+        buf.write_u8(1)
+        _UniffiConverterTypeBroadcastOutcome.write(value, buf)
+
+    @classmethod
+    def read(cls, buf):
+        flag = buf.read_u8()
+        if flag == 0:
+            return None
+        elif flag == 1:
+            return _UniffiConverterTypeBroadcastOutcome.read(buf)
+        else:
+            raise InternalError("Unexpected flag byte for optional type")
+
+
+
 class _UniffiConverterOptionalTypeChannelConfig(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -18016,6 +18201,7 @@ __all__ = [
     "AsyncPaymentsRole",
     "BalanceSource",
     "Bolt11InvoiceDescription",
+    "BroadcastOutcomeStatus",
     "BuildError",
     "ClosureReason",
     "CoinSelectionAlgorithm",
@@ -18045,6 +18231,7 @@ __all__ = [
     "BackgroundSyncConfig",
     "BalanceDetails",
     "BestBlock",
+    "BroadcastOutcome",
     "ChannelConfig",
     "ChannelDataMigration",
     "ChannelDetails",

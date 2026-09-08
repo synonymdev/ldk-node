@@ -3363,6 +3363,12 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func accelerateByCpfp(txid: Txid, feeRate: FeeRate?, destinationAddress: Address?) throws -> Txid
 
+    /**
+     * Removes a terminal outcome after the consumer has durably handled it.
+     * Fails while the lineage is still active and is idempotent after removal.
+     */
+    func acknowledgeBroadcastOutcome(txid: Txid) throws
+
     func addressInfoForAccountAtIndex(addressType: AddressType, accountIndex: UInt32, keychain: KeychainKind, index: UInt32) throws -> AddressInfo
 
     func addressInfoForTypeAtIndex(addressType: AddressType, keychain: KeychainKind, index: UInt32) throws -> AddressInfo
@@ -3370,6 +3376,12 @@ public protocol OnchainPaymentProtocol: AnyObject {
     func addressInfosForAccount(addressType: AddressType, accountIndex: UInt32, keychain: KeychainKind, startIndex: UInt32, count: UInt32) throws -> [AddressInfo]
 
     func addressInfosForType(addressType: AddressType, keychain: KeychainKind, startIndex: UInt32, count: UInt32) throws -> [AddressInfo]
+
+    /**
+     * Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+     * Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+     */
+    func broadcastOutcome(txid: Txid) throws -> BroadcastOutcome?
 
     /**
      * Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
@@ -3499,6 +3511,17 @@ open class OnchainPayment:
         })
     }
 
+    /**
+     * Removes a terminal outcome after the consumer has durably handled it.
+     * Fails while the lineage is still active and is idempotent after removal.
+     */
+    open func acknowledgeBroadcastOutcome(txid: Txid) throws {
+        try rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome(self.uniffiClonePointer(),
+                                                                                   FfiConverterTypeTxid.lower(txid), $0)
+        }
+    }
+
     open func addressInfoForAccountAtIndex(addressType: AddressType, accountIndex: UInt32, keychain: KeychainKind, index: UInt32) throws -> AddressInfo {
         return try FfiConverterTypeAddressInfo.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_address_info_for_account_at_index(self.uniffiClonePointer(),
@@ -3536,6 +3559,17 @@ open class OnchainPayment:
                                                                             FfiConverterTypeKeychainKind.lower(keychain),
                                                                             FfiConverterUInt32.lower(startIndex),
                                                                             FfiConverterUInt32.lower(count), $0)
+        })
+    }
+
+    /**
+     * Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+     * Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+     */
+    open func broadcastOutcome(txid: Txid) throws -> BroadcastOutcome? {
+        return try FfiConverterOptionTypeBroadcastOutcome.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome(self.uniffiClonePointer(),
+                                                                       FfiConverterTypeTxid.lower(txid), $0)
         })
     }
 
@@ -4773,6 +4807,75 @@ public func FfiConverterTypeBestBlock_lift(_ buf: RustBuffer) throws -> BestBloc
 #endif
 public func FfiConverterTypeBestBlock_lower(_ value: BestBlock) -> RustBuffer {
     return FfiConverterTypeBestBlock.lower(value)
+}
+
+public struct BroadcastOutcome {
+    public var status: BroadcastOutcomeStatus
+    public var txid: Txid
+    public var lineage: [Txid]
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(status: BroadcastOutcomeStatus, txid: Txid, lineage: [Txid]) {
+        self.status = status
+        self.txid = txid
+        self.lineage = lineage
+    }
+}
+
+extension BroadcastOutcome: Equatable, Hashable {
+    public static func == (lhs: BroadcastOutcome, rhs: BroadcastOutcome) -> Bool {
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.txid != rhs.txid {
+            return false
+        }
+        if lhs.lineage != rhs.lineage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(status)
+        hasher.combine(txid)
+        hasher.combine(lineage)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBroadcastOutcome: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BroadcastOutcome {
+        return
+            try BroadcastOutcome(
+                status: FfiConverterTypeBroadcastOutcomeStatus.read(from: &buf),
+                txid: FfiConverterTypeTxid.read(from: &buf),
+                lineage: FfiConverterSequenceTypeTxid.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: BroadcastOutcome, into buf: inout [UInt8]) {
+        FfiConverterTypeBroadcastOutcomeStatus.write(value.status, into: &buf)
+        FfiConverterTypeTxid.write(value.txid, into: &buf)
+        FfiConverterSequenceTypeTxid.write(value.lineage, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBroadcastOutcome_lift(_ buf: RustBuffer) throws -> BroadcastOutcome {
+    return try FfiConverterTypeBroadcastOutcome.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBroadcastOutcome_lower(_ value: BroadcastOutcome) -> RustBuffer {
+    return FfiConverterTypeBroadcastOutcome.lower(value)
 }
 
 public struct ChannelConfig {
@@ -8175,6 +8278,64 @@ public func FfiConverterTypeBolt11InvoiceDescription_lower(_ value: Bolt11Invoic
 
 extension Bolt11InvoiceDescription: Equatable, Hashable {}
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum BroadcastOutcomeStatus {
+    case pending
+    case accepted
+    case abandoned
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBroadcastOutcomeStatus: FfiConverterRustBuffer {
+    typealias SwiftType = BroadcastOutcomeStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BroadcastOutcomeStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        case 1: return .pending
+
+        case 2: return .accepted
+
+        case 3: return .abandoned
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BroadcastOutcomeStatus, into buf: inout [UInt8]) {
+        switch value {
+        case .pending:
+            writeInt(&buf, Int32(1))
+
+        case .accepted:
+            writeInt(&buf, Int32(2))
+
+        case .abandoned:
+            writeInt(&buf, Int32(3))
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBroadcastOutcomeStatus_lift(_ buf: RustBuffer) throws -> BroadcastOutcomeStatus {
+    return try FfiConverterTypeBroadcastOutcomeStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBroadcastOutcomeStatus_lower(_ value: BroadcastOutcomeStatus) -> RustBuffer {
+    return FfiConverterTypeBroadcastOutcomeStatus.lower(value)
+}
+
+extension BroadcastOutcomeStatus: Equatable, Hashable {}
+
 public enum BuildError {
     case InvalidSeedBytes(message: String)
 
@@ -10605,6 +10766,30 @@ private struct FfiConverterOptionTypeBackgroundSyncConfig: FfiConverterRustBuffe
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeBackgroundSyncConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+private struct FfiConverterOptionTypeBroadcastOutcome: FfiConverterRustBuffer {
+    typealias SwiftType = BroadcastOutcome?
+
+    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBroadcastOutcome.write(value, into: &buf)
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBroadcastOutcome.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -13575,6 +13760,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome() != 30310 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index() != 63246 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13585,6 +13773,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type() != 3701 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome() != 15076 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877 {

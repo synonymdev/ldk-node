@@ -155,7 +155,9 @@ use liquidity::{LSPS1Liquidity, LiquiditySource};
 use logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use payment::asynchronous::om_mailbox::OnionMessageMailbox;
 use payment::asynchronous::static_invoice_store::StaticInvoiceStore;
-pub use payment::{AddressInfo, KeychainKind, PendingBroadcastInfo};
+pub use payment::{
+	AddressInfo, BroadcastOutcome, BroadcastOutcomeStatus, KeychainKind, PendingBroadcastInfo,
+};
 use payment::{
 	Bolt11Payment, Bolt12Payment, OnchainPayment, PaymentDetails, SpontaneousPayment,
 	UnifiedQrPayment,

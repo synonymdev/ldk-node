@@ -2,6 +2,9 @@
 
 ## Synonym Fork Additions
 
+- Added durable `broadcast_outcome` reconciliation by any RBF-lineage transaction ID with explicit
+  `Pending`, `Accepted`, and `Abandoned` states. Acceptance-unknown outcomes survive restart and
+  confirmation until the consumer calls `acknowledge_broadcast_outcome`.
 - `list_pending_broadcasts` now returns each unresolved spend's complete RBF lineage so callers can
   independently reconcile every replacement before `abandon_pending_broadcast`.
 - Explicit on-chain sends now return a transaction ID only after the configured backend accepts

@@ -1560,6 +1560,10 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2628,6 +2632,11 @@ internal interface UniffiLib : Library {
         `destinationAddress`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome(
+        `ptr`: Pointer?,
+        `txid`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_method_onchainpayment_address_info_for_account_at_index(
         `ptr`: Pointer?,
         `addressType`: RustBufferByValue,
@@ -2658,6 +2667,11 @@ internal interface UniffiLib : Library {
         `keychain`: RustBufferByValue,
         `startIndex`: Int,
         `count`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome(
+        `ptr`: Pointer?,
+        `txid`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf(
@@ -3490,6 +3504,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_type_at_index(
@@ -3497,6 +3513,8 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_account(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf(
     ): Short
@@ -4125,6 +4143,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome() != 30310.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index() != 63246.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -4135,6 +4156,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type() != 3701.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome() != 15076.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877.toShort()) {
@@ -8404,6 +8428,23 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
         })
     }
 
+    /**
+     * Removes a terminal outcome after the consumer has durably handled it.
+     * Fails while the lineage is still active and is idempotent after removal.
+     */
+    @Throws(NodeException::class)
+    override fun `acknowledgeBroadcastOutcome`(`txid`: Txid) {
+        callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome(
+                    it,
+                    FfiConverterTypeTxid.lower(`txid`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
     @Throws(NodeException::class)
     override fun `addressInfoForAccountAtIndex`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `keychain`: KeychainKind, `index`: kotlin.UInt): AddressInfo {
         return FfiConverterTypeAddressInfo.lift(callWithPointer {
@@ -8462,6 +8503,23 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
                     FfiConverterTypeKeychainKind.lower(`keychain`),
                     FfiConverterUInt.lower(`startIndex`),
                     FfiConverterUInt.lower(`count`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    /**
+     * Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+     * Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+     */
+    @Throws(NodeException::class)
+    override fun `broadcastOutcome`(`txid`: Txid): BroadcastOutcome? {
+        return FfiConverterOptionalTypeBroadcastOutcome.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome(
+                    it,
+                    FfiConverterTypeTxid.lower(`txid`),
                     uniffiRustCallStatus,
                 )
             }
@@ -9728,6 +9786,31 @@ object FfiConverterTypeBestBlock: FfiConverterRustBuffer<BestBlock> {
     override fun write(value: BestBlock, buf: ByteBuffer) {
         FfiConverterTypeBlockHash.write(value.`blockHash`, buf)
         FfiConverterUInt.write(value.`height`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypeBroadcastOutcome: FfiConverterRustBuffer<BroadcastOutcome> {
+    override fun read(buf: ByteBuffer): BroadcastOutcome {
+        return BroadcastOutcome(
+            FfiConverterTypeBroadcastOutcomeStatus.read(buf),
+            FfiConverterTypeTxid.read(buf),
+            FfiConverterSequenceTypeTxid.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BroadcastOutcome) = (
+            FfiConverterTypeBroadcastOutcomeStatus.allocationSize(value.`status`) +
+            FfiConverterTypeTxid.allocationSize(value.`txid`) +
+            FfiConverterSequenceTypeTxid.allocationSize(value.`lineage`)
+    )
+
+    override fun write(value: BroadcastOutcome, buf: ByteBuffer) {
+        FfiConverterTypeBroadcastOutcomeStatus.write(value.`status`, buf)
+        FfiConverterTypeTxid.write(value.`txid`, buf)
+        FfiConverterSequenceTypeTxid.write(value.`lineage`, buf)
     }
 }
 
@@ -11028,6 +11111,24 @@ object FfiConverterTypeBolt11InvoiceDescription : FfiConverterRustBuffer<Bolt11I
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+object FfiConverterTypeBroadcastOutcomeStatus: FfiConverterRustBuffer<BroadcastOutcomeStatus> {
+    override fun read(buf: ByteBuffer) = try {
+        BroadcastOutcomeStatus.entries[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: BroadcastOutcomeStatus) = 4UL
+
+    override fun write(value: BroadcastOutcomeStatus, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
     }
 }
 
@@ -13674,6 +13775,35 @@ object FfiConverterOptionalTypeBackgroundSyncConfig: FfiConverterRustBuffer<Back
         } else {
             buf.put(1)
             FfiConverterTypeBackgroundSyncConfig.write(value, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterOptionalTypeBroadcastOutcome: FfiConverterRustBuffer<BroadcastOutcome?> {
+    override fun read(buf: ByteBuffer): BroadcastOutcome? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeBroadcastOutcome.read(buf)
+    }
+
+    override fun allocationSize(value: BroadcastOutcome?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeBroadcastOutcome.allocationSize(value)
+        }
+    }
+
+    override fun write(value: BroadcastOutcome?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeBroadcastOutcome.write(value, buf)
         }
     }
 }
