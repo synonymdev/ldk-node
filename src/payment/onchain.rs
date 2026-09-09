@@ -1197,8 +1197,8 @@ mod tests {
 	use crate::config::Config;
 	use crate::error::Error;
 	use crate::io::{
-		test_utils::InMemoryStore, ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
-		ONCHAIN_BROADCAST_OUTCOME_PRIMARY_NAMESPACE,
+		test_utils::InMemoryStore, ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE,
+		ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE, ONCHAIN_BROADCAST_OUTCOME_PRIMARY_NAMESPACE,
 	};
 	use crate::payment::BroadcastOutcomeStatus;
 	use crate::tx_broadcaster::TxBroadcastError;
@@ -1217,6 +1217,7 @@ mod tests {
 		state: Mutex<BroadcastWriteState>,
 		state_changed: Condvar,
 		fail_next_write_namespace: Mutex<Option<String>>,
+		fail_next_remove_namespace: Mutex<Option<String>>,
 	}
 
 	impl BlockingBroadcastIntentStore {
@@ -1226,11 +1227,16 @@ mod tests {
 				state: Mutex::new(BroadcastWriteState::default()),
 				state_changed: Condvar::new(),
 				fail_next_write_namespace: Mutex::new(None),
+				fail_next_remove_namespace: Mutex::new(None),
 			}
 		}
 
 		fn fail_next_write_in(&self, primary_namespace: &str) {
 			*self.fail_next_write_namespace.lock().unwrap() = Some(primary_namespace.to_owned());
+		}
+
+		fn fail_next_remove_in(&self, primary_namespace: &str) {
+			*self.fail_next_remove_namespace.lock().unwrap() = Some(primary_namespace.to_owned());
 		}
 
 		fn block_next_broadcast_intent_write(&self) {
@@ -1272,6 +1278,16 @@ mod tests {
 			if namespace.as_deref() == Some(primary_namespace) {
 				namespace.take();
 				Err(io::Error::new(io::ErrorKind::Other, "Injected namespace write failure"))
+			} else {
+				Ok(())
+			}
+		}
+
+		fn fail_armed_remove(&self, primary_namespace: &str) -> io::Result<()> {
+			let mut namespace = self.fail_next_remove_namespace.lock().unwrap();
+			if namespace.as_deref() == Some(primary_namespace) {
+				namespace.take();
+				Err(io::Error::new(io::ErrorKind::Other, "Injected namespace remove failure"))
 			} else {
 				Ok(())
 			}
@@ -1322,6 +1338,7 @@ mod tests {
 		fn remove(
 			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
 		) -> io::Result<()> {
+			self.fail_armed_remove(primary_namespace)?;
 			KVStoreSync::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
 		}
 
@@ -1396,6 +1413,31 @@ mod tests {
 		assert_eq!(
 			node.onchain_payment().broadcast_outcome(&txid).unwrap().map(|outcome| outcome.status),
 			Some(BroadcastOutcomeStatus::Pending)
+		);
+	}
+
+	#[test]
+	fn accepted_result_marker_cleanup_failure_keeps_observed_outcome() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(store);
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		node.wallet.begin_broadcast_dispatch(txid).unwrap();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.apply_mempool_txs(vec![(tx, 1)], Vec::new()).unwrap();
+		node.wallet.mark_locally_applied_unconfirmed_delivered(txid).unwrap();
+		concrete_store.fail_next_remove_in(ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+
+		assert_eq!(
+			node.onchain_payment().record_accepted_broadcast(txid),
+			Err(Error::OnchainTxBroadcastFailed { txid })
+		);
+		node.wallet.end_broadcast_dispatches(&[txid]);
+		assert_eq!(
+			node.onchain_payment().broadcast_outcome(&txid).unwrap().map(|outcome| outcome.status),
+			Some(BroadcastOutcomeStatus::Accepted)
 		);
 	}
 

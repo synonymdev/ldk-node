@@ -1752,6 +1752,7 @@ impl Wallet {
 		{
 			return Err(Error::TransactionNotFound);
 		}
+		self.cleanup_delivered_broadcast_event_if_resolved(*txid)?;
 		if let Some((outcome_key, outcome)) =
 			self.find_stored_broadcast_outcome_by_lineage_txid(txid)?
 		{
@@ -1765,7 +1766,7 @@ impl Wallet {
 				self.write_broadcast_intent(&intent)?;
 			}
 		}
-		self.cleanup_delivered_broadcast_event_if_resolved(*txid)
+		Ok(())
 	}
 
 	/// Removes a provisional terminal record after a conclusive public result is delivered.
@@ -2765,6 +2766,8 @@ impl Wallet {
 		let rejected_tx = intent.active_transaction().clone();
 		let rejected_txid = rejected_tx.compute_txid();
 		self.persist_rejected_broadcast_outcome(&intent)?;
+		let predecessor_was_pending =
+			intent.predecessor_was_pending[intent.active_index as usize] != 0;
 		let predecessor_index = intent.predecessor_indexes[intent.active_index as usize];
 		let predecessor_index =
 			usize::try_from(predecessor_index).map_err(|_| Error::PersistenceFailed)?;
@@ -2797,7 +2800,9 @@ impl Wallet {
 
 		let finished_rejected_tx = intent.finish_rejection()?;
 		debug_assert_eq!(finished_rejected_tx.compute_txid(), rejected_txid);
-		intent.outcome_retention_armed = false;
+		// A restored pending predecessor still needs its pre-dispatch retention fallback when the
+		// public-result promotion did not persist.
+		intent.outcome_retention_armed = predecessor_was_pending && !intent.requires_outcome;
 		if intent.has_pending_transaction() || intent.transactions.len() > 1 {
 			self.write_broadcast_intent(&intent)
 		} else {
@@ -4892,6 +4897,58 @@ mod tests {
 			Some((BroadcastOutcomeStatus::Abandoned, replacement_txid, vec![replacement_txid],))
 		);
 		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![original_txid]);
+	}
+
+	#[test]
+	fn rejected_rbf_preserves_failed_original_outcome_promotion() {
+		let concrete_store = Arc::new(NamespaceFailStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = replacement_test_node(store);
+		let script_pubkey = node.onchain_payment().new_address().unwrap().script_pubkey();
+		let mut original = replacement_test_transaction(49);
+		original.input[0].previous_output.vout = 1;
+		original
+			.output
+			.push(TxOut { value: Amount::from_sat(10_000), script_pubkey: script_pubkey.clone() });
+		let mut replacement = replacement_test_transaction(50);
+		replacement.input[0].previous_output.vout = 1;
+		replacement.output.push(TxOut { value: Amount::from_sat(9_000), script_pubkey });
+		let original_txid = original.compute_txid();
+		let replacement_txid = replacement.compute_txid();
+		let mut original_intent = BroadcastIntent::new(original.clone());
+		original_intent.outcome_retention_armed = true;
+		node.wallet.write_broadcast_intent(&original_intent).unwrap();
+
+		concrete_store.fail_next_write_in(ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE);
+		assert_eq!(
+			node.wallet.retain_broadcast_outcome(&original_txid),
+			Err(Error::PersistenceFailed)
+		);
+		let (_, retained_original) =
+			node.wallet.find_broadcast_intent_by_active_txid(&original_txid).unwrap();
+		assert!(!retained_original.requires_outcome);
+		assert!(retained_original.outcome_retention_armed);
+
+		let mut replacement_intent =
+			BroadcastIntent::replacement(Some(retained_original), original.clone(), replacement)
+				.unwrap();
+		replacement_intent.outcome_retention_armed = true;
+		node.wallet.write_broadcast_intent(&replacement_intent).unwrap();
+		node.wallet.reject_rbf_broadcast(&replacement_txid).unwrap();
+		node.wallet.remove_transient_broadcast_outcome(&replacement_txid).unwrap();
+
+		let (_, restored_original) =
+			node.wallet.find_broadcast_intent_by_active_txid(&original_txid).unwrap();
+		assert_eq!(restored_original.state, BroadcastIntentState::Pending);
+		assert!(!restored_original.requires_outcome);
+		assert!(restored_original.outcome_retention_armed);
+
+		node.wallet.apply_mempool_txs(vec![(original, 1)], Vec::new()).unwrap();
+		assert_eq!(
+			node.wallet.broadcast_outcome(&original_txid).unwrap(),
+			Some((BroadcastOutcomeStatus::Accepted, original_txid, vec![original_txid]))
+		);
+		assert_eq!(node.wallet.broadcast_outcome(&replacement_txid).unwrap(), None);
 	}
 
 	#[test]
