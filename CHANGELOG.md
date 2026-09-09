@@ -4,7 +4,8 @@
 
 - Added durable `broadcast_outcome` reconciliation by any RBF-lineage transaction ID with explicit
   `Pending`, `Accepted`, and `Abandoned` states. Acceptance-unknown outcomes survive restart and
-  confirmation until the consumer calls `acknowledge_broadcast_outcome`.
+  confirmation until the consumer calls `acknowledge_broadcast_outcome`; conservative retention is
+  persisted before dispatch so a later backend observation cannot erase the outcome.
 - `list_pending_broadcasts` now returns each unresolved spend's complete RBF lineage so callers can
   independently reconcile every replacement before `abandon_pending_broadcast`.
 - Explicit on-chain sends now return a transaction ID only after the configured backend accepts
@@ -13,7 +14,7 @@
   in a durable intent store for enumeration, exact-byte rebroadcast, sync reconciliation, and
   recovery after restart. Callers can explicitly abandon an externally reconciled intent, and RBF
   replacements use the same result-bearing, durable lifecycle while exposing only the canonical
-  transaction in payment history.
+  transaction in payment history. Concurrent wallet syncs serialize received-event delivery.
 - `NodeError` is now a fielded bindings error type so broadcast failures can expose their
   transaction ID. Swift error cases no longer contain the legacy generated `message` associated
   value, while fieldless Kotlin and Python exceptions have an empty generated message; callers

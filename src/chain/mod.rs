@@ -432,6 +432,7 @@ pub(crate) async fn process_wallet_events<L2: Deref>(
 where
 	L2::Target: LdkLogger,
 {
+	let _delivery_guard = wallet.lock_broadcast_event_delivery().await;
 	// Use per-type sets so that two wallets with different prior state can each contribute
 	// their event type for the same txid without suppressing the other.
 	let mut seen_received_txids = std::collections::HashSet::new();

@@ -240,7 +240,13 @@ impl OnchainPayment {
 			Ok(result) => result,
 			Err(Error::NotRunning) => {
 				drop(dispatch_lease);
-				self.wallet.abandon_broadcast_intent(&tx)?;
+				if let Err(error) = self
+					.wallet
+					.abandon_broadcast_intent(&tx)
+					.and_then(|_| self.wallet.remove_transient_broadcast_outcome(&txid))
+				{
+					return Err(self.record_conclusive_cleanup_failure(txid, error));
+				}
 				return Err(Error::NotRunning);
 			},
 			Err(error) => return Err(error),
@@ -249,8 +255,12 @@ impl OnchainPayment {
 			Ok(()) => self.record_accepted_broadcast(txid),
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
 				drop(dispatch_lease);
-				if self.wallet.abandon_broadcast_intent(&tx).is_err() {
-					return Err(Error::OnchainTxBroadcastFailed { txid });
+				if let Err(cleanup_error) = self
+					.wallet
+					.abandon_broadcast_intent(&tx)
+					.and_then(|_| self.wallet.remove_transient_broadcast_outcome(&txid))
+				{
+					return Err(self.record_conclusive_cleanup_failure(txid, cleanup_error));
 				}
 				Err(Self::initial_broadcast_error(error, txid))
 			},
@@ -288,6 +298,19 @@ impl OnchainPayment {
 				e
 			);
 		}
+	}
+
+	fn record_conclusive_cleanup_failure(&self, txid: Txid, error: Error) -> Error {
+		log_error!(self.logger, "Failed to finalize conclusive broadcast {}: {}", txid, error);
+		if let Err(retention_error) = self.wallet.retain_broadcast_outcome(&txid) {
+			log_error!(
+				self.logger,
+				"Failed to retain conclusive broadcast cleanup outcome {}: {}",
+				txid,
+				retention_error
+			);
+		}
+		Error::OnchainTxBroadcastFailed { txid }
 	}
 
 	fn initial_broadcast_error(error: TxBroadcastError, txid: Txid) -> Error {
@@ -1035,7 +1058,13 @@ impl OnchainPayment {
 		) {
 			Ok(result) => result,
 			Err(Error::NotRunning) => {
-				self.wallet.reject_rbf_broadcast(&replacement_txid)?;
+				if let Err(error) = self
+					.wallet
+					.reject_rbf_broadcast(&replacement_txid)
+					.and_then(|_| self.wallet.remove_transient_broadcast_outcome(&replacement_txid))
+				{
+					return Err(self.record_conclusive_cleanup_failure(replacement_txid, error));
+				}
 				return Err(Error::NotRunning);
 			},
 			Err(error) => return Err(error),
@@ -1043,8 +1072,14 @@ impl OnchainPayment {
 		match dispatch_result {
 			Ok(()) => self.record_accepted_broadcast(replacement_txid),
 			Err(error @ (TxBroadcastError::Rejected | TxBroadcastError::NotDispatched)) => {
-				if self.wallet.reject_rbf_broadcast(&replacement_txid).is_err() {
-					return Err(Error::OnchainTxBroadcastFailed { txid: replacement_txid });
+				if let Err(cleanup_error) = self
+					.wallet
+					.reject_rbf_broadcast(&replacement_txid)
+					.and_then(|_| self.wallet.remove_transient_broadcast_outcome(&replacement_txid))
+				{
+					return Err(
+						self.record_conclusive_cleanup_failure(replacement_txid, cleanup_error)
+					);
 				}
 				Err(Self::initial_broadcast_error(error, replacement_txid))
 			},
@@ -1148,6 +1183,7 @@ mod tests {
 	use std::future::Future;
 	use std::pin::Pin;
 	use std::sync::{Arc, Condvar, Mutex};
+	use std::time::Duration;
 
 	use bitcoin::absolute::LockTime;
 	use bitcoin::hashes::Hash;
@@ -1160,7 +1196,10 @@ mod tests {
 	use crate::builder::NodeBuilder;
 	use crate::config::Config;
 	use crate::error::Error;
-	use crate::io::{test_utils::InMemoryStore, ONCHAIN_BROADCAST_OUTCOME_PRIMARY_NAMESPACE};
+	use crate::io::{
+		test_utils::InMemoryStore, ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
+		ONCHAIN_BROADCAST_OUTCOME_PRIMARY_NAMESPACE,
+	};
 	use crate::payment::BroadcastOutcomeStatus;
 	use crate::tx_broadcaster::TxBroadcastError;
 	use crate::types::DynStore;
@@ -1361,6 +1400,41 @@ mod tests {
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn pre_dispatch_retention_survives_unknown_result_write_failure() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		let payment = node.onchain_payment();
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		let send_tx = tx.clone();
+		let dispatch = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, send_tx)
+		});
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		concrete_store.fail_next_write_in(ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE);
+		request.send_result(Err(TxBroadcastError::Failed));
+		drop(receivers);
+
+		assert_eq!(dispatch.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		drop(node);
+
+		let restarted = test_node(store);
+		restarted.wallet.apply_mempool_txs(vec![(tx, 1)], Vec::new()).unwrap();
+		assert_eq!(
+			restarted
+				.onchain_payment()
+				.broadcast_outcome(&txid)
+				.unwrap()
+				.map(|outcome| outcome.status),
+			Some(BroadcastOutcomeStatus::Accepted)
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn failed_send_survives_eviction_restart_and_retry_until_accepted() {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		let node = test_node(Arc::clone(&store));
@@ -1516,6 +1590,57 @@ mod tests {
 		.await
 		.unwrap();
 		assert!(restarted.next_event().is_none());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn concurrent_wallet_event_delivery_is_serialized() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = test_node(store);
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.publish_locally_applied_unconfirmed(txid).unwrap();
+
+		let wallet = Arc::clone(&node.wallet);
+		let event_queue = Arc::clone(&node.event_queue);
+		let logger = Arc::clone(&node.logger);
+		let channel_manager = Arc::clone(&node.channel_manager);
+		let delivery_guard = node.wallet.lock_broadcast_event_delivery().await;
+		let mut first = tokio::spawn(async move {
+			crate::chain::process_wallet_events(
+				Vec::new(),
+				&wallet,
+				&event_queue,
+				&logger,
+				Some(&channel_manager),
+				None,
+			)
+			.await
+		});
+		assert!(tokio::time::timeout(Duration::from_millis(25), &mut first).await.is_err());
+
+		let wallet = Arc::clone(&node.wallet);
+		let event_queue = Arc::clone(&node.event_queue);
+		let logger = Arc::clone(&node.logger);
+		let channel_manager = Arc::clone(&node.channel_manager);
+		let second = tokio::spawn(async move {
+			crate::chain::process_wallet_events(
+				Vec::new(),
+				&wallet,
+				&event_queue,
+				&logger,
+				Some(&channel_manager),
+				None,
+			)
+			.await
+		});
+
+		drop(delivery_guard);
+		first.await.unwrap().unwrap();
+		node.event_handled().unwrap();
+		second.await.unwrap().unwrap();
+		assert!(node.next_event().is_none());
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]

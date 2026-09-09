@@ -82,7 +82,8 @@ const LEGACY_RBF_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 2;
 const LEGACY_RESOLVED_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 3;
 const LEGACY_LINEAGE_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 4;
 const LEGACY_ACCOUNT_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 5;
-const ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 6;
+const LEGACY_OUTCOME_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 6;
+const ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 7;
 const ONCHAIN_BROADCAST_OUTCOME_SERIALIZATION_VERSION: u8 = 1;
 const NO_PREDECESSOR_INDEX: u64 = u64::MAX;
 
@@ -152,6 +153,9 @@ struct BroadcastIntent {
 	// Set before an acceptance-unknown result crosses the public API boundary. Terminal outcomes
 	// for such lineages remain durable until explicit consumer acknowledgement.
 	requires_outcome: bool,
+	// Persisted before dispatch so a later acceptance observation remains queryable even if the
+	// post-dispatch write that promotes `requires_outcome` fails.
+	outcome_retention_armed: bool,
 }
 
 impl BroadcastIntent {
@@ -164,6 +168,7 @@ impl BroadcastIntent {
 			predecessor_was_pending: vec![0],
 			participant_accounts: Vec::new(),
 			requires_outcome: false,
+			outcome_retention_armed: false,
 		}
 	}
 
@@ -211,6 +216,7 @@ impl BroadcastIntent {
 			predecessor_was_pending,
 			participant_accounts: Vec::new(),
 			requires_outcome: true,
+			outcome_retention_armed: false,
 		})
 	}
 
@@ -571,6 +577,8 @@ pub(crate) struct Wallet {
 	inner: Mutex<AggregateWallet<OnchainWalletAccount, KVStoreWalletPersister>>,
 	// Serializes raw-intent persistence with wallet reservation and backend reconciliation.
 	broadcast_intent_lock: Mutex<()>,
+	// Serializes event selection through durable delivery cleanup across concurrent wallet syncs.
+	broadcast_event_delivery_lock: tokio::sync::Mutex<()>,
 	// Keyed by the first transaction ID so an RBF replacement can atomically update one record.
 	broadcast_intents: Mutex<HashMap<Txid, BroadcastIntent>>,
 	// Prevents a same-process abandon from racing a broadcast already claimed for dispatch.
@@ -616,6 +624,7 @@ impl Wallet {
 		Self {
 			inner,
 			broadcast_intent_lock: Mutex::new(()),
+			broadcast_event_delivery_lock: tokio::sync::Mutex::new(()),
 			broadcast_intents: Mutex::new(HashMap::new()),
 			inflight_broadcast_txids: Mutex::new(HashSet::new()),
 			operation_lock,
@@ -633,6 +642,11 @@ impl Wallet {
 			logger,
 			derived_account_lookahead,
 		}
+	}
+
+	/// Locks wallet-event selection through durable queue and marker updates.
+	pub(crate) async fn lock_broadcast_event_delivery(&self) -> tokio::sync::MutexGuard<'_, ()> {
+		self.broadcast_event_delivery_lock.lock().await
 	}
 
 	pub(crate) fn begin_broadcast_dispatch(&self, txid: Txid) -> Result<(), Error> {
@@ -1401,6 +1415,7 @@ impl Wallet {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		let mut intent = BroadcastIntent::new(tx.clone());
 		intent.participant_accounts = locked_wallet.wallet_keys_for_transaction(tx);
+		intent.outcome_retention_armed = true;
 		self.write_broadcast_intent(&intent)?;
 		self.note_locally_applied_unconfirmed(txid)?;
 		let last_seen = Self::next_broadcast_timestamp(&locked_wallet, &[txid])?;
@@ -1470,11 +1485,15 @@ impl Wallet {
 	) -> Result<Option<Transaction>, Error> {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
 		self.complete_broadcast_transitions()?;
-		let Some((_, intent)) = self.find_broadcast_intent_by_active_txid(txid) else {
+		let Some((_, mut intent)) = self.find_broadcast_intent_by_active_txid(txid) else {
 			return Ok(None);
 		};
 		if !intent.has_pending_transaction() {
 			return Ok(None);
+		}
+		if !intent.outcome_retention_armed {
+			intent.outcome_retention_armed = true;
+			self.write_broadcast_intent(&intent)?;
 		}
 		let tx = intent.active_transaction().clone();
 		let lineage_txids =
@@ -1567,11 +1586,18 @@ impl Wallet {
 
 	/// Makes terminal retention durable before returning an acceptance-unknown result.
 	pub(crate) fn mark_broadcast_outcome_required(&self, txid: &Txid) -> Result<(), Error> {
+		self.retain_broadcast_outcome(txid)?;
+		self.publish_locally_applied_unconfirmed(*txid)
+	}
+
+	/// Promotes a dispatch reservation to an acknowledgement-required outcome.
+	pub(crate) fn retain_broadcast_outcome(&self, txid: &Txid) -> Result<(), Error> {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
 		self.complete_broadcast_transitions()?;
 		if let Some((_, mut intent)) = self.find_broadcast_intent_by_lineage_txid(txid) {
-			if !intent.requires_outcome {
+			if !intent.requires_outcome || intent.outcome_retention_armed {
 				intent.requires_outcome = true;
+				intent.outcome_retention_armed = false;
 				self.write_broadcast_intent(&intent)?;
 			}
 		} else if let Some((_, mut outcome)) =
@@ -1589,7 +1615,7 @@ impl Wallet {
 			);
 			return Err(Error::PersistenceFailed);
 		}
-		self.publish_locally_applied_unconfirmed(*txid)
+		Ok(())
 	}
 
 	pub(crate) fn ready_locally_applied_unconfirmed_txids(&self) -> Result<Vec<Txid>, Error> {
@@ -1733,7 +1759,30 @@ impl Wallet {
 				self.remove_broadcast_outcome(&outcome_key)?;
 			}
 		}
+		if let Some((_, mut intent)) = self.find_broadcast_intent_by_lineage_txid(txid) {
+			if intent.outcome_retention_armed {
+				intent.outcome_retention_armed = false;
+				self.write_broadcast_intent(&intent)?;
+			}
+		}
 		self.cleanup_delivered_broadcast_event_if_resolved(*txid)
+	}
+
+	/// Removes a provisional terminal record after a conclusive public result is delivered.
+	pub(crate) fn remove_transient_broadcast_outcome(&self, txid: &Txid) -> Result<(), Error> {
+		let _intent = self.broadcast_intent_lock.lock().unwrap();
+		self.complete_broadcast_transitions()?;
+		if self.find_broadcast_intent_by_lineage_txid(txid).is_some() {
+			return Ok(());
+		}
+		if let Some((outcome_key, outcome)) =
+			self.find_stored_broadcast_outcome_by_lineage_txid(txid)?
+		{
+			if !outcome.retain_until_ack {
+				self.remove_broadcast_outcome(&outcome_key)?;
+			}
+		}
+		Ok(())
 	}
 
 	/// Restore unresolved intent reservations after loading the wallet from persistent storage.
@@ -1844,6 +1893,7 @@ impl Wallet {
 			intent.active_index,
 			intent.state.serialization_tag(),
 			u8::from(intent.requires_outcome),
+			u8::from(intent.outcome_retention_armed),
 			&intent.predecessor_indexes,
 			&intent.predecessor_was_pending,
 			intent
@@ -1986,6 +2036,7 @@ impl Wallet {
 					predecessor_was_pending,
 					participant_accounts: Vec::new(),
 					requires_outcome: true,
+					outcome_retention_armed: false,
 				}
 			},
 			Some(&LEGACY_ACCOUNT_BROADCAST_INTENT_SERIALIZATION_VERSION) => {
@@ -2027,9 +2078,10 @@ impl Wallet {
 					predecessor_was_pending,
 					participant_accounts,
 					requires_outcome: true,
+					outcome_retention_armed: false,
 				}
 			},
-			Some(&ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION) => {
+			Some(&LEGACY_OUTCOME_BROADCAST_INTENT_SERIALIZATION_VERSION) => {
 				let (
 					active_index,
 					state_tag,
@@ -2077,6 +2129,63 @@ impl Wallet {
 					predecessor_was_pending,
 					participant_accounts,
 					requires_outcome: requires_outcome != 0,
+					outcome_retention_armed: requires_outcome == 0
+						&& state != BroadcastIntentState::Accepted,
+				}
+			},
+			Some(&ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION) => {
+				let (
+					active_index,
+					state_tag,
+					requires_outcome,
+					outcome_retention_armed,
+					predecessor_indexes,
+					predecessor_was_pending,
+					account_type_tags,
+					account_indexes,
+					transactions,
+				) = deserialize::<(
+					u32,
+					u8,
+					u8,
+					u8,
+					Vec<u64>,
+					Vec<u8>,
+					Vec<u8>,
+					Vec<u64>,
+					Vec<Transaction>,
+				)>(&bytes[1..])
+				.map_err(|_| Error::PersistenceFailed)?;
+				if requires_outcome > 1
+					|| outcome_retention_armed > 1
+					|| account_type_tags.len() != account_indexes.len()
+				{
+					return Err(Error::PersistenceFailed);
+				}
+				let state = BroadcastIntentState::from_serialization_tag(state_tag)?;
+				let participant_accounts = account_type_tags
+					.into_iter()
+					.zip(account_indexes)
+					.map(|(tag, account_index)| {
+						let account_index =
+							u32::try_from(account_index).map_err(|_| Error::PersistenceFailed)?;
+						AddressType::from_serialization_tag(tag)
+							.map(|address_type| OnchainWalletAccount {
+								address_type,
+								account_index,
+							})
+							.ok_or(Error::PersistenceFailed)
+					})
+					.collect::<Result<Vec<_>, _>>()?;
+				BroadcastIntent {
+					transactions,
+					active_index,
+					state,
+					predecessor_indexes,
+					predecessor_was_pending,
+					participant_accounts,
+					requires_outcome: requires_outcome != 0,
+					outcome_retention_armed: outcome_retention_armed != 0,
 				}
 			},
 			_ => {
@@ -2291,13 +2400,27 @@ impl Wallet {
 		let inflight_txids = self.inflight_broadcast_txids.lock().unwrap();
 		let has_inflight_member = lineage.iter().any(|txid| inflight_txids.contains(txid));
 		drop(inflight_txids);
-		if !intent.requires_outcome && !has_inflight_member {
+		if !intent.requires_outcome && !intent.outcome_retention_armed && !has_inflight_member {
 			return Ok(());
 		}
 		self.write_broadcast_outcome(&StoredBroadcastOutcome {
 			status,
 			txid: intent.active_txid(),
 			lineage,
+			retain_until_ack: intent.requires_outcome,
+		})
+	}
+
+	/// Persists a rejected replacement before removing it from its active lineage.
+	fn persist_rejected_broadcast_outcome(&self, intent: &BroadcastIntent) -> Result<(), Error> {
+		if !intent.requires_outcome && !intent.outcome_retention_armed {
+			return Ok(());
+		}
+		let rejected_txid = intent.active_txid();
+		self.write_broadcast_outcome(&StoredBroadcastOutcome {
+			status: StoredBroadcastOutcomeStatus::Abandoned,
+			txid: rejected_txid,
+			lineage: vec![rejected_txid],
 			retain_until_ack: intent.requires_outcome,
 		})
 	}
@@ -2572,6 +2695,7 @@ impl Wallet {
 		if retained_outcome {
 			replacement_intent.requires_outcome = true;
 		}
+		replacement_intent.outcome_retention_armed = true;
 		for account in locked_wallet.wallet_keys_for_transaction(&tx) {
 			if !replacement_intent.participant_accounts.contains(&account) {
 				replacement_intent.participant_accounts.push(account);
@@ -2640,6 +2764,7 @@ impl Wallet {
 		}
 		let rejected_tx = intent.active_transaction().clone();
 		let rejected_txid = rejected_tx.compute_txid();
+		self.persist_rejected_broadcast_outcome(&intent)?;
 		let predecessor_index = intent.predecessor_indexes[intent.active_index as usize];
 		let predecessor_index =
 			usize::try_from(predecessor_index).map_err(|_| Error::PersistenceFailed)?;
@@ -2672,6 +2797,7 @@ impl Wallet {
 
 		let finished_rejected_tx = intent.finish_rejection()?;
 		debug_assert_eq!(finished_rejected_tx.compute_txid(), rejected_txid);
+		intent.outcome_retention_armed = false;
 		if intent.has_pending_transaction() || intent.transactions.len() > 1 {
 			self.write_broadcast_intent(&intent)
 		} else {
@@ -4235,6 +4361,7 @@ mod tests {
 		BroadcastIntent, BroadcastIntentState, BIP32_MAX_NORMAL_INDEX,
 		LEGACY_ACCOUNT_BROADCAST_INTENT_SERIALIZATION_VERSION,
 		LEGACY_ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION,
+		LEGACY_OUTCOME_BROADCAST_INTENT_SERIALIZATION_VERSION,
 		LEGACY_RESOLVED_BROADCAST_INTENT_SERIALIZATION_VERSION, MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
 	use crate::builder::NodeBuilder;
@@ -4740,6 +4867,31 @@ mod tests {
 		drop(node);
 		let restarted = replacement_test_node(store);
 		assert_eq!(restarted.wallet.list_pending_broadcasts().unwrap(), vec![original_txid]);
+	}
+
+	#[test]
+	fn rejected_rbf_cleanup_failure_keeps_the_replacement_queryable() {
+		let concrete_store = Arc::new(NamespaceFailStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = replacement_test_node(store);
+		let original = replacement_test_transaction(3);
+		let replacement = replacement_test_transaction(4);
+		let original_txid = original.compute_txid();
+		let replacement_txid = replacement.compute_txid();
+		let mut intent = BroadcastIntent::replacement(None, original, replacement).unwrap();
+		intent.outcome_retention_armed = true;
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+		concrete_store.fail_next_remove_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+
+		assert_eq!(
+			node.wallet.reject_rbf_broadcast(&replacement_txid),
+			Err(Error::PersistenceFailed)
+		);
+		assert_eq!(
+			node.wallet.broadcast_outcome(&replacement_txid).unwrap(),
+			Some((BroadcastOutcomeStatus::Abandoned, replacement_txid, vec![replacement_txid],))
+		);
+		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![original_txid]);
 	}
 
 	#[test]
@@ -5660,6 +5812,38 @@ mod tests {
 		let (_, intent) = node.wallet.find_broadcast_intent_by_active_txid(&txid).unwrap();
 		assert_eq!(intent.participant_accounts, vec![account]);
 		assert!(intent.requires_outcome);
+	}
+
+	#[test]
+	fn legacy_pending_outcome_intent_arms_conservative_retention() {
+		let store = Arc::new(InMemoryStore::new());
+		let tx = replacement_test_transaction(48);
+		let txid = tx.compute_txid();
+		let mut bytes = vec![LEGACY_OUTCOME_BROADCAST_INTENT_SERIALIZATION_VERSION];
+		bytes.extend(serialize(&(
+			0u32,
+			BroadcastIntentState::Pending.serialization_tag(),
+			0u8,
+			vec![super::NO_PREDECESSOR_INDEX],
+			vec![0u8],
+			Vec::<u8>::new(),
+			Vec::<u64>::new(),
+			vec![tx],
+		)));
+		KVStoreSync::write(
+			&*store,
+			ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
+			ONCHAIN_BROADCAST_INTENT_SECONDARY_NAMESPACE,
+			&txid.to_string(),
+			bytes,
+		)
+		.unwrap();
+		let dyn_store: Arc<DynStore> = store;
+
+		let node = replacement_test_node(dyn_store);
+		let (_, intent) = node.wallet.find_broadcast_intent_by_active_txid(&txid).unwrap();
+		assert!(!intent.requires_outcome);
+		assert!(intent.outcome_retention_armed);
 	}
 
 	#[test]
