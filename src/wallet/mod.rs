@@ -313,6 +313,9 @@ impl BroadcastIntent {
 			.iter()
 			.position(|transaction| transaction.compute_txid() == predecessor_txid)
 			.ok_or(Error::TransactionNotFound)?;
+		if predecessor_index != self.active_index as usize {
+			return Err(Error::TransactionNotFound);
+		}
 		let replaces_active = replacement.input.iter().any(|replacement_input| {
 			self.transactions[predecessor_index].input.iter().any(|active_input| {
 				active_input.previous_output == replacement_input.previous_output
@@ -1416,8 +1419,7 @@ impl Wallet {
 		let mut intent = BroadcastIntent::new(tx.clone());
 		intent.participant_accounts = locked_wallet.wallet_keys_for_transaction(tx);
 		intent.outcome_retention_armed = true;
-		self.write_broadcast_intent(&intent)?;
-		self.note_locally_applied_unconfirmed(txid)?;
+		self.persist_broadcast_before_reservation(&intent)?;
 		let last_seen = Self::next_broadcast_timestamp(&locked_wallet, &[txid])?;
 		self.payment_store_update_pending.store(true, Ordering::Release);
 		if let Err(e) = locked_wallet.apply_mempool_txs(vec![(tx.clone(), last_seen)], Vec::new()) {
@@ -1429,6 +1431,16 @@ impl Wallet {
 			return Err(Error::OnchainTxBroadcastFailed { txid });
 		}
 		Ok(())
+	}
+
+	/// Persists the signed transaction and event marker before its wallet inputs are reserved.
+	fn persist_broadcast_before_reservation(&self, intent: &BroadcastIntent) -> Result<(), Error> {
+		let txid = intent.active_txid();
+		self.write_broadcast_intent(intent)?;
+		self.note_locally_applied_unconfirmed(txid).map_err(|e| {
+			log_error!(self.logger, "Failed to persist broadcast event marker for {}: {}", txid, e);
+			Error::OnchainTxBroadcastFailed { txid }
+		})
 	}
 
 	/// Release and forget a transaction only after a conclusive initial-send outcome.
@@ -2703,7 +2715,6 @@ impl Wallet {
 			}
 		}
 		let last_seen = self.write_rbf_replacement_intent(&locked_wallet, &replacement_intent)?;
-		self.note_locally_applied_unconfirmed(new_txid)?;
 		self.payment_store_update_pending.store(true, Ordering::Release);
 		if let Err(e) = locked_wallet.apply_mempool_txs(vec![(tx.clone(), last_seen)], Vec::new()) {
 			log_error!(self.logger, "Failed to reserve RBF replacement {}: {}", new_txid, e);
@@ -2742,7 +2753,7 @@ impl Wallet {
 		let lineage_txids =
 			replacement_intent.transactions.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>();
 		let last_seen = Self::next_broadcast_timestamp(locked_wallet, &lineage_txids)?;
-		self.write_broadcast_intent(replacement_intent)?;
+		self.persist_broadcast_before_reservation(replacement_intent)?;
 		Ok(last_seen)
 	}
 
@@ -4685,6 +4696,59 @@ mod tests {
 	}
 
 	#[test]
+	fn initial_marker_persistence_failure_returns_recoverable_txid() {
+		let concrete_store = Arc::new(NamespaceFailStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = replacement_test_node(store);
+		let tx = replacement_test_transaction(6);
+		let txid = tx.compute_txid();
+		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+
+		assert_eq!(
+			node.wallet.prepare_pending_broadcast(&tx),
+			Err(Error::OnchainTxBroadcastFailed { txid })
+		);
+		assert_eq!(
+			node.wallet.broadcast_outcome(&txid).unwrap(),
+			Some((BroadcastOutcomeStatus::Pending, txid, vec![txid]))
+		);
+		assert_eq!(node.wallet.recover_pending_broadcast(&txid).unwrap(), Some(tx));
+	}
+
+	#[test]
+	fn rbf_marker_persistence_failure_returns_recoverable_txid() {
+		let concrete_store = Arc::new(NamespaceFailStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = replacement_test_node(store);
+		let original = replacement_test_transaction(7);
+		let replacement = replacement_test_transaction(8);
+		let original_txid = original.compute_txid();
+		let replacement_txid = replacement.compute_txid();
+		let mut intent = BroadcastIntent::replacement(None, original, replacement.clone()).unwrap();
+		intent.outcome_retention_armed = true;
+		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+
+		let wallet = node.wallet.inner.lock().unwrap();
+		assert_eq!(
+			node.wallet.write_rbf_replacement_intent(&wallet, &intent),
+			Err(Error::OnchainTxBroadcastFailed { txid: replacement_txid })
+		);
+		drop(wallet);
+		assert_eq!(
+			node.wallet.broadcast_outcome(&replacement_txid).unwrap(),
+			Some((
+				BroadcastOutcomeStatus::Pending,
+				replacement_txid,
+				vec![original_txid, replacement_txid],
+			))
+		);
+		assert_eq!(
+			node.wallet.recover_pending_broadcast(&replacement_txid).unwrap(),
+			Some(replacement)
+		);
+	}
+
+	#[test]
 	fn ordinary_rbf_retains_the_accepted_original_only_for_reconciliation() {
 		let original = replacement_test_transaction(8);
 		let replacement = replacement_test_transaction(9);
@@ -5068,7 +5132,7 @@ mod tests {
 	}
 
 	#[test]
-	fn rbf_reentry_from_predecessor_preserves_existing_lineage() {
+	fn rbf_reentry_from_inactive_predecessor_is_rejected() {
 		let original = replacement_test_transaction(50);
 		let first_replacement = replacement_test_transaction(51);
 		let second_replacement = replacement_test_transaction(52);
@@ -5077,15 +5141,14 @@ mod tests {
 			BroadcastIntent::replacement(None, original.clone(), first_replacement.clone())
 				.unwrap();
 		intent.mark_accepted(first_replacement_txid).unwrap();
+		let unchanged = intent.clone();
 
-		let intent =
-			BroadcastIntent::replacement(Some(intent), original, second_replacement.clone())
-				.unwrap();
-
-		assert_eq!(intent.transactions.len(), 3);
-		assert_eq!(intent.transactions[1], first_replacement);
-		assert_eq!(intent.active_transaction(), &second_replacement);
-		assert_eq!(intent.predecessor_indexes[2], 0);
+		assert_eq!(
+			BroadcastIntent::replacement(Some(intent), original.clone(), second_replacement),
+			Err(Error::TransactionNotFound)
+		);
+		assert_eq!(unchanged.transactions, vec![original, first_replacement]);
+		assert_eq!(unchanged.active_txid(), first_replacement_txid);
 	}
 
 	#[test]

@@ -865,6 +865,7 @@ impl ChainSource {
 				}
 			},
 			ChainSourceKind::Bitcoind(bitcoind_chain_source) => {
+				let event_queue = self.event_queue.lock().unwrap().clone();
 				bitcoind_chain_source
 					.continuously_sync_wallets(
 						stop_sync_receiver,
@@ -872,6 +873,7 @@ impl ChainSource {
 						channel_manager,
 						chain_monitor,
 						output_sweeper,
+						event_queue,
 					)
 					.await
 			},
@@ -1299,12 +1301,14 @@ impl ChainSource {
 				unreachable!("Listeners will be synced via transction-based syncing")
 			},
 			ChainSourceKind::Bitcoind(bitcoind_chain_source) => {
+				let event_queue = self.event_queue.lock().unwrap().clone();
 				bitcoind_chain_source
 					.poll_and_update_listeners(
 						onchain_wallet,
 						channel_manager,
 						chain_monitor,
 						output_sweeper,
+						event_queue,
 					)
 					.await
 			},
