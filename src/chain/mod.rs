@@ -444,11 +444,12 @@ where
 		confirmation_time,
 		details,
 	};
-	event_queue.add_event_if_absent(event).await.map_err(|e| {
+	event_queue.add_event_with_idempotency_key(event, txid).await.map_err(|e| {
 		log_error!(logger, "Failed to push onchain event to queue: {}", e);
 		e
 	})?;
-	wallet.mark_locally_applied_unconfirmed_delivered(txid)
+	wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+	event_queue.clear_idempotency_key(txid).await
 }
 
 // Process BDK wallet events and emit corresponding ldk-node events via the event queue.

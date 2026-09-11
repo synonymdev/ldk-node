@@ -236,6 +236,14 @@ impl BroadcastIntent {
 		self.state == BroadcastIntentState::Pending
 	}
 
+	/// Arms a new dispatch or promotes prior recovery evidence before a repeat dispatch.
+	fn prepare_dispatch_retention(&mut self, retain_prior_outcome: bool) {
+		let retain_until_ack =
+			retain_prior_outcome || self.requires_outcome || self.outcome_retention_armed;
+		self.requires_outcome = retain_until_ack;
+		self.outcome_retention_armed = !retain_until_ack;
+	}
+
 	fn mark_accepted(&mut self, txid: Txid) -> Result<(), Error> {
 		self.active_index = self
 			.transactions
@@ -1418,7 +1426,7 @@ impl Wallet {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		let mut intent = BroadcastIntent::new(tx.clone());
 		intent.participant_accounts = locked_wallet.wallet_keys_for_transaction(tx);
-		intent.outcome_retention_armed = true;
+		intent.prepare_dispatch_retention(false);
 		self.persist_broadcast_before_reservation(&intent)?;
 		let last_seen = Self::next_broadcast_timestamp(&locked_wallet, &[txid])?;
 		self.payment_store_update_pending.store(true, Ordering::Release);
@@ -1503,8 +1511,9 @@ impl Wallet {
 		if !intent.has_pending_transaction() {
 			return Ok(None);
 		}
-		if !intent.outcome_retention_armed {
-			intent.outcome_retention_armed = true;
+		let previous_retention = (intent.requires_outcome, intent.outcome_retention_armed);
+		intent.prepare_dispatch_retention(true);
+		if previous_retention != (intent.requires_outcome, intent.outcome_retention_armed) {
 			self.write_broadcast_intent(&intent)?;
 		}
 		let tx = intent.active_transaction().clone();
@@ -2654,10 +2663,8 @@ impl Wallet {
 		let _intent = self.broadcast_intent_lock.lock().unwrap();
 		self.complete_broadcast_transitions()?;
 		let existing_intent = self.find_broadcast_intent_by_lineage_txid(txid);
-		let retained_outcome = if existing_intent.is_none() {
-			self.find_stored_broadcast_outcome_by_lineage_txid(txid)?
-				.map(|(_, outcome)| outcome.retain_until_ack)
-				.unwrap_or(false)
+		let preserve_stored_outcome = if existing_intent.is_none() {
+			self.find_stored_broadcast_outcome_by_lineage_txid(txid)?.is_some()
 		} else {
 			false
 		};
@@ -2704,10 +2711,7 @@ impl Wallet {
 			tx.clone(),
 		)?;
 		let mut replacement_intent = replacement_intent;
-		if retained_outcome {
-			replacement_intent.requires_outcome = true;
-		}
-		replacement_intent.outcome_retention_armed = true;
+		replacement_intent.prepare_dispatch_retention(preserve_stored_outcome);
 		for account in locked_wallet.wallet_keys_for_transaction(&tx) {
 			if !replacement_intent.participant_accounts.contains(&account) {
 				replacement_intent.participant_accounts.push(account);
@@ -5065,6 +5069,70 @@ mod tests {
 			Some((BroadcastOutcomeStatus::Accepted, original_txid, vec![original_txid]))
 		);
 		assert_eq!(node.wallet.broadcast_outcome(&replacement_txid).unwrap(), None);
+	}
+
+	#[test]
+	fn accepted_rbf_preserves_failed_outcome_promotion_through_confirmation() {
+		let concrete_store = Arc::new(NamespaceFailStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = replacement_test_node(Arc::clone(&store));
+		let script_pubkey = node.onchain_payment().new_address().unwrap().script_pubkey();
+		let mut original = replacement_test_transaction(51);
+		original.input[0].previous_output.vout = 1;
+		original
+			.output
+			.push(TxOut { value: Amount::from_sat(10_000), script_pubkey: script_pubkey.clone() });
+		let mut replacement = replacement_test_transaction(52);
+		replacement.input[0].previous_output.vout = 1;
+		replacement.output.push(TxOut { value: Amount::from_sat(9_000), script_pubkey });
+		let original_txid = original.compute_txid();
+		let replacement_txid = replacement.compute_txid();
+		let mut original_intent = BroadcastIntent::new(original.clone());
+		original_intent.prepare_dispatch_retention(false);
+		node.wallet.write_broadcast_intent(&original_intent).unwrap();
+
+		concrete_store.fail_next_write_in(ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE);
+		assert_eq!(
+			node.wallet.retain_broadcast_outcome(&original_txid),
+			Err(Error::PersistenceFailed)
+		);
+		let (_, retained_original) =
+			node.wallet.find_broadcast_intent_by_active_txid(&original_txid).unwrap();
+		assert!(!retained_original.requires_outcome);
+		assert!(retained_original.outcome_retention_armed);
+		let mut replacement_intent =
+			BroadcastIntent::replacement(Some(retained_original), original, replacement.clone())
+				.unwrap();
+		replacement_intent.prepare_dispatch_retention(false);
+		assert!(replacement_intent.requires_outcome);
+		assert!(!replacement_intent.outcome_retention_armed);
+		node.wallet.write_broadcast_intent(&replacement_intent).unwrap();
+
+		node.wallet.clear_broadcast_intent(&replacement_txid).unwrap();
+		let block = replacement_test_confirmation_block(replacement);
+		node.wallet.inner.lock().unwrap().apply_block(&block, 1).unwrap();
+		node.wallet.resolve_broadcast_intents([(original_txid, replacement_txid, true)]).unwrap();
+		assert_eq!(
+			node.wallet.broadcast_outcome(&original_txid).unwrap(),
+			Some((
+				BroadcastOutcomeStatus::Accepted,
+				replacement_txid,
+				vec![original_txid, replacement_txid],
+			))
+		);
+		drop(node);
+
+		let restarted = replacement_test_node(store);
+		assert_eq!(
+			restarted.wallet.broadcast_outcome(&replacement_txid).unwrap(),
+			Some((
+				BroadcastOutcomeStatus::Accepted,
+				replacement_txid,
+				vec![original_txid, replacement_txid],
+			))
+		);
+		restarted.wallet.acknowledge_broadcast_outcome(&original_txid).unwrap();
+		assert_eq!(restarted.wallet.broadcast_outcome(&replacement_txid).unwrap(), None);
 	}
 
 	#[test]

@@ -1774,7 +1774,7 @@ mod tests {
 		(builder.build_with_store(store).unwrap(), seed)
 	}
 
-	#[tokio::test]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn bitcoind_sync_pumps_ready_broadcast_markers() {
 		let (node, _) = test_node();
 		let tx = Transaction {
@@ -1808,7 +1808,7 @@ mod tests {
 		node.wallet.end_broadcast_dispatches(&[txid]);
 	}
 
-	#[tokio::test]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn bitcoind_sync_emits_confirmation_for_confirmed_ready_marker() {
 		let (node, _) = test_node();
 		let tx = Transaction {

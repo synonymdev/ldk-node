@@ -1186,15 +1186,17 @@ mod tests {
 	use std::time::Duration;
 
 	use bitcoin::absolute::LockTime;
+	use bitcoin::block::Header;
+	use bitcoin::blockdata::constants::genesis_block;
 	use bitcoin::hashes::Hash;
 	use bitcoin::transaction::Version;
-	use bitcoin::{Amount, Network, ScriptBuf, Transaction, TxOut, Txid};
+	use bitcoin::{Amount, Block, Network, ScriptBuf, Transaction, TxMerkleNode, TxOut, Txid};
 	use lightning::io;
 	use lightning::util::persist::{KVStore, KVStoreSync};
 
 	use super::OnchainPayment;
 	use crate::builder::NodeBuilder;
-	use crate::config::Config;
+	use crate::config::{AddressType, Config, OnchainWalletAccount};
 	use crate::error::Error;
 	use crate::io::{
 		test_utils::InMemoryStore, ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE,
@@ -1376,6 +1378,23 @@ mod tests {
 		}
 	}
 
+	fn confirmation_block(transaction: Transaction) -> Block {
+		let genesis = genesis_block(Network::Regtest);
+		Block {
+			header: Header {
+				version: bitcoin::block::Version::ONE,
+				prev_blockhash: genesis.block_hash(),
+				merkle_root: TxMerkleNode::from_byte_array(
+					transaction.compute_txid().to_byte_array(),
+				),
+				time: genesis.header.time.saturating_add(1),
+				bits: genesis.header.bits,
+				nonce: 1,
+			},
+			txdata: vec![transaction],
+		}
+	}
+
 	#[test]
 	fn rebroadcast_errors_preserve_the_original_unknown_outcome() {
 		let txid = Txid::all_zeros();
@@ -1474,6 +1493,53 @@ mod tests {
 				.map(|outcome| outcome.status),
 			Some(BroadcastOutcomeStatus::Accepted)
 		);
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn retry_success_retains_outcome_after_promotion_write_failure() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		let payment = node.onchain_payment();
+		let admission = payment.begin_explicit_broadcast().unwrap();
+		let send_tx = tx.clone();
+		let initial = tokio::task::spawn_blocking(move || {
+			payment.dispatch_prepared_transaction(admission, send_tx)
+		});
+		let mut receivers = node.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		concrete_store.fail_next_write_in(ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE);
+		request.send_result(Err(TxBroadcastError::Failed));
+		drop(receivers);
+		assert_eq!(initial.await.unwrap(), Err(Error::OnchainTxBroadcastFailed { txid }));
+		drop(node);
+
+		let retried = test_node(Arc::clone(&store));
+		*retried.is_running.write().unwrap() = true;
+		let payment = retried.onchain_payment();
+		let retry = tokio::task::spawn_blocking(move || payment.rebroadcast_transaction(&txid));
+		let mut receivers = retried.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		assert_eq!(request.package, vec![tx]);
+		request.send_result(Ok(()));
+		drop(receivers);
+		assert_eq!(retry.await.unwrap(), Ok(txid));
+		drop(retried);
+
+		let restarted = test_node(store);
+		assert_eq!(
+			restarted
+				.onchain_payment()
+				.broadcast_outcome(&txid)
+				.unwrap()
+				.map(|outcome| outcome.status),
+			Some(BroadcastOutcomeStatus::Accepted)
+		);
+		restarted.onchain_payment().acknowledge_broadcast_outcome(&txid).unwrap();
+		assert!(restarted.onchain_payment().broadcast_outcome(&txid).unwrap().is_none());
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1616,6 +1682,61 @@ mod tests {
 		assert!(matches!(
 			node.next_event(),
 			Some(Event::OnchainTransactionReceived { txid: received_txid, .. }) if received_txid == txid
+		));
+		node.event_handled().unwrap();
+		drop(node);
+
+		let restarted = test_node(store);
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&restarted.wallet,
+			&restarted.event_queue,
+			&restarted.logger,
+			Some(&restarted.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(restarted.next_event().is_none());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn handled_confirmation_is_not_repeated_after_delivery_write_failure() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+		let block = confirmation_block(tx);
+		node.wallet
+			.apply_block_to_account(
+				OnchainWalletAccount::account_zero(AddressType::NativeSegwit),
+				&block,
+				1,
+			)
+			.unwrap();
+		node.wallet.finish_pending_sync(false).unwrap();
+		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+
+		assert_eq!(
+			crate::chain::process_wallet_events(
+				Vec::new(),
+				&node.wallet,
+				&node.event_queue,
+				&node.logger,
+				Some(&node.channel_manager),
+				None,
+			)
+			.await,
+			Err(Error::PersistenceFailed)
+		);
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionConfirmed { txid: confirmed_txid, .. })
+				if confirmed_txid == txid
 		));
 		node.event_handled().unwrap();
 		drop(node);
