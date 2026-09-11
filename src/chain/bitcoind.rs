@@ -1701,7 +1701,8 @@ mod tests {
 	use bitcoin::hashes::Hash;
 	use bitcoin::transaction::Version;
 	use bitcoin::{
-		Amount, FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness,
+		Amount, FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxMerkleNode, TxOut,
+		Txid, Witness,
 	};
 	use lightning::chain::{BestBlock, Listen};
 	use lightning_block_sync::http::JsonResponse;
@@ -1803,6 +1804,52 @@ mod tests {
 		assert!(matches!(
 			node.next_event(),
 			Some(Event::OnchainTransactionReceived { txid: event_txid, .. }) if event_txid == txid
+		));
+		node.wallet.end_broadcast_dispatches(&[txid]);
+	}
+
+	#[tokio::test]
+	async fn bitcoind_sync_emits_confirmation_for_confirmed_ready_marker() {
+		let (node, _) = test_node();
+		let tx = Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::ZERO,
+			input: Vec::new(),
+			output: vec![TxOut {
+				value: Amount::from_sat(1),
+				script_pubkey: node.onchain_payment().new_address().unwrap().script_pubkey(),
+			}],
+		};
+		let txid = tx.compute_txid();
+		node.wallet.begin_broadcast_dispatch(txid).unwrap();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+		let genesis = genesis_block(Network::Regtest);
+		let mut block = child_block(&genesis, 1);
+		block.header.merkle_root = TxMerkleNode::from_byte_array(txid.to_byte_array());
+		block.txdata = vec![tx];
+		node.wallet
+			.apply_block_to_account(
+				OnchainWalletAccount::account_zero(AddressType::NativeSegwit),
+				&block,
+				1,
+			)
+			.unwrap();
+
+		process_bitcoind_broadcast_events(
+			&node.wallet,
+			Some(&node.event_queue),
+			&node.logger,
+			&node.channel_manager,
+			&node.chain_monitor,
+		)
+		.await
+		.unwrap();
+
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionConfirmed { txid: event_txid, .. })
+				if event_txid == txid
 		));
 		node.wallet.end_broadcast_dispatches(&[txid]);
 	}

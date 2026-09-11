@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
 use bdk_wallet::event::WalletEvent as BdkWalletEvent;
 use bdk_wallet::{KeychainKind, Update as BdkUpdate};
-use bitcoin::{Script, Txid};
+use bitcoin::{BlockHash, Script, Txid};
 use lightning::chain::{BestBlock, Filter};
 use lightning::log_warn;
 use lightning_block_sync::gossip::UtxoSource;
@@ -421,6 +421,36 @@ mod sync_tests {
 	}
 }
 
+// Queue the confirmation before retiring a durable explicit-broadcast event marker.
+async fn enqueue_onchain_transaction_confirmed<L2: Deref>(
+	txid: Txid, block_hash: BlockHash, block_height: u32, confirmation_time: u64,
+	wallet: &crate::wallet::Wallet, event_queue: &EventQueue<L2>, logger: &Arc<Logger>,
+	channel_manager: Option<&Arc<ChannelManager>>,
+) -> Result<(), Error>
+where
+	L2::Target: LdkLogger,
+{
+	let details = get_transaction_details(&txid, wallet, channel_manager).unwrap_or_else(|| {
+		log_error!(logger, "Transaction {} not found in wallet", txid);
+		TransactionDetails { amount_sats: 0, inputs: Vec::new(), outputs: Vec::new() }
+	});
+
+	log_info!(logger, "Onchain transaction {} confirmed at height {}", txid, block_height);
+
+	let event = Event::OnchainTransactionConfirmed {
+		txid,
+		block_hash,
+		block_height,
+		confirmation_time,
+		details,
+	};
+	event_queue.add_event_if_absent(event).await.map_err(|e| {
+		log_error!(logger, "Failed to push onchain event to queue: {}", e);
+		e
+	})?;
+	wallet.mark_locally_applied_unconfirmed_delivered(txid)
+}
+
 // Process BDK wallet events and emit corresponding ldk-node events via the event queue.
 // When a transaction touches multiple wallet accounts, each wallet emits its own
 // BdkWalletEvent, so we deduplicate by txid before forwarding to the event queue.
@@ -455,35 +485,17 @@ where
 				if !seen_confirmed_txids.insert(txid) {
 					continue;
 				}
-				let details = get_transaction_details(&txid, wallet, channel_manager)
-					.unwrap_or_else(|| {
-						log_error!(logger, "Transaction {} not found in wallet", txid);
-						TransactionDetails {
-							amount_sats: 0,
-							inputs: Vec::new(),
-							outputs: Vec::new(),
-						}
-					});
-
-				log_info!(
+				enqueue_onchain_transaction_confirmed(
+					txid,
+					block_time.block_id.hash,
+					block_time.block_id.height,
+					block_time.confirmation_time,
+					wallet,
+					event_queue,
 					logger,
-					"Onchain transaction {} confirmed at height {}",
-					txid,
-					block_time.block_id.height
-				);
-
-				let event = Event::OnchainTransactionConfirmed {
-					txid,
-					block_hash: block_time.block_id.hash,
-					block_height: block_time.block_id.height,
-					confirmation_time: block_time.confirmation_time,
-					details,
-				};
-				event_queue.add_event_if_absent(event).await.map_err(|e| {
-					log_error!(logger, "Failed to push onchain event to queue: {}", e);
-					e
-				})?;
-				wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+					channel_manager,
+				)
+				.await?;
 			},
 			BdkWalletEvent::TxUnconfirmed { txid, old_block_time, .. } => {
 				match old_block_time {
@@ -577,8 +589,22 @@ where
 			wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
 			continue;
 		}
-		if seen_confirmed_txids.contains(&txid) || transaction_confirmations.contains_key(&txid) {
+		if seen_confirmed_txids.contains(&txid) {
 			wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+			continue;
+		}
+		if let Some(block_time) = transaction_confirmations.get(&txid).copied() {
+			enqueue_onchain_transaction_confirmed(
+				txid,
+				block_time.block_id.hash,
+				block_time.block_id.height,
+				block_time.confirmation_time,
+				wallet,
+				event_queue,
+				logger,
+				channel_manager,
+			)
+			.await?;
 			continue;
 		}
 		let Some(details) = get_transaction_details(&txid, wallet, channel_manager) else {

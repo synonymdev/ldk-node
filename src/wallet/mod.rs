@@ -1902,23 +1902,27 @@ impl Wallet {
 		}
 		let intent_key = intent.key();
 		let mut bytes = vec![ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION];
+		// Consensus tuples add no framing, so an eight-field tuple nested with the final field keeps
+		// the existing byte order while staying within rust-bitcoin's supported tuple arity.
 		bytes.extend(serialize(&(
-			intent.active_index,
-			intent.state.serialization_tag(),
-			u8::from(intent.requires_outcome),
-			u8::from(intent.outcome_retention_armed),
-			&intent.predecessor_indexes,
-			&intent.predecessor_was_pending,
-			intent
-				.participant_accounts
-				.iter()
-				.map(|account| account.address_type.serialization_tag())
-				.collect::<Vec<_>>(),
-			intent
-				.participant_accounts
-				.iter()
-				.map(|account| u64::from(account.account_index))
-				.collect::<Vec<_>>(),
+			(
+				intent.active_index,
+				intent.state.serialization_tag(),
+				u8::from(intent.requires_outcome),
+				u8::from(intent.outcome_retention_armed),
+				&intent.predecessor_indexes,
+				&intent.predecessor_was_pending,
+				intent
+					.participant_accounts
+					.iter()
+					.map(|account| account.address_type.serialization_tag())
+					.collect::<Vec<_>>(),
+				intent
+					.participant_accounts
+					.iter()
+					.map(|account| u64::from(account.account_index))
+					.collect::<Vec<_>>(),
+			),
 			&intent.transactions,
 		)));
 		KVStoreSync::write(
@@ -2148,24 +2152,19 @@ impl Wallet {
 			},
 			Some(&ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION) => {
 				let (
-					active_index,
-					state_tag,
-					requires_outcome,
-					outcome_retention_armed,
-					predecessor_indexes,
-					predecessor_was_pending,
-					account_type_tags,
-					account_indexes,
+					(
+						active_index,
+						state_tag,
+						requires_outcome,
+						outcome_retention_armed,
+						predecessor_indexes,
+						predecessor_was_pending,
+						account_type_tags,
+						account_indexes,
+					),
 					transactions,
 				) = deserialize::<(
-					u32,
-					u8,
-					u8,
-					u8,
-					Vec<u64>,
-					Vec<u8>,
-					Vec<u8>,
-					Vec<u64>,
+					(u32, u8, u8, u8, Vec<u64>, Vec<u8>, Vec<u8>, Vec<u64>),
 					Vec<Transaction>,
 				)>(&bytes[1..])
 				.map_err(|_| Error::PersistenceFailed)?;
@@ -4379,6 +4378,7 @@ mod tests {
 		LEGACY_ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION,
 		LEGACY_OUTCOME_BROADCAST_INTENT_SERIALIZATION_VERSION,
 		LEGACY_RESOLVED_BROADCAST_INTENT_SERIALIZATION_VERSION, MAX_ADDRESS_INFO_BATCH_COUNT,
+		ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION,
 	};
 	use crate::builder::NodeBuilder;
 	use crate::config::{AddressType, OnchainWalletAccount};
@@ -4777,6 +4777,58 @@ mod tests {
 
 		node.wallet.write_broadcast_intent(&intent).unwrap();
 
+		assert_eq!(node.wallet.read_broadcast_intent_from_store(&key).unwrap(), Some(intent));
+	}
+
+	#[test]
+	fn current_broadcast_intent_encoding_preserves_field_bytes() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = replacement_test_node(Arc::clone(&store));
+		let mut intent = BroadcastIntent::replacement(
+			None,
+			replacement_test_transaction(10),
+			replacement_test_transaction(11),
+		)
+		.unwrap();
+		intent.participant_accounts =
+			vec![OnchainWalletAccount { address_type: AddressType::Taproot, account_index: 7 }];
+		intent.requires_outcome = true;
+		intent.outcome_retention_armed = true;
+		let key = intent.key();
+
+		node.wallet.write_broadcast_intent(&intent).unwrap();
+
+		let mut expected = vec![ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION];
+		expected.extend(serialize(&intent.active_index));
+		expected.extend(serialize(&intent.state.serialization_tag()));
+		expected.extend(serialize(&u8::from(intent.requires_outcome)));
+		expected.extend(serialize(&u8::from(intent.outcome_retention_armed)));
+		expected.extend(serialize(&intent.predecessor_indexes));
+		expected.extend(serialize(&intent.predecessor_was_pending));
+		expected.extend(serialize(
+			&intent
+				.participant_accounts
+				.iter()
+				.map(|account| account.address_type.serialization_tag())
+				.collect::<Vec<_>>(),
+		));
+		expected.extend(serialize(
+			&intent
+				.participant_accounts
+				.iter()
+				.map(|account| u64::from(account.account_index))
+				.collect::<Vec<_>>(),
+		));
+		expected.extend(serialize(&intent.transactions));
+		let stored = KVStoreSync::read(
+			&*store,
+			ONCHAIN_BROADCAST_INTENT_PRIMARY_NAMESPACE,
+			ONCHAIN_BROADCAST_INTENT_SECONDARY_NAMESPACE,
+			&key.to_string(),
+		)
+		.unwrap();
+
+		assert_eq!(stored, expected);
 		assert_eq!(node.wallet.read_broadcast_intent_from_store(&key).unwrap(), Some(intent));
 	}
 
