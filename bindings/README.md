@@ -12,7 +12,7 @@ Run from the repository root:
 2. Refresh `Cargo.lock` with `cargo update -w`.
 3. Update the existing Synonym fork heading and additions subsection in `CHANGELOG.md`.
 4. Run `./bindgen.sh` from the repository root.
-5. Commit `Cargo.lock`, the generated Swift and Python sources, and the updated `Package.swift` checksum.
+5. Commit `Cargo.lock`, the generated Swift sources, and the updated `Package.swift` checksum.
 6. Push every release change before tagging the release commit.
 7. Verify that `shasum -a 256 dist/ios/LDKNodeFFI.xcframework.zip` matches the checksum in `Package.swift`.
 8. Write concise, consumer-facing release notes covering only Rust, FFI, and binding changes since the previous release.
