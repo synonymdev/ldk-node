@@ -1,6 +1,6 @@
 ## Publishing
 
-Follow the [binding release guide](../../README.md). Run `./bindgen.sh` from the repository root; do not run the child generation scripts directly. Commit the generated Kotlin sources. The Android publishing workflow rebuilds the JNI libraries before packaging the AAR.
+Follow the [binding release guide](../../README.md). Run `./bindgen.sh` from the repository root; do not run the child generation scripts directly. The generated Kotlin sources and JNI libraries are untracked; the Android publishing workflow rebuilds them before packaging the AAR.
 
 ## Consuming
 
