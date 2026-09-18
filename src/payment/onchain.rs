@@ -1701,6 +1701,78 @@ mod tests {
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn received_marker_failure_followed_by_confirmation_emits_both_transitions() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+		concrete_store.fail_next_remove_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+
+		assert_eq!(
+			crate::chain::process_wallet_events(
+				Vec::new(),
+				&node.wallet,
+				&node.event_queue,
+				&node.logger,
+				Some(&node.channel_manager),
+				None,
+			)
+			.await,
+			Err(Error::PersistenceFailed)
+		);
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: received_txid, .. })
+				if received_txid == txid
+		));
+		node.event_handled().unwrap();
+
+		let block = confirmation_block(tx);
+		node.wallet
+			.apply_block_to_account(
+				OnchainWalletAccount::account_zero(AddressType::NativeSegwit),
+				&block,
+				1,
+			)
+			.unwrap();
+		node.wallet.finish_pending_sync(false).unwrap();
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&node.wallet,
+			&node.event_queue,
+			&node.logger,
+			Some(&node.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionConfirmed { txid: confirmed_txid, .. })
+				if confirmed_txid == txid
+		));
+		node.event_handled().unwrap();
+		drop(node);
+
+		let restarted = test_node(store);
+		crate::chain::process_wallet_events(
+			Vec::new(),
+			&restarted.wallet,
+			&restarted.event_queue,
+			&restarted.logger,
+			Some(&restarted.channel_manager),
+			None,
+		)
+		.await
+		.unwrap();
+		assert!(restarted.next_event().is_none());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn handled_confirmation_is_not_repeated_after_delivery_write_failure() {
 		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
 		let store: Arc<DynStore> = concrete_store.clone();
@@ -1719,7 +1791,7 @@ mod tests {
 			)
 			.unwrap();
 		node.wallet.finish_pending_sync(false).unwrap();
-		concrete_store.fail_next_write_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+		concrete_store.fail_next_remove_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
 
 		assert_eq!(
 			crate::chain::process_wallet_events(

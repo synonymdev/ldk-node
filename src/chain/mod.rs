@@ -30,7 +30,7 @@ use crate::config::{
 	ElectrumSyncConfig, EsploraSyncConfig, OnchainWalletAccount,
 	RESOLVED_CHANNEL_MONITOR_ARCHIVAL_INTERVAL, WALLET_SYNC_INTERVAL_MINIMUM_SECS,
 };
-use crate::event::{Event, EventQueue, SyncType, TransactionDetails};
+use crate::event::{Event, EventIdempotencyKey, EventQueue, SyncType, TransactionDetails};
 use crate::fee_estimator::OnchainFeeEstimator;
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
@@ -444,12 +444,23 @@ where
 		confirmation_time,
 		details,
 	};
-	event_queue.add_event_with_idempotency_key(event, txid).await.map_err(|e| {
-		log_error!(logger, "Failed to push onchain event to queue: {}", e);
-		e
-	})?;
+	event_queue
+		.add_event_with_idempotency_key(
+			event,
+			EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+		)
+		.await
+		.map_err(|e| {
+			log_error!(logger, "Failed to push onchain event to queue: {}", e);
+			e
+		})?;
 	wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
-	event_queue.clear_idempotency_key(txid).await
+	event_queue
+		.clear_idempotency_keys(&[
+			EventIdempotencyKey::OnchainTransactionReceived(txid),
+			EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+		])
+		.await
 }
 
 // Process BDK wallet events and emit corresponding ldk-node events via the event queue.
@@ -539,14 +550,22 @@ where
 						);
 
 						let event = Event::OnchainTransactionReceived { txid, details };
-						event_queue.add_event_with_idempotency_key(event, txid).await.map_err(
-							|e| {
+						event_queue
+							.add_event_with_idempotency_key(
+								event,
+								EventIdempotencyKey::OnchainTransactionReceived(txid),
+							)
+							.await
+							.map_err(|e| {
 								log_error!(logger, "Failed to push onchain event to queue: {}", e);
 								e
-							},
-						)?;
+							})?;
 						wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
-						event_queue.clear_idempotency_key(txid).await?;
+						event_queue
+							.clear_idempotency_keys(&[
+								EventIdempotencyKey::OnchainTransactionReceived(txid),
+							])
+							.await?;
 					},
 				}
 			},
@@ -618,12 +637,20 @@ where
 			details.amount_sats
 		);
 		let event = Event::OnchainTransactionReceived { txid, details };
-		event_queue.add_event_with_idempotency_key(event, txid).await.map_err(|e| {
-			log_error!(logger, "Failed to push onchain event to queue: {}", e);
-			e
-		})?;
+		event_queue
+			.add_event_with_idempotency_key(
+				event,
+				EventIdempotencyKey::OnchainTransactionReceived(txid),
+			)
+			.await
+			.map_err(|e| {
+				log_error!(logger, "Failed to push onchain event to queue: {}", e);
+				e
+			})?;
 		wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
-		event_queue.clear_idempotency_key(txid).await?;
+		event_queue
+			.clear_idempotency_keys(&[EventIdempotencyKey::OnchainTransactionReceived(txid)])
+			.await?;
 	}
 	Ok(())
 }
