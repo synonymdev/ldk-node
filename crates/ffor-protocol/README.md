@@ -1,8 +1,8 @@
 # FFOR protocol foundation
 
 This unpublished crate implements checked Variant D amount and anchor-channel book
-calculations, signed setup and lifecycle codecs, canonical books and authenticated
-transcript checks from draft v0.9.4. It is not connected to `Node`, the payment
+calculations, signed setup and lifecycle codecs, reconnect reports, canonical books
+and authenticated transcript checks from draft v0.9.4. It is not connected to `Node`, the payment
 handlers, custom peer messages or UniFFI.
 It cannot prepare an offline invoice or receive a payment.
 
@@ -57,11 +57,19 @@ Regenerate them with `generate_beignet_lifecycle.cjs` against the pinned Beignet
 checkout, using that checkout's `ts-node/register`. Both encodings are preserved
 exactly so authentication never depends on normalizing received signed bytes.
 
+The same fixture file includes all seven reconnect states from Beignet. The
+`reestablish` module reads the exact 67-byte TLV 55001 value and rejects unknown
+states and nonzero Variant D sequences. It preserves the peer's reported hash as
+untrusted data. The pinned Beignet sender includes its computed hash in `ACTIVATING`,
+although section 11.1 specifies zeros before `ACTIVE`; local engine writers must
+follow the specification. Neither form proves activation without the signed ack.
+
 The standalone [fuzz target](fuzz/README.md) exercises parsing, canonical round trips,
 signatures and authenticated setup with real signed fixture seeds. A bounded local
-run completed 6,359,059 inputs in 121 seconds without a crash. The current suite has
-61 tests and three doctests. Nightly LLVM instrumentation measured 838/859 source
-lines (97.56%) and 196/198 branches (98.99%) covered across this crate. Uncovered
+run completed 6,359,059 inputs in 121 seconds without a crash; a run including the
+reconnect parser completed 2,118,228 inputs in 31 seconds without a crash. The current
+suite has 66 tests and four doctests. Nightly LLVM instrumentation measured 865/892
+source lines (96.97%) and 198/200 branches (99.00%) covered across this crate. Uncovered
 code includes diagnostic formatting and defensive paths whose preconditions are
 excluded by prior validated bounds. These are measured results, not exhaustive
 proofs of correctness.

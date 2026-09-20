@@ -17,5 +17,7 @@ for index, fixture in enumerate(fixtures):
 reference = json.loads((crate / "tests/data/beignet-lifecycle.json").read_text())
 for fixture in reference["fixtures"]:
     (corpus / fixture["name"]).write_bytes(bytes.fromhex(fixture["wire"]))
+for fixture in reference["reestablish"]:
+    (corpus / f"reestablish-{fixture['state']}").write_bytes(bytes.fromhex(fixture["value"]))
 
-print("Seeded 35 signed reference messages and setup pairs")
+print("Seeded 35 signed reference messages/setup pairs and 7 reconnect reports")

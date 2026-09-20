@@ -38,4 +38,13 @@ const fixtures = cases.map(([name, type, unsigned]) => {
     if (!codecs.verifyFforMessage(type, body, publicKey)) throw new Error('Fixture authentication failed');
     return { name, message_type: type, signer: publicKey.toString('hex'), wire: codecs.fforWireBytes(type, body).toString('hex') };
 });
-fs.writeFileSync(process.argv[3], JSON.stringify({ source_revision: revision, fixtures }, null, 2) + '\n');
+const reestablish = Array.from({ length: 7 }, (_, state) => {
+    // Beignet retains hAct while ACTIVATING, even though section 11.1 says zero before ACTIVE.
+    // Preserve that input as an interoperability case, without treating it as activation proof.
+    const activationHash = Buffer.alloc(32, state >= 2 && state <= 5 ? 9 : 0);
+    const tlv = codecs.encodeFforReestablishTlv({ epochId: header.epochId, state, lastSeq: 0, activationHash });
+    const decoded = codecs.decodeFforReestablishTlv(tlv.value);
+    if (decoded.state !== state || !decoded.activationHash.equals(activationHash)) throw new Error('Reconnect fixture mismatch');
+    return { state, type: Number(tlv.type), value: tlv.value.toString('hex') };
+});
+fs.writeFileSync(process.argv[3], JSON.stringify({ source_revision: revision, fixtures, reestablish }, null, 2) + '\n');

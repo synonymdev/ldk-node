@@ -1,6 +1,7 @@
 #![no_main]
 
 use bitcoin::secp256k1::PublicKey;
+use ffor_protocol::reestablish::Reestablish;
 use ffor_protocol::setup::AuthenticatedSetup;
 use ffor_protocol::wire::{Message, MAX_MESSAGE_LEN};
 use libfuzzer_sys::fuzz_target;
@@ -22,6 +23,9 @@ fuzz_target!(|data: &[u8]| {
 		return;
 	}
 	let (receiver, settlement) = keys();
+	if let Ok(report) = Reestablish::decode(data) {
+		assert_eq!(report.encode().as_slice(), data);
+	}
 	if let Ok(message) = Message::decode(data) {
 		assert_eq!(message.encode().unwrap(), data);
 		let _ = message.verify_signature(&receiver);
