@@ -1,0 +1,16 @@
+[package]
+name = "ffor-protocol"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Experimental FFOR Variant D arithmetic and transcript primitives"
+publish = false
+
+[dependencies]
+bitcoin = "0.32.7"
+
+[dev-dependencies]
+proptest = "1.0.0"
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
