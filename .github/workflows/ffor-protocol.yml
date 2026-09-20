@@ -23,3 +23,16 @@ jobs:
       - run: cargo fmt -p ffor-protocol -- --check
       - run: cargo test -p ffor-protocol --locked
       - run: cargo clippy -p ffor-protocol --all-targets --locked -- -D warnings
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: crates/ffor-protocol
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - run: python3 fuzz/seed_corpus.py
+      - run: cargo fuzz run wire -- -max_len=131072 -max_total_time=30

@@ -1,11 +1,20 @@
 # FFOR protocol foundation
 
 This unpublished crate implements checked Variant D amount and anchor-channel book
-calculations, plus the domain-separated transcript hashes from draft v0.9.4. It is
-not connected to `Node`, the payment handlers, custom peer messages or UniFFI.
+calculations, signed setup and lifecycle codecs, canonical books and authenticated
+transcript checks from draft v0.9.4. It is not connected to `Node`, the payment
+handlers, custom peer messages or UniFFI.
 It cannot prepare an offline invoice or receive a payment.
 
 Work is tracked in [ldk-node #117](https://github.com/synonymdev/ldk-node/issues/117).
+
+## Channel-engine baseline
+
+The receiver port targets rust-lightning **v0.2.5**, pinned to
+[`5bc1dc84b3a1b084f84de4b7ece3d978b678d894`](https://github.com/lightningdevkit/rust-lightning/commit/5bc1dc84b3a1b084f84de4b7ece3d978b678d894).
+This retains the current LDK Node dependency generation and its maintenance fixes.
+The Synonym fork's `main` snapshot uses `0.3.0+git` and requires a separate API
+migration. It is not the baseline for this port.
 
 ## Reference and verification scope
 
@@ -30,10 +39,37 @@ limits, deadlines, overflow and public-channel fee selection. Property tests com
 arithmetic with a wide-integer oracle and mutate budgets, amounts and transcript
 domains. They do not construct or broadcast commitment transactions.
 
-There is no wire parser, signer, persistence implementation or channel state machine
-in this crate. Parser fuzzing, crash injection, monitor recovery, measured coverage
-and cross-engine regtest remain requirements for the engine port. Passing these
-tests is not evidence of offline payment settlement or recovery.
+The wire parser supports `ff_init`, `ff_accept`, `ff_activate`, `ff_activate_ack`,
+`ff_abort`, `ff_close` and `ff_close_ack`. It bounds message sizes and collection
+counts, rejects noncanonical BigSize values, unknown mandatory TLVs and invalid
+compressed points, and preserves unknown optional fields in the signed bytes.
+Low-S compact signatures are verified against expected channel peer identities.
+Unsigned digest construction does not require a placeholder valid signature.
+
+`AuthenticatedSetup` derives the book exclusively from authenticated setup messages.
+It checks fee bounds, unique hashes, requested hash chains, activation transcripts,
+height agreement and close preimages, including prefix settlement for chained books.
+It is immutable protocol data, not an epoch state machine or proof of live capacity.
+
+`tests/data/beignet-lifecycle.json` adds five signed reference lifecycle fixtures,
+including both absent and explicitly empty preimage TLVs when no payment settled.
+Regenerate them with `generate_beignet_lifecycle.cjs` against the pinned Beignet
+checkout, using that checkout's `ts-node/register`. Both encodings are preserved
+exactly so authentication never depends on normalizing received signed bytes.
+
+The standalone [fuzz target](fuzz/README.md) exercises parsing, canonical round trips,
+signatures and authenticated setup with real signed fixture seeds. A bounded local
+run completed 6,359,059 inputs in 121 seconds without a crash. The current suite has
+61 tests and three doctests. Nightly LLVM instrumentation measured 838/859 source
+lines (97.56%) and 196/198 branches (98.99%) covered across this crate. Uncovered
+code includes diagnostic formatting and defensive paths whose preconditions are
+excluded by prior validated bounds. These are measured results, not exhaustive
+proofs of correctness.
+
+There is no signer, persistence implementation or channel state machine in this
+crate. Crash injection, monitor recovery and cross-engine regtest remain requirements
+for the engine port. Passing pure protocol tests is not evidence of offline payment
+settlement or recovery.
 
 ## Implementation references
 
@@ -74,14 +110,17 @@ reference tests alone cannot qualify the native port.
 - A valid book is a proposed reservation, not received money. Neither amount checks
   nor matching transcript hashes imply durable activation or invoice readiness.
 
-There is no new unsafe code, secret handling, nonce generation or custom crypto.
-SHA256 uses the existing Bitcoin dependency. Signature verification in the fixture
-tests uses its secp256k1 implementation. No production signing API is introduced.
+There is no new unsafe code, secret storage, nonce generation or custom crypto.
+SHA256 and signature verification use the existing Bitcoin dependency and its
+secp256k1 implementation. No production signing API is introduced.
 
 ## Required integration
 
-The registry `lightning 0.2.5` used by ldk-node has no FFOR receiver support. The
-next engine changes must own voucher recognition, both-view commitment completion,
+The registry `lightning 0.2.5` used by ldk-node has no FFOR receiver support.
+[rust-lightning #4](https://github.com/synonymdev/rust-lightning/pull/4) adds a
+point-in-time verifier for actual committed vouchers and monitor claim signatures
+on that baseline. It is not wired into this crate. The next engine changes must
+own voucher recognition, both-view commitment completion,
 persistent ACTIVE freeze, activation acknowledgement replay, cooperative drain and
 on-chain enforcement inside rust-lightning. A second channel state machine in
 ldk-node would duplicate signing authority and is not an acceptable substitute.

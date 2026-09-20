@@ -11,4 +11,6 @@
 
 pub mod amounts;
 pub mod book;
+pub mod setup;
 pub mod transcript;
+pub mod wire;
