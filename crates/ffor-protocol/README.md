@@ -35,6 +35,29 @@ in this crate. Parser fuzzing, crash injection, monitor recovery, measured cover
 and cross-engine regtest remain requirements for the engine port. Passing these
 tests is not evidence of offline payment settlement or recovery.
 
+## Implementation references
+
+The receiver and settlement port should be compared with these immutable source
+revisions, in addition to the normative specification:
+
+- [Beignet 0.21.10, `8aee31d18e596fe49a0d195b325a6e757d7a009b`](https://github.com/coreyphillips/beignet/tree/8aee31d18e596fe49a0d195b325a6e757d7a009b).
+  `src/lightning/channel/channel.ts` owns voucher matching, both-view commitment
+  verification, activation, freeze and drain. `src/lightning/ffor/` contains the
+  wire, transcript and witness code. The Variant D setup and settlement tests
+  cover acknowledgement loss, restart, rejected updates and cooperative return.
+- [beignet-umbrel, `12d483462ca2eabd8ae9cc105e69affa420459f9`](https://github.com/coreyphillips/beignet-umbrel/tree/12d483462ca2eabd8ae9cc105e69affa420459f9).
+  `manager/ui/src/pages/tabs/ReceiveTab.jsx` and the receive routes demonstrate
+  explicit offline intent, stable request identity, existing-channel capacity
+  and rejecting a response that is not explicitly offline-capable. The
+  `scripts/lfbw-regtest/` FFOR scenarios exercise process-stopped receiving and
+  return through the manager and daemon APIs.
+
+These sources implement their own channel engine. They do not supply FFOR APIs
+to rust-lightning or LND. Port the protocol invariants into each engine's own
+commitment and persistence boundary. Do not copy deployment defaults such as
+channel headroom or invoice lifetime into Bitkit as protocol guarantees. Passing
+reference tests alone cannot qualify the native port.
+
 ## Trust boundaries
 
 - Amounts, peer data and public policy are untrusted. Overflow, underpayment,
