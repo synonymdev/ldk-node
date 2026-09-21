@@ -141,10 +141,10 @@ where
 			},
 			NodeCustomMessage::Ffor(message) => {
 				if let Some(setup) = self.ffor_setup.as_ref() {
-					if matches!(message.type_id(), 55003 | 55049) {
+					if matches!(message.type_id(), 55003 | 55047 | 55049 | 55053) {
 						return setup.handle(sender, &message).map(|_| ()).map_err(|error| {
 							LightningError {
-								err: format!("FFOR receiver setup: {}", error),
+								err: format!("FFOR receiver: {}", error),
 								// Do not process following HTLC frames after failed native admission.
 								action: ErrorAction::DisconnectPeer { msg: None },
 							}

@@ -31,16 +31,22 @@ signed lifecycle types, witness acknowledgement type 55057 and fetch response ty
 native-authorized release callback. The production builder leaves this transport
 disabled. This slice has no feature advertisement or public setting.
 
-The private setup adapter uses the concrete native manager and pairs its opaque
+The private receiver adapter uses the concrete native manager and pairs its opaque
 authenticated generation with the transport token in the same bounded peer map.
-Accept and pre-accept Abort are processed synchronously before the custom callback
-returns, so following ordinary HTLC frames cannot overtake native voucher ownership.
+Accept, ActivateAck, Abort and CloseAck are processed synchronously before the custom
+callback returns, so following ordinary HTLC frames cannot overtake native ownership.
 A native error requests disconnection and never falls back to the mailbox. Other
 unsupported lifecycle inputs and witness replies remain bounded queued work. Failed
 LSPS connection callbacks, disconnect and replacement clear both tokens and queues.
-Preparation, exact Init release, retry lookup and cancellation delegate to native
-authority. No builder constructs this adapter yet; activation and recovery orchestration
-remain necessary before offering offline invoices.
+Preparation, exact wire release, close intent, retry lookup and cancellation delegate
+to native authority. Advancement first asks the native planner for its next operation.
+Only a native request for proof reads the concrete ChainMonitor; the adapter drops
+that monitor guard before passing the opaque snapshot and original paired generation
+back to the manager. Stock peer events, STFU, commitment rounds and persistence must
+continue between advances. The adapter retains no independent lifecycle state and
+does not treat Active progress as invoice readiness. No builder constructs it yet;
+runtime scheduling, witness orchestration and payment recovery remain necessary before
+offering offline invoices.
 
 The transport accepts peer identity only from PeerManager's authenticated callback.
 Each successful connection gets a distinct opaque token. Disconnect or replacement
@@ -89,7 +95,7 @@ Parser fuzzing remains in the
 shared `lightning-ffor` wire and witness targets; Node also runs arbitrary-byte
 property checks at the length-limited reader boundary.
 
-## Private witness secret storage
+## Private witness recovery storage
 
 The private `ffor::witness_store` module retains an immutable encryption key per
 epoch, plus a separate fetch key, mailbox and exact signed manifest per witness.
@@ -110,9 +116,11 @@ additional plaintext allocations which it does not zeroize; complete memory eras
 is not claimed. The construction follows [HKDF](https://www.rfc-editor.org/rfc/rfc5869)
 and [ChaCha20Poly1305](https://www.rfc-editor.org/rfc/rfc8439).
 
-One exclusive owner serializes the namespace. Admission is bounded to four witnesses
-per epoch, 512 KiB per encrypted record, 64 epochs and 8 MiB overall. Records are not
-evicted to admit new work. Keys and signed manifests cannot be replaced. A failed write blocks that owner until the
+One exclusive owner serializes the secret and receipt namespaces. Secret admission
+is bounded to four witnesses per epoch, 512 KiB per encrypted record, 64 epochs and
+8 MiB overall. The separate receipt namespace permits at most 1 MiB per epoch and
+8 MiB overall. Records are not evicted to admit new work. Keys and signed manifests
+cannot be replaced. A failed write blocks that owner until the
 exact retained ciphertext is written successfully. Readable bytes alone do not prove
 durability: a filesystem rename can become visible before directory synchronization
 succeeds. Reopening likewise requires an authenticated, byte-identical successful
@@ -122,13 +130,33 @@ manifests for an existing record.
 The store also retains each selected witness's first exactly correlated provisioning
 acknowledgement. It rechecks the complete immutable manifest and retention promise
 before sealing the update. Subsequent requests cannot replace the first promise.
-Schema 2 reserves fixed acknowledgement slots when keys are created, so recording
-all promises does not grow the record. Schema 1 loads with no promises; its first
-update upgrades the format only if the existing global capacity permits it.
+Fixed acknowledgement slots are reserved when keys are created, so recording all
+promises does not grow the record. Historical schema 1 records load without promises;
+their first acknowledgement update upgrades the format only within capacity.
+
+New schema 3 records also reserve encrypted evidence capacity before any material is
+returned. The fixed receipt book contains one slot per selected witness and native
+voucher. Creation first writes the immutable secrets with a pending allocation, then
+the empty encrypted receipt book, then the same secrets marked reserved. Interrupted
+creation resumes with exactly those keys and manifests. Inventory accounting charges
+the complete reservation even when the pending receipt write has not appeared yet.
+A missing or damaged completed reservation is never recreated. Existing schema 1
+and 2 records remain available for historical key operations and acknowledgements,
+but cannot be provisioned or silently acquire a new receipt reservation.
+
+Each received record must match the selected witness and immutable manifest and pass
+native authenticated decryption and voucher checks before retention. The receipt book
+stores the signed encrypted core, excludes unsigned guardian attachments and contains
+no plaintext preimages. Its wrapping key and associated-data domain are separate from
+secret storage. Identical cores deduplicate; a different valid core for the same
+witness and slot is reported as a conflict while preserving the first evidence.
+Loading retained evidence confirms durability and authenticates it again. An empty
+slot or completed fetch cannot establish that a voucher is unpaid.
 
 A failed update retains the exact proposed ciphertext and its original predecessor.
-Retry accepts only those bytes and always requires another successful write. A deleted
-existing record or conflicting replacement blocks recovery. Restored promises likewise
+Retry accepts only those bytes and always requires another successful write. This
+rule applies across both namespaces. A deleted existing record or conflicting
+replacement blocks recovery. Restored promises likewise
 require successful durability confirmation before being returned. Historical promises
 from every selected witness are necessary storage evidence, not current native
 provisioning authority or invoice readiness.
@@ -145,16 +173,20 @@ exporting either private key. Each fetch call draws a fresh operating-system req
 identity, 256-bit nonce and signature entropy, including retries after a lost response
 or restart. The witness still enforces replay refusal. Decryption authenticates the
 retained witness and manifest before native AEAD and body checks. These helpers do not
-correlate a response connection, persist a receipt, change a channel or credit a
-payment. Witness transport orchestration, durable payment-receipt retention and native
-monitor reconciliation remain separate work.
+correlate a response connection, change a channel or credit a payment. Receipt
+retention preserves authenticated evidence for later native reconciliation. Witness
+transport orchestration and native monitor reconciliation remain separate work.
 
 Run `cargo test --lib ffor_witness` for exact retries and restart, failed writes
 with readable bytes, corruption, wrong seeds and bindings, key separation, capacity,
 concurrent creation, fallible entropy, truncated records and property-based mutation
 checks, fresh fetch authorization after restart, protected decryption of pinned
 Beignet records, exact acknowledgement retention, concurrent acknowledgements, failed
-updates and sealed legacy-record upgrades. These checks do not establish complete branch coverage or process-crash
+updates and sealed legacy-record upgrades. Receipt tests cover all initialization
+write boundaries, visible failed writes after restart, exact deduplication, witness
+equivocation, allocation quotas, missing reservations, legacy refusal and concurrent
+acknowledgement and receipt retention. Fixture provenance is recorded beside the
+receipt tests. These checks do not establish complete branch coverage or process-crash
 interoperability.
 
 ## Required runtime integration

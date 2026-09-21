@@ -5,7 +5,7 @@ use bitcoin::Network;
 use lightning::ln::ffor::{FFORCommitmentError, FFORReceiverError, FFORReceiverParameters};
 use lightning::ln::msgs::BaseMessageHandler;
 use lightning::ln::types::ChannelId;
-use lightning_ffor::wire::{Abort, Payload};
+use lightning_ffor::wire::{Abort, CloseAck, Payload};
 
 use super::*;
 use crate::builder::NodeBuilder;
@@ -39,9 +39,15 @@ fn setup_frame(name: &str) -> FforFrame {
 }
 
 fn signed_abort(seed: u8) -> FforFrame {
+	signed_message(
+		seed,
+		Payload::Abort(Abort { transcript_hash: [0; 32], reason: 1, data: Vec::new() }),
+	)
+}
+
+fn signed_message(seed: u8, payload: Payload) -> FforFrame {
 	let mut message = FforMessage::decode(setup_frame("accept").wire()).unwrap();
-	message.payload =
-		Payload::Abort(Abort { transcript_hash: [0; 32], reason: 1, data: Vec::new() });
+	message.payload = payload;
 	let digest = bitcoin::secp256k1::Message::from_digest(message.signature_digest().unwrap());
 	message.signature = Secp256k1::new()
 		.sign_ecdsa_with_noncedata(&digest, &SecretKey::from_slice(&[seed; 32]).unwrap(), &[1; 32])
@@ -52,8 +58,11 @@ fn signed_abort(seed: u8) -> FforFrame {
 
 fn adapter(node: &Node) -> (Arc<FforSetupAdapter>, Arc<FforReceiverTransport>) {
 	let transport = Arc::new(FforReceiverTransport::default());
-	let setup =
-		Arc::new(FforSetupAdapter::new(Arc::clone(&node.channel_manager), Arc::clone(&transport)));
+	let setup = Arc::new(FforSetupAdapter::new(
+		Arc::clone(&node.channel_manager),
+		Arc::clone(&node.chain_monitor),
+		Arc::clone(&transport),
+	));
 	(setup, transport)
 }
 
@@ -71,14 +80,28 @@ fn ffor_setup_dispatch_is_synchronous_and_propagates_native_error() {
 	node.channel_manager.peer_connected(peer, &native_init(), false).unwrap();
 	handler.peer_connected(peer, &native_init(), false).unwrap();
 	let native = node.channel_manager.ffor_peer_connection(&peer).unwrap();
-	for frame in [setup_frame("accept"), signed_abort(72)] {
+	for frame in [
+		setup_frame("accept"),
+		signed_abort(72),
+		signed_message(72, Payload::ActivateAck([1; 32])),
+		signed_message(
+			72,
+			Payload::CloseAck(CloseAck {
+				activation_hash: [1; 32],
+				num_slots: 1,
+				settled: vec![0],
+				preimages: Vec::new(),
+				preimages_tlv_present: false,
+			}),
+		),
+	] {
 		let expected =
 			node.channel_manager.handle_ffor_receiver_message(&native, frame.wire()).unwrap_err();
 		assert_eq!(expected, unavailable());
 		assert_eq!(setup.handle(peer, &frame), Err(expected));
 		let error =
 			handler.handle_custom_message(NodeCustomMessage::Ffor(frame), peer).unwrap_err();
-		assert_eq!(error.err, format!("FFOR receiver setup: {}", expected));
+		assert_eq!(error.err, format!("FFOR receiver: {}", expected));
 		assert!(matches!(error.action, ErrorAction::DisconnectPeer { msg: None }));
 		// A deferred mailbox handler would return Ok and leave the input here. Neither is
 		// allowed before PeerManager considers delivering a subsequent ordinary frame.

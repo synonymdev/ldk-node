@@ -1,5 +1,5 @@
-//! Private setup bridge. The concrete native manager owns admission, signatures and persistence.
-//! No production builder constructs this bridge, and setup progress grants no invoice authority.
+//! Private receiver bridge. The concrete native manager owns lifecycle and persistence authority.
+//! No production builder constructs this bridge, and progress grants no invoice authority.
 
 use std::sync::Arc;
 
@@ -11,19 +11,23 @@ use lightning::ln::ffor::{
 use lightning::ln::types::ChannelId;
 
 use super::{FforFrame, FforReceiverTransport, NativeConnection};
-use crate::types::ChannelManager;
+use crate::types::{ChainMonitor, ChannelManager};
 
 /// Holds no duplicate epoch or wire state. Connection pairs live in the bounded transport map.
 pub(crate) struct FforSetupAdapter {
 	manager: Arc<ChannelManager>,
+	monitor: Arc<ChainMonitor>,
 	transport: Arc<FforReceiverTransport>,
 }
 
 // The production builder deliberately does not install this experimental adapter yet.
 #[allow(dead_code)]
 impl FforSetupAdapter {
-	pub(crate) fn new(manager: Arc<ChannelManager>, transport: Arc<FforReceiverTransport>) -> Self {
-		Self { manager, transport }
+	pub(crate) fn new(
+		manager: Arc<ChannelManager>, monitor: Arc<ChainMonitor>,
+		transport: Arc<FforReceiverTransport>,
+	) -> Self {
+		Self { manager, monitor, transport }
 	}
 
 	pub(in crate::message_handler) fn transport(&self) -> &Arc<FforReceiverTransport> {
@@ -70,11 +74,32 @@ impl FforSetupAdapter {
 		&self, peer: PublicKey, id: &FFORReceiverId,
 	) -> Result<FFORReceiverProgress, FFORReceiverError> {
 		let connection = self.connection(peer)?;
-		self.manager.advance_ffor_receiver(id, &connection.native, |wire| {
+		let enqueue = |wire: &[u8]| {
 			// Native -> transport is the only nested lock order. No I/O or manager reentry.
-			// Refusal leaves the exact Init and one-shot release permission owned natively.
+			// Refusal leaves exact bytes and any replay permission owned natively.
 			self.transport.enqueue(peer, &connection.transport, wire).map_err(|_| ())
-		})
+		};
+		let progress = self.manager.advance_ffor_receiver(id, &connection.native, enqueue)?;
+		if progress != FFORReceiverProgress::NeedsMonitorSnapshot {
+			return Ok(progress);
+		}
+		let snapshot = {
+			let monitor = self
+				.monitor
+				.get_monitor(id.channel_id())
+				.map_err(|_| FFORCommitmentError::ChannelUnavailable)?;
+			monitor.ffor_commitment_snapshot()?
+		};
+		// The monitor guard is gone before entering native peer locks. Native checks the same
+		// paired generation again and validates this snapshot against its current channel state.
+		self.manager.advance_ffor_receiver_with_monitor(id, &connection.native, snapshot, enqueue)
+	}
+
+	pub(crate) fn close(
+		&self, peer: PublicKey, id: &FFORReceiverId,
+	) -> Result<FFORReceiverProgress, FFORReceiverError> {
+		let connection = self.connection(peer)?;
+		self.manager.request_ffor_receiver_close(id, &connection.native)
 	}
 
 	pub(crate) fn cancel(
