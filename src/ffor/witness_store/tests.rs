@@ -15,9 +15,10 @@ use lightning_ffor::witness::{
 };
 use proptest::prelude::*;
 
+use super::*;
 use crate::io::test_utils::InMemoryStore;
 
-use super::*;
+type ReadHook = Box<dyn FnMut(&str) + Send>;
 
 pub(in crate::ffor) struct TestStore {
 	pub(in crate::ffor) inner: InMemoryStore,
@@ -25,6 +26,7 @@ pub(in crate::ffor) struct TestStore {
 	pub(in crate::ffor) write_failure: AtomicUsize,
 	pub(in crate::ffor) fail_at: AtomicUsize,
 	pub(in crate::ffor) read_failure: AtomicBool,
+	pub(in crate::ffor) read_hook: Mutex<Option<ReadHook>>,
 }
 
 impl TestStore {
@@ -35,6 +37,7 @@ impl TestStore {
 			write_failure: AtomicUsize::new(0),
 			fail_at: AtomicUsize::new(0),
 			read_failure: AtomicBool::new(false),
+			read_hook: Mutex::new(None),
 		})
 	}
 	pub(in crate::ffor) fn bytes(&self, key: &str) -> Vec<u8> {
@@ -50,6 +53,9 @@ impl KVStoreSync for TestStore {
 	fn read(&self, primary: &str, secondary: &str, key: &str) -> io::Result<Vec<u8>> {
 		if self.read_failure.load(Ordering::SeqCst) {
 			return Err(io::Error::new(io::ErrorKind::Other, "injected read failure"));
+		}
+		if let Some(hook) = self.read_hook.lock().unwrap().as_mut() {
+			hook(primary);
 		}
 		KVStoreSync::read(&self.inner, primary, secondary, key)
 	}

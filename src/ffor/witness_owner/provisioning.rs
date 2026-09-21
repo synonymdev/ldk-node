@@ -8,7 +8,7 @@ use bitcoin::secp256k1::PublicKey;
 use lightning::ln::ffor::{FFORReceiverRecoveryContext, FFORReceiverWitnessRegistration};
 use lightning_ffor::witness::{SignedManifest, WitnessConnection};
 
-use super::pending::Epoch;
+use super::pending::{Epoch, NativeAttempt};
 use super::{WitnessOwner, WitnessOwnerError};
 use crate::ffor::witness_store::{WitnessPolicy, WitnessStorageBinding};
 use crate::message_handler::ffor::OutboundError;
@@ -27,6 +27,8 @@ pub(crate) enum ProvisioningProgress {
 	Backpressured,
 	Queued,
 	AwaitingAcknowledgement,
+	/// Both historical promises are retained and the current native requirement is complete.
+	AcknowledgementRetained,
 }
 
 enum Attempt {
@@ -96,6 +98,13 @@ impl WitnessOwner {
 		if !self.manager.is_ffor_state_persisted(&requirement) {
 			return Ok(ProvisioningProgress::AwaitingPersistence);
 		}
+		let manifest = manifests
+			.into_iter()
+			.find_map(|(selected, manifest)| (selected == witness).then_some(manifest))
+			.ok_or(WitnessOwnerError::UnknownWitness)?;
+		let acknowledged = self.acknowledgement_retained(context, witness, &manifest)?;
+		// Storage and historical ACK reads may race a newer native promise. Capture after the
+		// join so its latest durability barrier defines the observation point for this result.
 		let active = self
 			.manager
 			.capture_ffor_receiver_active_context(
@@ -104,45 +113,71 @@ impl WitnessOwner {
 				context.epoch_id(),
 			)
 			.map_err(WitnessOwnerError::Native)?;
-		let manifest = manifests
-			.into_iter()
-			.find_map(|(selected, manifest)| (selected == witness).then_some(manifest))
-			.ok_or(WitnessOwnerError::UnknownWitness)?;
+		if acknowledged {
+			self.pending.complete_witness(
+				Epoch {
+					channel: context.channel_id(),
+					epoch: context.epoch_id(),
+					context_digest: context.context_digest(),
+				},
+				witness,
+			);
+			return Ok(ProvisioningProgress::AcknowledgementRetained);
+		}
 		let connection =
-			self.transport.connection(witness).ok_or(WitnessOwnerError::StaleConnection)?;
+			self.transport.native_connection(witness).ok_or(WitnessOwnerError::StaleConnection)?;
 		let epoch = Epoch {
 			channel: context.channel_id(),
 			epoch: context.epoch_id(),
 			context_digest: context.context_digest(),
 		};
-		let source = WitnessConnection { node_id: witness, identity: connection.clone() };
+		let source =
+			WitnessConnection { node_id: witness, identity: connection.transport().clone() };
 		let (other_count, other_bytes) = self.fetches.usage();
 		self.pending.set_other_usage(other_count, other_bytes)?;
 		let fetches = &self.fetches;
+		// Preserve the previous request and accounting if native staging refuses the replacement.
+		let mut candidate = self.pending.clone();
 		let pending = match attempt {
-			Attempt::Advance => self
-				.pending
+			Attempt::Advance => candidate
 				.stage_excluding(epoch, source, manifest, |id| fetches.contains_request_id(id))?,
-			Attempt::Retry => self
-				.pending
+			Attempt::Retry => candidate
 				.restart_excluding(epoch, source, manifest, |id| fetches.contains_request_id(id))?,
 		};
-		if self.pending.is_queued(&pending) {
+		if candidate.is_queued(&pending) {
 			return Ok(ProvisioningProgress::AwaitingAcknowledgement);
 		}
+		let native_attempt = match candidate.native_attempt(&pending) {
+			Some(retained) => retained.attempt.clone(),
+			None => self
+				.manager
+				.stage_ffor_receiver_witness_provision(
+					context,
+					connection.native(),
+					pending.provision(),
+				)
+				.map_err(WitnessOwnerError::Native)?,
+		};
+		candidate.bind_native(
+			&pending,
+			NativeAttempt { connection: connection.clone(), attempt: native_attempt.clone() },
+		);
+		self.pending = candidate;
 		let transport = Arc::clone(&self.transport);
 		let mut refusal = None;
 		let queued = self
 			.manager
-			.release_ffor_receiver_witness_provision(
+			.release_ffor_receiver_witness_attempt(
 				&active,
-				&witness,
+				&native_attempt,
 				pending.provision(),
 				|provision| {
 					// This is the sole nested native -> transport lock acquisition. No owner/store reentry.
-					transport.enqueue_provision(witness, &connection, provision).map_err(|error| {
-						refusal = Some(error);
-					})
+					transport.enqueue_provision(witness, connection.transport(), provision).map_err(
+						|error| {
+							refusal = Some(error);
+						},
+					)
 				},
 			)
 			.map_err(WitnessOwnerError::Native)?;
@@ -159,6 +194,35 @@ impl WitnessOwner {
 			Some(OutboundError::InvalidMessage) => Err(WitnessOwnerError::Conflict),
 			None => Ok(ProvisioningProgress::AwaitingPersistence),
 		}
+	}
+
+	fn acknowledgement_retained(
+		&self, context: &FFORReceiverRecoveryContext, witness: PublicKey, manifest: &SignedManifest,
+	) -> Result<bool, WitnessOwnerError> {
+		let binding = WitnessStorageBinding::from_native_context(context)
+			.map_err(WitnessOwnerError::Storage)?;
+		let stored = self.store.load(&binding).map_err(WitnessOwnerError::Storage)?;
+		let required = manifest.unsigned().parameters().retention_until;
+		if stored.acknowledgement_retention(witness).filter(|until| *until >= required).is_none() {
+			return Ok(false);
+		}
+		let native = self
+			.manager
+			.ffor_receiver_witness_acknowledgements(context)
+			.map_err(WitnessOwnerError::Native)?;
+		let Some(native) = native else {
+			return Ok(false);
+		};
+		if native.context_digest() != context.context_digest() {
+			return Err(WitnessOwnerError::Conflict);
+		}
+		let digest = sha256::Hash::hash(&manifest.encode()).to_byte_array();
+		// Independent first acknowledgements may have different request IDs after a crash.
+		Ok(native.acknowledgements().iter().any(|ack| {
+			ack.witness_node_id() == witness
+				&& ack.manifest_digest() == digest
+				&& ack.retention_until() >= required
+		}))
 	}
 
 	pub(super) fn retained_manifests(

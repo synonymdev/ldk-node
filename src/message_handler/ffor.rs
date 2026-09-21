@@ -11,7 +11,6 @@
 //! this transport disabled.
 
 pub(super) mod setup;
-
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -25,6 +24,8 @@ use lightning::util::logger::Level;
 use lightning::util::ser::{LengthLimitedRead, Writeable, Writer};
 use lightning_ffor::wire::{Message, MAX_MESSAGE_LEN};
 use lightning_ffor::witness::{Acknowledgement, FetchResponse, Provision, SignedFetch};
+#[cfg(test)]
+pub(crate) use setup::FforSetupAdapter;
 
 const MAX_PEERS: usize = 64;
 const MAX_PEER_MESSAGES: usize = 8;
@@ -160,9 +161,18 @@ struct PeerState {
 /// Both observations belong to the same successful PeerManager callback. Native still checks
 /// its generation under the channel lock, and enqueue separately checks the transport token.
 #[derive(Clone)]
-struct NativeConnection {
+pub(crate) struct NativeConnection {
 	native: FFORPeerConnection,
 	transport: ConnectionToken,
+}
+
+impl NativeConnection {
+	pub(crate) fn native(&self) -> &FFORPeerConnection {
+		&self.native
+	}
+	pub(crate) fn transport(&self) -> &ConnectionToken {
+		&self.transport
+	}
 }
 
 #[derive(Default)]
@@ -228,7 +238,7 @@ impl FforReceiverTransport {
 		}
 	}
 
-	fn native_connection(&self, peer: PublicKey) -> Option<NativeConnection> {
+	pub(crate) fn native_connection(&self, peer: PublicKey) -> Option<NativeConnection> {
 		let state = self.state.lock().unwrap();
 		let entry = state.peers.get(&peer)?;
 		Some(NativeConnection {

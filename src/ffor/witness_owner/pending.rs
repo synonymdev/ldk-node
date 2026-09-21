@@ -2,16 +2,19 @@
 
 use std::sync::Arc;
 
+use lightning::ln::ffor::FFORWitnessProvisionAttempt;
 use lightning::ln::types::ChannelId;
 use lightning_ffor::witness::{
 	Acknowledgement, CheckedAcknowledgement, PendingProvision, Provision, SignedManifest,
 	WitnessConnection,
 };
-use rand::{rngs::OsRng, TryRngCore};
-
-use crate::message_handler::ffor::{ConnectionToken, FforReceiverTransport, ReceivedFforMessage};
+use rand::rngs::OsRng;
+use rand::TryRngCore;
 
 use super::WitnessOwnerError;
+use crate::message_handler::ffor::{
+	ConnectionToken, FforReceiverTransport, NativeConnection, ReceivedFforMessage,
+};
 
 const MAX_PENDING: usize = 64;
 const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
@@ -24,13 +27,24 @@ pub(super) struct Epoch {
 	pub(super) context_digest: [u8; 32],
 }
 
+#[derive(Clone)]
 struct Entry {
 	epoch: Epoch,
 	request: Arc<PendingProvision<ConnectionToken>>,
 	encoded_bytes: usize,
 	queued: bool,
+	native: Option<NativeAttempt>,
 }
 
+#[derive(Clone)]
+pub(super) struct NativeAttempt {
+	pub(super) connection: NativeConnection,
+	pub(super) attempt: FFORWitnessProvisionAttempt,
+}
+
+// Cloning this bounded table shares all retained wire allocations. The owner stages changes in
+// a candidate table and commits it only after native admission succeeds, preserving its predecessor.
+#[derive(Clone)]
 pub(super) struct PendingProvisions {
 	entries: Vec<Entry>,
 	encoded_bytes: usize,
@@ -151,8 +165,13 @@ impl PendingProvisions {
 			return Err(WitnessOwnerError::Capacity);
 		}
 		let request = Arc::new(PendingProvision::new(provision, source));
-		let entry =
-			Entry { epoch, request: Arc::clone(&request), encoded_bytes: bytes, queued: false };
+		let entry = Entry {
+			epoch,
+			request: Arc::clone(&request),
+			encoded_bytes: bytes,
+			queued: false,
+			native: None,
+		};
 		if let Some(index) = previous {
 			self.entries[index] = entry;
 		} else {
@@ -160,6 +179,45 @@ impl PendingProvisions {
 		}
 		self.encoded_bytes = total + bytes;
 		Ok(request)
+	}
+
+	pub(super) fn bind_native(
+		&mut self, request: &Arc<PendingProvision<ConnectionToken>>, native: NativeAttempt,
+	) {
+		let entry = self
+			.entries
+			.iter_mut()
+			.find(|entry| Arc::ptr_eq(&entry.request, request))
+			.expect("candidate retained until native admission completes");
+		entry.native = Some(native);
+	}
+
+	pub(super) fn native_attempt(
+		&self, request: &Arc<PendingProvision<ConnectionToken>>,
+	) -> Option<&NativeAttempt> {
+		self.entries
+			.iter()
+			.find(|entry| Arc::ptr_eq(&entry.request, request))
+			.and_then(|entry| entry.native.as_ref())
+	}
+
+	pub(super) fn native_for(
+		&self, message: &ReceivedFforMessage, ack: &Acknowledgement,
+	) -> Result<(Epoch, NativeAttempt), WitnessOwnerError> {
+		let entry = self
+			.entries
+			.iter()
+			.find(|entry| {
+				entry.queued && entry.request.provision().request_id() == ack.request_id()
+			})
+			.ok_or(WitnessOwnerError::UnknownRequest)?;
+		let native = entry.native.as_ref().ok_or(WitnessOwnerError::StaleConnection)?;
+		if entry.request.connection().node_id != message.peer()
+			|| native.connection.transport() != message.connection()
+		{
+			return Err(WitnessOwnerError::StaleConnection);
+		}
+		Ok((entry.epoch, native.clone()))
 	}
 
 	pub(super) fn is_queued(&self, request: &Arc<PendingProvision<ConnectionToken>>) -> bool {
@@ -203,6 +261,14 @@ impl PendingProvisions {
 			.check_acknowledgement(ack, &source)
 			.map_err(WitnessOwnerError::Protocol)?;
 		Ok((entry.epoch, checked))
+	}
+
+	pub(super) fn complete_witness(
+		&mut self, epoch: Epoch, witness: bitcoin::secp256k1::PublicKey,
+	) {
+		self.entries
+			.retain(|entry| entry.epoch != epoch || entry.request.connection().node_id != witness);
+		self.encoded_bytes = self.entries.iter().map(|entry| entry.encoded_bytes).sum();
 	}
 
 	pub(super) fn complete(&mut self, request_id: [u8; 16]) {

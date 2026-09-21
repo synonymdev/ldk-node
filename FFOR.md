@@ -209,13 +209,27 @@ persistence under its transition locks; its callback only checks the witness's
 original transport token and enqueues. No storage or network operation holds those
 native locks. The settlement peer need not be connected for witness provisioning.
 
-The owner stages exact response correlation before queue acceptance. Backpressure
-keeps the same unsent request. Accepted requests are not resent after transport
-drain; explicit timeout retry generates a fresh request ID with the same manifest.
-Acknowledgements must match the actual witness, original connection and exact
-pending request. The owner rejoins retained native identity and sidecar manifests
-before storing a historical promise, then removes correlation only after a
-successful write. Such a promise is not invoice authority.
+The owner stages exact response correlation in both Node and native state before queue
+acceptance. A sealed pair binds the native witness generation to the actual transport
+token. Native marks an attempt sent only after the typed enqueue succeeds. Backpressure
+keeps the same unsent request; accepted requests are not resent after transport drain.
+Explicit timeout retry uses a fresh request ID with the same manifest. A candidate
+correlation table preserves the original pending request if native staging refuses,
+including when its independent 64-attempt/tombstone budget is full.
+
+Acknowledgements must match the actual witness, original connection and exact sent
+request. The owner rejoins native history and protected manifests, confirms its sidecar
+write, then retains the promise natively on that same authenticated generation. Pending
+native writes keep correlation intact. A correctly correlated refusal retires the attempt
+without creating a promise. Disconnect between the two successful writes retains the
+first sidecar promise and requires a fresh native attempt after reconnect.
+
+Each layer preserves its own first valid promise. After a crash, their request IDs and
+adequate retention values may differ. Recovery joins their exact epoch, manifest and
+witness, confirms protected storage and waits for the latest native persistence barrier.
+It never overwrites either promise to match transport IDs. The reported progress concerns
+persistence only; it grants no invoice or payment authority. Restored native records need
+a fresh successful manager write even when both historical promises are present.
 
 Historical fetches remain available after channel removal and admission expiry.
 Each traversal and retry uses fresh signed request identity and nonce. Every page

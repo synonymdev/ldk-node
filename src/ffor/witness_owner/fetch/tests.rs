@@ -1,7 +1,8 @@
 use std::sync::atomic::Ordering;
 
 use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
-use bitcoin::secp256k1::{ecdh::SharedSecret, Message, Secp256k1, SecretKey};
+use bitcoin::secp256k1::ecdh::SharedSecret;
+use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
 use lightning::ln::peer_handler::CustomMessageHandler;
 use lightning::ln::wire::CustomMessageReader;
 use lightning_ffor::witness::{EncryptedRecord, FetchResult, RecordHeader, SignedManifest};
@@ -154,7 +155,7 @@ fn ffor_witness_fetch_real_retry_correlates_identity_and_empty_response_grants_n
 	let wrong = receive(&h, public(81), &response(&second, vec![], None));
 	assert!(matches!(h.owner.accept_fetch_page(&wrong), Err(WitnessOwnerError::Protocol(_))));
 	let stale = receive(&h, witness, &response(&second, vec![], None));
-	h.handler.peer_disconnected(witness);
+	h.disconnect(witness);
 	h.connect(witness);
 	assert_eq!(h.owner.accept_fetch_page(&stale), Err(WitnessOwnerError::StaleConnection));
 	assert_eq!(h.owner.fetch(&h.context, witness), Ok(FetchProgress::Queued));
@@ -207,7 +208,7 @@ fn ffor_witness_fetch_real_storage_failure_keeps_page_through_disconnect_and_ret
 			h.owner.accept_fetch_page(&page),
 			Err(WitnessOwnerError::Storage(WitnessStoreError::Storage))
 		);
-		h.handler.peer_disconnected(witness);
+		h.disconnect(witness);
 		h.owner.synchronize_connections();
 		assert_eq!(h.owner.fetches.usage().0, 1);
 		assert_eq!(

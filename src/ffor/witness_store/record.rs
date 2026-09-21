@@ -160,6 +160,14 @@ impl StoredWitnessEpoch {
 			&& self.witnesses.iter().all(|entry| entry.acknowledgement.is_some())
 	}
 
+	/// Confirmed historical retention for the immutable manifest, with no current phase authority.
+	pub(in crate::ffor) fn acknowledgement_retention(&self, witness: PublicKey) -> Option<u32> {
+		self.witnesses
+			.iter()
+			.find(|entry| entry.policy.witness == witness)
+			.and_then(|entry| entry.acknowledgement.map(|ack| ack.retention_until))
+	}
+
 	/// Retain the first correlated promise for this exact witness and immutable manifest.
 	/// A later reprovision may use a new request ID; it cannot replace the original evidence.
 	pub(super) fn retain_acknowledgement<C>(

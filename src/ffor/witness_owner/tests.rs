@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use bitcoin::Network;
 use lightning::ln::ffor::FFORReceiverRecoveryContext;
-use lightning::ln::msgs::Init;
+use lightning::ln::msgs::{BaseMessageHandler, Init};
 use lightning::ln::peer_handler::CustomMessageHandler;
 use lightning::ln::wire::CustomMessageReader;
 use lightning::util::persist::{
@@ -23,6 +23,7 @@ use super::*;
 use crate::builder::NodeBuilder;
 use crate::ffor::witness_store::tests::TestStore;
 use crate::ffor::witness_store::WitnessPolicy;
+use crate::message_handler::ffor::FforSetupAdapter;
 use crate::message_handler::{NodeCustomMessage, NodeCustomMessageHandler};
 use crate::types::DynStore;
 use crate::{Config, Node};
@@ -87,8 +88,12 @@ impl Harness {
 			node.channel_manager.list_ffor_receiver_recovery_contexts().unwrap().remove(0);
 		assert_eq!(context.settlement_node_id(), PublicKey::from_str(field("settlement")).unwrap());
 		let transport = Arc::new(FforReceiverTransport::default());
-		let handler =
-			NodeCustomMessageHandler::new_ignoring().with_ffor_receiver(Arc::clone(&transport));
+		let adapter = Arc::new(FforSetupAdapter::new(
+			Arc::clone(&node.channel_manager),
+			Arc::clone(&node.chain_monitor),
+			Arc::clone(&transport),
+		));
+		let handler = NodeCustomMessageHandler::new_ignoring().with_ffor_setup(adapter);
 		let backing: Arc<DynStore> = storage.clone();
 		let store = Arc::new(WitnessSecretStore::open(&SEED, backing).unwrap());
 		let owner = WitnessOwner::new(
@@ -120,9 +125,16 @@ impl Harness {
 	}
 
 	pub(super) fn connect(&self, peer: PublicKey) {
-		let init =
-			Init { features: InitFeatures::empty(), networks: None, remote_network_address: None };
+		let mut features = InitFeatures::empty();
+		features.set_static_remote_key_optional();
+		let init = Init { features, networks: None, remote_network_address: None };
+		self.node.channel_manager.peer_connected(peer, &init, false).unwrap();
 		self.handler.peer_connected(peer, &init, false).unwrap();
+	}
+
+	pub(super) fn disconnect(&self, peer: PublicKey) {
+		self.node.channel_manager.peer_disconnected(peer);
+		self.handler.peer_disconnected(peer);
 	}
 
 	pub(super) fn register_and_persist(&mut self) {
@@ -224,6 +236,8 @@ fn ffor_witness_owner_real_restore_registration_and_queue_require_durability() {
 	assert_eq!(h.owner.acknowledge(&old), Err(WitnessOwnerError::UnknownRequest));
 	let current = h.receive(w, &h.accepted(&second));
 	let before = h.secret_bytes();
+	assert_eq!(h.owner.acknowledge(&current), Ok(AcknowledgementProgress::AwaitingPersistence));
+	h.persist_manager();
 	assert_eq!(h.owner.acknowledge(&current), Ok(AcknowledgementProgress::Retained));
 	assert_ne!(before, h.secret_bytes());
 	assert_eq!(h.owner.pending.usage(), (0, 0));
@@ -240,9 +254,9 @@ fn ffor_witness_owner_real_ack_correlates_connection_and_retains_failed_write() 
 	let request = h.outgoing().remove(0);
 	let ack = h.accepted(&request);
 	let wrong = h.receive(key(81), &ack);
-	assert!(matches!(h.owner.acknowledge(&wrong), Err(WitnessOwnerError::Protocol(_))));
+	assert!(matches!(h.owner.acknowledge(&wrong), Err(WitnessOwnerError::StaleConnection)));
 	let stale = h.receive(w, &ack);
-	h.handler.peer_disconnected(w);
+	h.disconnect(w);
 	h.connect(w);
 	assert_eq!(h.owner.acknowledge(&stale), Err(WitnessOwnerError::StaleConnection));
 	assert_eq!(h.owner.provision(&h.context, w), Ok(ProvisioningProgress::Queued));
@@ -255,10 +269,20 @@ fn ffor_witness_owner_real_ack_correlates_connection_and_retains_failed_write() 
 		h.owner.acknowledge(&input),
 		Err(WitnessOwnerError::Storage(WitnessStoreError::Storage))
 	);
+	assert!(h
+		.node
+		.channel_manager
+		.ffor_receiver_witness_acknowledgements(&h.context)
+		.unwrap()
+		.unwrap()
+		.acknowledgements()
+		.is_empty());
 	let visible_candidate = h.secret_bytes();
 	assert_ne!(before, visible_candidate);
 	assert_eq!(h.owner.pending.usage().0, 1);
 	h.owner.recover_storage().unwrap();
+	assert_eq!(h.owner.acknowledge(&input), Ok(AcknowledgementProgress::AwaitingPersistence));
+	h.persist_manager();
 	assert_eq!(h.owner.acknowledge(&input), Ok(AcknowledgementProgress::Retained));
 	assert_eq!(visible_candidate, h.secret_bytes());
 	assert_eq!(h.owner.pending.usage(), (0, 0));
@@ -337,6 +361,8 @@ fn ffor_witness_owner_real_channel_removal_refuses_release_but_retains_historica
 	assert!(h.outgoing().is_empty());
 	assert_eq!(h.owner.retained_manifests(&h.context).unwrap()[0].1, *provision.manifest());
 	// This is a historical storage promise. It never restores the removed channel's authority.
+	assert_eq!(h.owner.acknowledge(&response), Ok(AcknowledgementProgress::AwaitingPersistence));
+	h.persist_manager();
 	assert_eq!(h.owner.acknowledge(&response), Ok(AcknowledgementProgress::Retained));
 	assert!(h.node.channel_manager.list_channels().is_empty());
 }
@@ -453,3 +479,5 @@ fn ffor_witness_owner_real_fetch_admission_counts_pending_provisions() {
 		matches!(&messages[0].1, NodeCustomMessage::Ffor(frame) if frame.wire()[..2] == 55059u16.to_be_bytes())
 	);
 }
+
+mod native_ack;
