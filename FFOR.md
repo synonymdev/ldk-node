@@ -22,13 +22,15 @@ and ordinary invoice behavior remain unchanged. The mobile draft providers expos
 no production capability until authenticated activation, durable channel ownership
 and recovery are implemented together.
 
-## Private receive transport
+## Private bounded transport
 
 Node's custom-message composition retains the existing LSPS reader, outbox, features
 and peer callbacks. An optional private FFOR receiver can parse the seven supported
 signed lifecycle types and witness acknowledgement type 55057 through the shared
-canonical codecs. The production builder leaves this receiver disabled. This slice
-has no FFOR sender, feature advertisement, protocol transition or public setting.
+canonical codecs. Its bounded outbox accepts exact wire messages from a future
+native-authorized release callback. The production builder leaves this transport
+disabled. This slice has no operational sender, feature advertisement, protocol
+transition or public setting.
 
 The transport accepts peer identity only from PeerManager's authenticated callback.
 Each successful connection gets a distinct opaque token. Disconnect or replacement
@@ -38,7 +40,7 @@ consumer must recheck connection ownership under the actual native channel autho
 before applying a transition; a successful parse or point-in-time token check grants
 no such authority. Claimed wire identities cannot replace the authenticated peer.
 
-Frames are limited to 65,535 bytes including the message type. The receive queue
+Frames are limited to 65,535 bytes including the message type. The combined queues
 tracks at most 64 peers, eight frames and 256 KiB per peer, and 128 frames and 1 MiB
 globally. Those byte limits cover retained wire payloads; bounded peer and frame
 metadata adds fixed overhead. Queue refusals preserve existing work and do not
@@ -50,9 +52,20 @@ custom reader; unknown types keep the
 existing ignore behavior. Witness service requests and receipt retrieval are outside
 this receiver slice.
 
+An outbound enqueue checks the original connection token and shared capacity in one
+critical section. Backpressure preserves all queued messages, and an exact retry
+already in the outbox consumes no additional capacity. Queue acceptance is not
+network delivery. Disconnect clears both queues, and old tokens cannot enqueue on a
+replacement connection. The custom-message drain preserves each producer's FIFO
+ordering alongside LSPS. The pinned PeerManager holds its peer-map read lock through
+draining, selecting the same peer and encrypting into its socket queue; disconnect
+and replacement require the write lock. Native code remains responsible for the
+persistence and phase checks before enqueueing and for deciding whether any later
+replay is legal. No transport mutex may span a native manager call.
+
 Run `cargo test --lib message_handler` for exact public fixture routing, LSPS
 coexistence, disabled behavior, malformed frame bounds, connection replacement,
-concurrent disconnect and property-based queue accounting checks. Fixture provenance
+concurrent disconnect, outbound backpressure and property-based queue accounting checks. Fixture provenance
 is recorded in `src/message_handler/test_data.json`. Parser fuzzing remains in the
 shared `lightning-ffor` wire and witness targets; Node also runs arbitrary-byte
 property checks at the length-limited reader boundary.
@@ -94,13 +107,19 @@ rollback to an older valid backup or protect against wallet-seed compromise. KVS
 has no cross-process compare-and-swap, so concurrent independent owners are not
 supported. A future native registration must distinguish a new epoch from an
 existing epoch whose entire sidecar is missing; `load` never regenerates secrets.
-Fetch nonce allocation and witness acknowledgement persistence are separate runtime
-work and are not supplied by this store.
+Protected key operations sign fetch requests and decrypt witness records without
+exporting either private key. Each fetch call draws a fresh operating-system request
+identity, 256-bit nonce and signature entropy, including retries after a lost response
+or restart. The witness still enforces replay refusal. Decryption authenticates the
+retained witness and manifest before native AEAD and body checks. These helpers do not
+correlate a response connection, persist a receipt, change a channel or credit a
+payment. Witness acknowledgement persistence and runtime recovery remain separate work.
 
-Run `cargo test --lib ffor_witness_store` for exact retries and restart, failed writes
+Run `cargo test --lib ffor_witness` for exact retries and restart, failed writes
 with readable bytes, corruption, wrong seeds and bindings, key separation, capacity,
 concurrent creation, fallible entropy, truncated records and property-based mutation
-checks. These checks do not establish complete branch coverage or process-crash
+checks, fresh fetch authorization after restart and protected decryption of pinned
+Beignet records. These checks do not establish complete branch coverage or process-crash
 interoperability.
 
 ## Required runtime integration

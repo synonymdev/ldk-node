@@ -1,9 +1,11 @@
-//! Bounded, receive-only transport state. Successful parsing grants no protocol authority.
+//! Bounded connection-scoped transport state. Successful parsing grants no protocol authority.
 //!
 //! Only PeerManager's authenticated callbacks supply peer identity. A connection token identifies
 //! one successful init callback, including reconnects to the same key. Consumers must recheck that
 //! token under the eventual native channel authority before mutation; a queue pop is not a lock on
-//! the connection. No protocol transition, signature generation or outbound queue exists here.
+//! the connection. An outbound enqueue callback checks its token and queue capacity atomically;
+//! the native caller must first authorize and durably retain the exact bytes. No protocol transition
+//! or signature generation exists here, and the production builder leaves this transport disabled.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -55,12 +57,24 @@ impl FforFrame {
 		let mut bytes = vec![0; body_len as usize + 2];
 		bytes[..2].copy_from_slice(&message_type.to_be_bytes());
 		reader.read_exact(&mut bytes[2..])?;
-		if message_type == 55057 {
-			Acknowledgement::decode(&bytes).map_err(|_| DecodeError::InvalidValue)?;
-		} else {
-			Message::decode(&bytes).map_err(|_| DecodeError::InvalidValue)?;
-		}
+		Self::validate_wire(&bytes)?;
 		Ok(Self(bytes))
+	}
+
+	fn validate_wire(bytes: &[u8]) -> Result<(), DecodeError> {
+		if bytes.len() < 2 || bytes.len() > MAX_MESSAGE_LEN {
+			return Err(DecodeError::InvalidValue);
+		}
+		let message_type = u16::from_be_bytes([bytes[0], bytes[1]]);
+		if !Self::handles_type(message_type) {
+			return Err(DecodeError::InvalidValue);
+		}
+		if message_type == 55057 {
+			Acknowledgement::decode(bytes).map_err(|_| DecodeError::InvalidValue)?;
+		} else {
+			Message::decode(bytes).map_err(|_| DecodeError::InvalidValue)?;
+		}
+		Ok(())
 	}
 
 	// The eventual receiver consumes exact bytes for native authentication and transcript binding.
@@ -129,6 +143,7 @@ struct PeerState {
 struct QueueState {
 	peers: HashMap<PublicKey, PeerState>,
 	queue: VecDeque<ReceivedFforMessage>,
+	outbound: VecDeque<ReceivedFforMessage>,
 	bytes: usize,
 }
 
@@ -138,11 +153,28 @@ impl QueueState {
 		if let Some(removed) = self.peers.remove(&peer) {
 			self.bytes -= removed.bytes;
 			self.queue.retain(|message| message.peer != peer);
+			self.outbound.retain(|message| message.peer != peer);
 		}
+	}
+
+	fn at_capacity(&self, peer: &PeerState, bytes: usize) -> bool {
+		peer.messages >= MAX_PEER_MESSAGES
+			|| peer.bytes + bytes > MAX_PEER_BYTES
+			|| self.queue.len() + self.outbound.len() >= MAX_QUEUED_MESSAGES
+			|| self.bytes + bytes > MAX_QUEUED_BYTES
+	}
+
+	fn remove_accounting(&mut self, message: &ReceivedFforMessage) {
+		let bytes = message.frame.0.len();
+		let peer = self.peers.get_mut(&message.peer).unwrap();
+		peer.messages -= 1;
+		peer.bytes -= bytes;
+		self.bytes -= bytes;
 	}
 }
 
-/// Optional inbound mailbox. It is never constructed by the production builder.
+/// Optional inbound mailbox and outbound queue sharing one bounded capacity budget.
+/// It is never constructed by the production builder.
 #[derive(Default)]
 pub(crate) struct FforReceiverTransport {
 	state: Mutex<QueueState>,
@@ -169,11 +201,7 @@ impl FforReceiverTransport {
 		let mut state = self.state.lock().unwrap();
 		let peer_state = state.peers.get(&peer).ok_or_else(refused)?;
 		let bytes = frame.0.len();
-		if peer_state.messages >= MAX_PEER_MESSAGES
-			|| peer_state.bytes + bytes > MAX_PEER_BYTES
-			|| state.queue.len() >= MAX_QUEUED_MESSAGES
-			|| state.bytes + bytes > MAX_QUEUED_BYTES
-		{
+		if state.at_capacity(peer_state, bytes) {
 			return Err(refused());
 		}
 		let connection = peer_state.connection.clone();
@@ -185,16 +213,66 @@ impl FforReceiverTransport {
 		Ok(())
 	}
 
+	/// Captures only a transport generation, not native protocol or persistence authority.
+	#[allow(dead_code)]
+	pub(crate) fn connection(&self, peer: PublicKey) -> Option<ConnectionToken> {
+		self.state.lock().unwrap().peers.get(&peer).map(|entry| entry.connection.clone())
+	}
+
+	/// Enqueues exact bytes inside a native-authorized release callback, using native -> transport
+	/// lock order. This method performs no I/O or manager calls. An error preserves all queued work
+	/// and must be returned to native so it retains retry ownership. Success means queue acceptance,
+	/// never network delivery. Disconnect discards accepted connection-scoped work.
+	#[allow(dead_code)]
+	pub(crate) fn enqueue(
+		&self, peer: PublicKey, connection: &ConnectionToken, wire: &[u8],
+	) -> Result<(), OutboundError> {
+		FforFrame::validate_wire(wire).map_err(|_| OutboundError::InvalidMessage)?;
+		let mut state = self.state.lock().unwrap();
+		let peer_state = state.peers.get(&peer).ok_or(OutboundError::StaleConnection)?;
+		if peer_state.connection != *connection {
+			return Err(OutboundError::StaleConnection);
+		}
+		// A retry already retained on this connection needs neither capacity nor another copy.
+		if state.outbound.iter().any(|message| message.peer == peer && message.frame.wire() == wire)
+		{
+			return Ok(());
+		}
+		if state.at_capacity(peer_state, wire.len()) {
+			return Err(OutboundError::Capacity);
+		}
+		let frame = FforFrame(wire.to_vec());
+		let peer_state = state.peers.get_mut(&peer).unwrap();
+		peer_state.messages += 1;
+		peer_state.bytes += wire.len();
+		state.bytes += wire.len();
+		state.outbound.push_back(ReceivedFforMessage {
+			peer,
+			connection: connection.clone(),
+			frame,
+		});
+		Ok(())
+	}
+
+	/// Called only from CustomMessageHandler's drain. The pinned PeerManager holds peers.read from
+	/// that callback through selection/encryption into the same peer's socket queue. Disconnect and
+	/// replacement require peers.write, and Noise refuses duplicate node-id mappings.
+	pub(super) fn drain_outbound(&self) -> Vec<(PublicKey, FforFrame)> {
+		let mut state = self.state.lock().unwrap();
+		let mut messages = Vec::with_capacity(state.outbound.len());
+		while let Some(message) = state.outbound.pop_front() {
+			state.remove_accounting(&message);
+			messages.push((message.peer, message.frame));
+		}
+		messages
+	}
+
 	// Popping does not authorize any protocol action or retain the connection lock for the caller.
 	#[allow(dead_code)]
 	pub(crate) fn pop(&self) -> Option<ReceivedFforMessage> {
 		let mut state = self.state.lock().unwrap();
 		let message = state.queue.pop_front()?;
-		let bytes = message.frame.0.len();
-		let peer = state.peers.get_mut(&message.peer).unwrap();
-		peer.messages -= 1;
-		peer.bytes -= bytes;
-		state.bytes -= bytes;
+		state.remove_accounting(&message);
 		Some(message)
 	}
 
@@ -207,6 +285,13 @@ impl FforReceiverTransport {
 			.get(&message.peer)
 			.is_some_and(|peer| peer.connection == message.connection)
 	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OutboundError {
+	InvalidMessage,
+	StaleConnection,
+	Capacity,
 }
 
 fn refused() -> LightningError {

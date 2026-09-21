@@ -219,6 +219,45 @@ fn ffor_witness_store_fresh_keys_are_scoped_to_epoch_and_witness() {
 }
 
 #[test]
+fn ffor_witness_key_use_fetch_retries_and_reload_use_fresh_nonces() {
+	let backend = TestStore::new();
+	let binding = binding(1);
+	let mut request_ids = BTreeSet::new();
+	let mut nonces = BTreeSet::new();
+	let original_manifest;
+	{
+		let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+		let retained = store.create(&binding, &policies()).unwrap();
+		original_manifest = retained.manifest(key(2)).unwrap().encode();
+		for _ in 0..8 {
+			// A lost response starts a fresh authorization; it never reuses the previous wire bytes.
+			let request = retained.prepare_fetch(key(2), None).unwrap();
+			let fields = request.unsigned().parameters();
+			assert!(request_ids.insert(fields.request_id));
+			assert!(nonces.insert(fields.nonce));
+		}
+		assert_eq!(retained.prepare_fetch(key(8), None), Err(WitnessKeyUseError::UnknownWitness));
+	}
+	let reopened = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	let restored = reopened.load(&binding).unwrap();
+	assert_eq!(restored.manifest(key(2)).unwrap().encode(), original_manifest);
+	for witness in [key(2), key(3)] {
+		for _ in 0..8 {
+			let request = restored.prepare_fetch(witness, None).unwrap();
+			let fields = request.unsigned().parameters();
+			assert!(request_ids.insert(fields.request_id));
+			assert!(nonces.insert(fields.nonce));
+			assert_eq!(
+				request.fetch_key(),
+				restored.manifest(witness).unwrap().unsigned().parameters().fetch_public_key
+			);
+		}
+	}
+	// One initial write and one restored durability confirmation, with no mutable nonce counter.
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn ffor_witness_store_rejects_invalid_policy_before_any_storage_write() {
 	let backend = TestStore::new();
 	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();

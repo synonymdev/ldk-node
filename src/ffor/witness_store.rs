@@ -3,7 +3,7 @@
 //! One exclusive owner serializes all operations for this namespace. KVStore has no cross-process
 //! compare-and-swap, so concurrent owners are unsupported. Store success is the durability contract;
 //! authenticated encryption does not detect rollback to an older valid store. Opaque native history
-//! supplies record bindings. Live native registration, fetch nonce allocation, transport, witness
+//! supplies record bindings. Live native registration, fetch response correlation, transport, witness
 //! acknowledgement handling and deletion are deliberately absent.
 //! A future native registration must distinguish a new epoch from a missing sidecar after restore;
 //! `load` never recreates secrets, and `create` is only for explicitly new registration material.
@@ -28,6 +28,8 @@ pub(super) use binding::WitnessStorageBinding;
 #[cfg(test)]
 use binding::WitnessStorageIdentity;
 use envelope::WrappingKey;
+#[cfg(test)]
+use record::WitnessKeyUseError;
 pub(super) use record::{StoredWitnessEpoch, WitnessPolicy};
 
 const PRIMARY_NAMESPACE: &str = "ffor_witness";

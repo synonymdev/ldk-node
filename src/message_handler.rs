@@ -5,7 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-//! Compose LSPS with an optional receive-only FFOR transport. The builder leaves FFOR disabled.
+//! Compose LSPS with an optional bounded FFOR transport. The builder leaves FFOR disabled.
 
 pub(crate) mod ffor;
 #[cfg(test)]
@@ -28,7 +28,7 @@ use crate::liquidity::LiquiditySource;
 use crate::types::LiquidityManager;
 use ffor::{FforFrame, FforReceiverTransport};
 
-/// Only the LSPS variant can enter this handler's outbound queue.
+/// Independent LSPS and connection-scoped FFOR messages retain their own queue ordering.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NodeCustomMessage {
 	Liquidity(RawLSPSMessage),
@@ -136,14 +136,21 @@ where
 	}
 
 	fn get_and_clear_pending_msg(&self) -> Vec<(PublicKey, NodeCustomMessage)> {
-		// FFOR has no outbound API. Native persistence must gate any future sender.
-		self.liquidity.as_ref().map_or_else(Vec::new, |liquidity| {
+		let mut messages: Vec<_> = self.liquidity.as_ref().map_or_else(Vec::new, |liquidity| {
 			liquidity
 				.get_and_clear_pending_msg()
 				.into_iter()
 				.map(|(peer, message)| (peer, NodeCustomMessage::Liquidity(message)))
 				.collect()
-		})
+		});
+		if let Some(ffor) = self.ffor.as_ref() {
+			messages.extend(
+				ffor.drain_outbound()
+					.into_iter()
+					.map(|(peer, message)| (peer, NodeCustomMessage::Ffor(message))),
+			);
+		}
+		messages
 	}
 
 	fn provided_node_features(&self) -> NodeFeatures {

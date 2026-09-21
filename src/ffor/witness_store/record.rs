@@ -1,12 +1,25 @@
 use std::fmt;
 
 use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
-use lightning_ffor::witness::{ManifestParameters, SignedManifest, UnsignedManifest};
+use lightning::ln::ffor::FFORWitnessDecryptionError;
+use lightning_ffor::witness::{ManifestParameters, SignedManifest, UnsignedManifest, WitnessError};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use zeroize::Zeroizing;
 
 use super::{WitnessStorageBinding, WitnessStoreError, MAX_WITNESSES, SCHEMA_VERSION};
+
+mod key_use;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WitnessKeyUseError {
+	UnknownWitness,
+	Entropy,
+	KeyMaterial,
+	Request(WitnessError),
+	Record(WitnessError),
+	Decryption(FFORWitnessDecryptionError),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WitnessPolicy {

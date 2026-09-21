@@ -124,6 +124,47 @@ fn ffor_composes_lsps_read_outbox_features_and_callbacks() {
 }
 
 #[test]
+fn ffor_outbound_merges_with_lsps_without_consuming_inbound_or_reordering() {
+	let lsps = Arc::new(LspsHandler::default());
+	let receiver = Arc::new(FforReceiverTransport::default());
+	let handler = NodeCustomMessageHandler::new_liquidity_handler(Arc::clone(&lsps))
+		.with_ffor_receiver(Arc::clone(&receiver));
+	let peer = key(1);
+	handler.peer_connected(peer, &init(), false).unwrap();
+	let connection = receiver.connection(peer).unwrap();
+	let fixtures: serde_json::Value = serde_json::from_str(include_str!("test_data.json")).unwrap();
+	let wires = fixtures["messages"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.take(2)
+		.map(|fixture| Vec::<u8>::from_hex(fixture["wire"].as_str().unwrap()).unwrap())
+		.collect::<Vec<_>>();
+	for wire in &wires {
+		receiver.enqueue(peer, &connection, wire).unwrap();
+	}
+	let requests =
+		[RawLSPSMessage { payload: "first".into() }, RawLSPSMessage { payload: "second".into() }];
+	lsps.pending.lock().unwrap().extend(requests.iter().cloned().map(|message| (peer, message)));
+	handler.handle_custom_message(parse(&handler, &ack_wire(peer)), peer).unwrap();
+	let messages = handler.get_and_clear_pending_msg();
+	assert_eq!(messages.len(), 4);
+	for (actual, expected) in messages[..2].iter().zip(requests) {
+		assert_eq!(*actual, (peer, NodeCustomMessage::Liquidity(expected)));
+	}
+	for ((actual_peer, message), wire) in messages[2..].iter().zip(wires) {
+		assert_eq!(*actual_peer, peer);
+		assert_eq!(message.type_id().to_be_bytes(), wire[..2]);
+		assert_eq!(message.encode(), wire[2..]);
+		assert!(matches!(message, NodeCustomMessage::Ffor(_)));
+	}
+	assert!(handler.get_and_clear_pending_msg().is_empty());
+	assert_eq!(receiver.pop().unwrap().frame().wire(), ack_wire(peer));
+	assert_eq!(handler.provided_node_features(), lsps.provided_node_features());
+	assert_eq!(handler.provided_init_features(peer), lsps.provided_init_features(peer));
+}
+
+#[test]
 fn ffor_disabled_has_no_read_features_queue_or_connection_effects() {
 	let handler = NodeCustomMessageHandler::<Arc<LspsHandler>>::new_ignoring();
 	let peer = key(1);
@@ -158,9 +199,11 @@ fn ffor_binding_waits_for_lsps_success_and_preserves_errors() {
 	handler.peer_connected(peer, &init(), false).unwrap();
 	handler.handle_custom_message(parse(&handler, &ack_wire(peer)), peer).unwrap();
 	let old = receiver.pop().unwrap();
+	receiver.enqueue(peer, old.connection(), &ack_wire(peer)).unwrap();
 	lsps.fail_connect.store(true, Ordering::Relaxed);
 	assert_eq!(handler.peer_connected(peer, &init(), false), Err(()));
 	assert!(!receiver.is_current(&old));
+	assert!(handler.get_and_clear_pending_msg().is_empty());
 	assert!(handler.handle_custom_message(parse(&handler, &ack_wire(peer)), peer).is_err());
 	lsps.fail_connect.store(false, Ordering::Relaxed);
 	handler.peer_connected(peer, &init(), false).unwrap();
