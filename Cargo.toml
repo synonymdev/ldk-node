@@ -33,18 +33,19 @@ panic = 'abort'     # Abort on panic
 default = []
 
 [dependencies]
-lightning-ffor = { git = "https://github.com/synonymdev/rust-lightning", rev = "364d8f905743a2bd7a91c1757ef85454c1d258a6" }
-lightning = { version = "0.2.0", features = ["std"] }
-lightning-types = { version = "0.3.0" }
-lightning-invoice = { version = "0.34.0", features = ["std"] }
-lightning-net-tokio = { version = "0.2.0" }
-lightning-persister = { version = "0.2.0", features = ["tokio"] }
-lightning-background-processor = { version = "0.2.0" }
-lightning-rapid-gossip-sync = { version = "0.2.0" }
-lightning-block-sync = { version = "0.2.0", features = ["rest-client", "rpc-client", "tokio"] }
-lightning-transaction-sync = { version = "0.2.0", features = ["esplora-async-https", "time", "electrum-rustls-ring"] }
-lightning-liquidity = { version = "0.2.0", features = ["std"] }
-lightning-macros = { version = "0.2.0" }
+# Pin runtime dependencies directly so downstream consumers use the same native engine.
+lightning-ffor = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77" }
+lightning = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77", features = ["std"] }
+lightning-types = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77" }
+lightning-invoice = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77", features = ["std"] }
+lightning-net-tokio = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77" }
+lightning-persister = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77", features = ["tokio"] }
+lightning-background-processor = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77" }
+lightning-rapid-gossip-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77" }
+lightning-block-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77", features = ["rest-client", "rpc-client", "tokio"] }
+lightning-transaction-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77", features = ["esplora-async-https", "time", "electrum-rustls-ring"] }
+lightning-liquidity = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77", features = ["std"] }
+lightning-macros = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77" }
 
 bdk_chain = { version = "0.23.0", default-features = false, features = ["std"] }
 bdk_esplora = { version = "0.22.0", default-features = false, features = ["async-https-rustls", "tokio"]}
@@ -80,7 +81,7 @@ prost = { version = "0.11.6", default-features = false}
 winapi = { version = "0.3", features = ["winbase"] }
 
 [dev-dependencies]
-lightning = { version = "0.2.0", features = ["std", "_test_utils"] }
+lightning = { git = "https://github.com/synonymdev/rust-lightning", rev = "9ce29d19de27cbea70698e2ba5531b72d2351c77", features = ["std", "_test_utils"] }
 proptest = "1.0.0"
 regex = "1.5.6"
 criterion = { version = "0.7.0", features = ["async_tokio"] }

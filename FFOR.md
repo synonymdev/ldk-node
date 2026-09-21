@@ -6,10 +6,16 @@ Blocktank's LND v0.21.3-beta baseline. Work is tracked in
 
 The shared protocol implementation lives in `lightning-ffor` in the
 [Rust channel-engine draft](https://github.com/synonymdev/rust-lightning/pull/4).
-Node pins an exact commit in Cargo.toml and Cargo.lock. Wire parsers, authenticated
+Node pins the channel engine, companion crates and shared protocol to one exact
+commit through direct dependencies in Cargo.toml and Cargo.lock. These pins also
+apply when another Rust project consumes Node. Wire parsers, authenticated
 setup derivation, transcript hashes, reference fixtures and fuzz tests belong to
 that crate. Keeping one implementation lets Node and the channel engine use the
 same validation rules.
+
+The wallet signer forwards FFOR signing requests to its existing node identity.
+The shared protocol validates the resulting single-SHA256 signature domain. No
+private keys are exported, and a valid signature alone grants no channel authority.
 
 This dependency does not enable offline receiving. The current native bindings
 and ordinary invoice behavior remain unchanged. The mobile draft providers expose
