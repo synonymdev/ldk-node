@@ -103,7 +103,7 @@ pub(crate) type PeerManager = lightning::ln::peer_handler::PeerManager<
 	Arc<dyn RoutingMessageHandler + Send + Sync>,
 	Arc<OnionMessenger>,
 	Arc<Logger>,
-	Arc<NodeCustomMessageHandler<Arc<Logger>>>,
+	Arc<NodeCustomMessageHandler>,
 	Arc<KeysManager>,
 	Arc<ChainMonitor>,
 >;

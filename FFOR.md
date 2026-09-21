@@ -22,6 +22,41 @@ and ordinary invoice behavior remain unchanged. The mobile draft providers expos
 no production capability until authenticated activation, durable channel ownership
 and recovery are implemented together.
 
+## Private receive transport
+
+Node's custom-message composition retains the existing LSPS reader, outbox, features
+and peer callbacks. An optional private FFOR receiver can parse the seven supported
+signed lifecycle types and witness acknowledgement type 55057 through the shared
+canonical codecs. The production builder leaves this receiver disabled. This slice
+has no FFOR sender, feature advertisement, protocol transition or public setting.
+
+The transport accepts peer identity only from PeerManager's authenticated callback.
+Each successful connection gets a distinct opaque token. Disconnect or replacement
+clears its queued work, and a failed LSPS connection callback cannot establish a new
+FFOR connection. Popped inputs retain the original token and exact wire bytes. A
+consumer must recheck connection ownership under the actual native channel authority
+before applying a transition; a successful parse or point-in-time token check grants
+no such authority. Claimed wire identities cannot replace the authenticated peer.
+
+Frames are limited to 65,535 bytes including the message type. The receive queue
+tracks at most 64 peers, eight frames and 256 KiB per peer, and 128 frames and 1 MiB
+globally. Those byte limits cover retained wire payloads; bounded peer and frame
+metadata adds fixed overhead. Queue refusals preserve existing work and do not
+disconnect ordinary peers. Consumers take one frame at a time and remain responsible
+for bounding any work they retain after removal from the queue. Debug formatting
+exposes only the FFOR type and length, so PeerManager trace logs cannot print
+lifecycle preimages or other wire payloads. Malformed recognized frames fail the
+custom reader; unknown types keep the
+existing ignore behavior. Witness service requests and receipt retrieval are outside
+this receiver slice.
+
+Run `cargo test --lib message_handler` for exact public fixture routing, LSPS
+coexistence, disabled behavior, malformed frame bounds, connection replacement,
+concurrent disconnect and property-based queue accounting checks. Fixture provenance
+is recorded in `src/message_handler/test_data.json`. Parser fuzzing remains in the
+shared `lightning-ffor` wire and witness targets; Node also runs arbitrary-byte
+property checks at the length-limited reader boundary.
+
 ## Required runtime integration
 
 - Bind signed setup to the actual local identity, peer, chain and channel limits.
