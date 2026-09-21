@@ -176,9 +176,8 @@ identity, 256-bit nonce and signature entropy, including retries after a lost re
 or restart. The witness still enforces replay refusal. Decryption authenticates the
 retained witness and manifest before native AEAD and body checks. These helpers do not
 correlate a response connection, change a channel or credit a payment. Receipt
-retention preserves authenticated evidence for later native reconciliation. Witness
-transport orchestration is described below; native monitor reconciliation remains
-separate work.
+retention preserves authenticated evidence for native reconciliation. Witness
+transport and the private original-monitor recovery caller are described below.
 
 Run `cargo test --lib ffor_witness` for exact retries and restart, failed writes
 with readable bytes, corruption, wrong seeds and bindings, key separation, capacity,
@@ -194,8 +193,8 @@ interoperability.
 
 ## Private witness owner
 
-The concrete `ffor::witness_owner` composes the actual ChannelManager, protected
-store and authenticated transport. Exclusive access serializes bounded transient
+The concrete `ffor::witness_owner` composes the actual ChannelManager, ChainMonitor,
+protected store and authenticated transport. Exclusive access serializes bounded transient
 work, with a combined 64-request and 8 MiB encoded-payload reservation across
 provisioning and fetches. Each fetch reserves its complete response, request and
 bounded pagination history before release. Fixed metadata has a separate count
@@ -231,8 +230,8 @@ from local storage corruption. The owner rejects those candidates while retainin
 later valid evidence from the same page. Once all such evidence is durable, it
 reports a rejected page and permits a fresh traversal from slot zero. Storage
 uncertainty or local corruption keeps the page and its cursor intact. A completed
-or empty traversal does not establish that any slot is unpaid, and this owner
-emits no payment credit or native claim. Each authenticated page retains all valid
+or empty traversal does not establish that any slot is unpaid. Fetching emits no
+payment credit or native claim. Each authenticated page retains all valid
 cores with one fixed-book write, and an exact retry performs no additional write.
 This avoids revalidating and rewriting the complete book for every candidate.
 Large-book recovery performance still needs measurement before production scheduling.
@@ -248,6 +247,65 @@ exact batch recovery and zero payment credit.
 Fixture provenance is in `src/ffor/witness_owner/fixtures/README.md`; test-only
 witness encryption uses ring against the retained public epoch key and never
 exports a protected private key. No builder or scheduler enables this owner yet.
+
+The separate receipt-recovery call first rejoins immutable native witness
+registration and confirmed protected evidence. It captures an opaque snapshot from
+the actual ChainMonitor, drops that monitor guard and asks the native manager to
+import the authenticated preimage. Native rechecks the original funding output,
+current monitor counter and exact retained voucher under its channel locks.
+Historical recovery remains possible after deadline, disconnection and channel
+removal. An absent receipt means only that this store has no evidence for that slot.
+Missing or uncertain sidecar storage cannot reach the monitor.
+
+A submitted monitor update is reported as pending, even if Node's synchronous
+MonitorUpdatingPersister has already completed its write. Normal monitor-event
+processing and a fresh retry observe completion. Neither observation credits a
+payment or authorizes an invoice. Tests use the actual Node persister and restore
+its durable monitor updates; they never manufacture a monitor-completion signal.
+They cover live and archive-only recovery, idempotence after restart, and uncertain
+receipt writes before native import. Delayed and failed native monitor writes are
+covered in the pinned channel engine. Authoritative settlement outcomes and the
+production recovery scheduler remain unfinished.
+
+## Private durable receive requests
+
+The private `ffor::request_store` retains the original client request ID, fixed
+positive amount, exact description bytes, selected channel and settlement peer,
+and every native preparation parameter before allocating an epoch. It captures
+the actual Node network, identity and manager. Local request IDs derive from the
+chain, node identity and length-framed client ID; amount and description are not
+part of that lookup key, so changed retry arguments are refused.
+
+Requests use a separate wallet-seed-derived wrapping key and storage namespace.
+Authenticated envelopes bind the actual node, chain, schema and storage key. One
+exclusive owner serializes admission and native binding. A failed or reopened
+write requires a successful byte-identical confirmation before use, and uncertain
+recovery accepts only its exact ciphertext or retained predecessor. Deletion or
+replacement cannot reconstruct missing intent from a native selector. As with the
+witness store, valid-backup rollback and independent concurrent owners are outside
+the storage contract.
+
+Lookup precedes fresh liquidity selection. A native request without its application
+record refuses recovery rather than inventing a description or allocating again.
+Preparation uses the exact stored native parameters and a genuine retained-peer
+connection, then rejoins the same application record before persisting the returned
+opaque selector. Selector lookup alone does not certify intent or readiness. A
+bound record with missing native history also refuses replacement. Detaching a
+caller leaves its durable intent recoverable and does not imply cancellation.
+
+The initial one-slot schema reserves 4 KiB per request, including future native
+binding, with at most 64 records and 256 KiB total. Unbound intents count toward
+that limit; there is no eviction. This version has no invoice bytes, readiness flag,
+cancellation outcome or completion ledger. Native epoch reuse and historical
+retention policy are still required for repeated receives on one channel.
+
+Tests restore genuine empty and pending native channel fixtures through NodeBuilder.
+They cover exact retries, native intent mismatches, wrong or stale connections,
+missing application or native history, visible failed writes and restart, exact
+binding recovery, identity substitution, corruption, replacement and quota refusal.
+The bounded record codec also has arbitrary-byte property checks. Fixture provenance
+is in `src/ffor/request_store/fixtures/README.md`. No production caller constructs
+this owner yet.
 
 ## Required runtime integration
 

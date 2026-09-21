@@ -14,13 +14,14 @@ use super::witness_store::{
 	WitnessKeyUseError, WitnessSecretStore, WitnessStorageBinding, WitnessStoreError,
 };
 use crate::message_handler::ffor::{FforReceiverTransport, ReceivedFforMessage};
-use crate::types::ChannelManager;
+use crate::types::{ChainMonitor, ChannelManager};
 use fetch::FetchRequests;
 use pending::PendingProvisions;
 
 mod fetch;
 mod pending;
 mod provisioning;
+mod recovery;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WitnessOwnerError {
@@ -45,6 +46,7 @@ pub(crate) enum AcknowledgementProgress {
 
 pub(crate) struct WitnessOwner {
 	manager: Arc<ChannelManager>,
+	monitor: Arc<ChainMonitor>,
 	store: Arc<WitnessSecretStore>,
 	transport: Arc<FforReceiverTransport>,
 	pending: PendingProvisions,
@@ -53,11 +55,12 @@ pub(crate) struct WitnessOwner {
 
 impl WitnessOwner {
 	pub(crate) fn new(
-		manager: Arc<ChannelManager>, store: Arc<WitnessSecretStore>,
+		manager: Arc<ChannelManager>, monitor: Arc<ChainMonitor>, store: Arc<WitnessSecretStore>,
 		transport: Arc<FforReceiverTransport>,
 	) -> Self {
 		Self {
 			manager,
+			monitor,
 			store,
 			transport,
 			pending: PendingProvisions::default(),

@@ -91,7 +91,12 @@ impl Harness {
 			NodeCustomMessageHandler::new_ignoring().with_ffor_receiver(Arc::clone(&transport));
 		let backing: Arc<DynStore> = storage.clone();
 		let store = Arc::new(WitnessSecretStore::open(&SEED, backing).unwrap());
-		let owner = WitnessOwner::new(Arc::clone(&node.channel_manager), store, transport);
+		let owner = WitnessOwner::new(
+			Arc::clone(&node.channel_manager),
+			Arc::clone(&node.chain_monitor),
+			store,
+			transport,
+		);
 		let expiry = context.setup().terms().voucher_expiry;
 		let policies = vec![WitnessPolicy {
 			witness: key(80),

@@ -64,7 +64,9 @@ fn response(
 	.unwrap()
 }
 
-fn record(h: &Harness, slot: u16, invalid: bool, identity: u8) -> EncryptedRecord {
+pub(in crate::ffor::witness_owner) fn record(
+	h: &Harness, slot: u16, invalid: bool, identity: u8,
+) -> EncryptedRecord {
 	let manifest: SignedManifest = h.owner.retained_manifests(&h.context).unwrap().remove(0).1;
 	let params = manifest.unsigned().parameters();
 	let voucher = &h.context.setup().vouchers()[usize::from(slot) - 1];

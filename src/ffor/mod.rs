@@ -9,3 +9,6 @@ mod witness_store;
 
 #[allow(dead_code)]
 mod witness_owner;
+
+#[allow(dead_code)]
+mod request_store;
