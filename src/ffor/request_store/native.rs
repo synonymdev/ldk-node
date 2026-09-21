@@ -66,19 +66,7 @@ impl RequestStore {
 		if connection.peer_node_id() != before.plan().settlement {
 			return Err(RequestStoreError::Identity);
 		}
-		let found = self
-			.manager
-			.find_ffor_receiver_request(before.local_request_id())
-			.map_err(RequestStoreError::Native)?;
-		if let Some(retained) = before.selector() {
-			let actual = found.as_ref().ok_or(RequestStoreError::MissingNative)?;
-			if !retained.matches(actual) {
-				return Err(RequestStoreError::Conflict);
-			}
-		}
-		if found.as_ref().is_some_and(|id| id.channel_id() != before.plan().channel) {
-			return Err(RequestStoreError::Conflict);
-		}
+		let found = self.validate_native(&before)?;
 		// There is no store mutex or I/O under native locks. &mut self excludes another store
 		// operation, and the re-read below also catches unsupported external namespace replacement.
 		let actual = self
@@ -90,14 +78,51 @@ impl RequestStore {
 			)
 			.map_err(RequestStoreError::Native)?;
 		if found.is_some_and(|previous| previous != actual)
-			|| self
-				.manager
-				.find_ffor_receiver_request(before.local_request_id())
-				.map_err(RequestStoreError::Native)?
-				!= Some(actual)
+			|| self.validate_native(&before)? != Some(actual)
 		{
 			return Err(RequestStoreError::Conflict);
 		}
+		self.rejoin_and_bind(client_id, &before, actual)
+	}
+
+	/// Rejoin the exact retained native intent without a live peer or another preparation attempt.
+	/// This may complete a lost selector-binding write, but releases no Init or invoice and grants
+	/// no lifecycle authority. None means no native history and no stored selector were found;
+	/// absence alone is not permission to allocate a replacement.
+	pub(in crate::ffor) fn recover_native(
+		&mut self, client_id: &str,
+	) -> Result<Option<FFORReceiverId>, RequestStoreError> {
+		let before = self.lookup(client_id)?.ok_or(RequestStoreError::Missing)?;
+		let Some(actual) = self.validate_native(&before)? else {
+			return Ok(None);
+		};
+		self.rejoin_and_bind(client_id, &before, actual).map(Some)
+	}
+
+	fn validate_native(
+		&self, before: &StoredRequest,
+	) -> Result<Option<FFORReceiverId>, RequestStoreError> {
+		let found = self
+			.manager
+			.validate_ffor_receiver_request_intent(
+				before.local_request_id(),
+				&before.plan().channel,
+				&before.plan().settlement,
+				&before.plan().parameters,
+			)
+			.map_err(RequestStoreError::Native)?;
+		if let Some(retained) = before.selector() {
+			let actual = found.as_ref().ok_or(RequestStoreError::MissingNative)?;
+			if !retained.matches(actual) {
+				return Err(RequestStoreError::Conflict);
+			}
+		}
+		Ok(found)
+	}
+
+	fn rejoin_and_bind(
+		&mut self, client_id: &str, before: &StoredRequest, actual: FFORReceiverId,
+	) -> Result<FFORReceiverId, RequestStoreError> {
 		let mut current = self.lookup(client_id)?.ok_or(RequestStoreError::Missing)?;
 		if current.encode() != before.encode() {
 			return Err(RequestStoreError::Conflict);

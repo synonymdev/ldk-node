@@ -12,6 +12,7 @@ use lightning::util::persist::{
 	CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE, CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
 	CHANNEL_MONITOR_PERSISTENCE_SECONDARY_NAMESPACE,
 };
+use lightning::util::ser::Writeable;
 use lightning_types::features::InitFeatures;
 use proptest::prelude::*;
 
@@ -183,6 +184,58 @@ fn ffor_request_store_real_native_recovery_binds_only_exact_retained_intent() {
 }
 
 #[test]
+fn ffor_request_store_disconnected_recovery_binds_lost_response_without_native_mutation() {
+	let (storage, node, mut store) = pending();
+	let peer = plan(&store, CLIENT).settlement;
+	assert!(node.channel_manager.ffor_peer_connection(&peer).is_err());
+	assert!(store.lookup(CLIENT).unwrap().unwrap().selector().is_none());
+	let before = node.channel_manager.encode();
+	let id = store.recover_native(CLIENT).unwrap().unwrap();
+	assert_eq!(node.channel_manager.encode(), before);
+	assert!(store.lookup(CLIENT).unwrap().unwrap().selector().unwrap().matches(&id));
+	let writes = storage.writes.load(Ordering::SeqCst);
+	assert_eq!(store.recover_native(CLIENT), Ok(Some(id)));
+	assert_eq!(storage.writes.load(Ordering::SeqCst), writes);
+	drop(store);
+	drop(node);
+	let restored = restore_node(Arc::clone(&storage));
+	let mut reopened = open(storage, &restored);
+	assert!(restored.channel_manager.ffor_peer_connection(&peer).is_err());
+	assert_eq!(reopened.recover_native(CLIENT), Ok(Some(id)));
+}
+
+#[test]
+fn ffor_request_store_disconnected_recovery_does_not_allocate_an_unbound_intent() {
+	let (storage, node, mut store) = fixture();
+	store.begin(intent(CLIENT), plan(&store, CLIENT)).unwrap();
+	let before = node.channel_manager.encode();
+	let writes = storage.writes.load(Ordering::SeqCst);
+	assert_eq!(store.recover_native(CLIENT), Ok(None));
+	assert_eq!(storage.writes.load(Ordering::SeqCst), writes);
+	assert_eq!(node.channel_manager.encode(), before);
+	assert!(store.lookup(CLIENT).unwrap().unwrap().selector().is_none());
+}
+
+#[test]
+fn ffor_request_store_disconnected_binding_failure_keeps_exact_candidate_until_recovery() {
+	for failure in [1, 2] {
+		let (storage, node, mut store) = pending();
+		store.lookup(CLIENT).unwrap();
+		let before = node.channel_manager.encode();
+		storage.write_failure.store(failure, Ordering::SeqCst);
+		assert_eq!(store.recover_native(CLIENT), Err(RequestStoreError::Storage));
+		assert_eq!(store.recover_native(CLIENT), Err(RequestStoreError::Uncertain));
+		assert_eq!(node.channel_manager.encode(), before);
+		store.recover_write().unwrap();
+		let id = store.recover_native(CLIENT).unwrap().unwrap();
+		assert_eq!(node.channel_manager.encode(), before);
+		drop(store);
+		let mut reopened = open(storage, &node);
+		assert_eq!(reopened.recover_native(CLIENT), Ok(Some(id)));
+	}
+}
+
+#[test]
 fn ffor_request_store_native_selector_does_not_certify_different_parameters() {
 	let (storage, first, mut store) = fixture();
 	let mut selected = plan(&store, CLIENT);
@@ -198,6 +251,10 @@ fn ffor_request_store_native_selector_does_not_certify_different_parameters() {
 		.find_ffor_receiver_request(store.local_request_id(CLIENT).unwrap())
 		.unwrap()
 		.is_some());
+	assert_eq!(
+		store.recover_native(CLIENT),
+		Err(RequestStoreError::Native(FFORReceiverError::AlreadyRegistered))
+	);
 	let connection = connect(&node, plan(&store, CLIENT).settlement);
 	assert_eq!(
 		store.prepare_native(CLIENT, &connection),
@@ -213,6 +270,7 @@ fn ffor_request_store_missing_application_or_native_history_refuses_reconstructi
 	let node = restore_node(Arc::clone(&storage));
 	let mut store = open(Arc::clone(&storage), &node);
 	assert!(matches!(store.lookup(CLIENT), Err(RequestStoreError::Missing)));
+	assert_eq!(store.recover_native(CLIENT), Err(RequestStoreError::Missing));
 	assert!(matches!(
 		store.begin(intent(CLIENT), plan(&store, CLIENT)),
 		Err(RequestStoreError::Missing)
@@ -228,6 +286,7 @@ fn ffor_request_store_missing_application_or_native_history_refuses_reconstructi
 	install_fixture(&storage, false);
 	let node = restore_node(Arc::clone(&storage));
 	let mut store = open(storage, &node);
+	assert_eq!(store.recover_native(CLIENT), Err(RequestStoreError::MissingNative));
 	let connection = connect(&node, plan(&store, CLIENT).settlement);
 	assert_eq!(store.prepare_native(CLIENT, &connection), Err(RequestStoreError::MissingNative));
 }

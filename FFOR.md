@@ -289,9 +289,13 @@ Lookup precedes fresh liquidity selection. A native request without its applicat
 record refuses recovery rather than inventing a description or allocating again.
 Preparation uses the exact stored native parameters and a genuine retained-peer
 connection, then rejoins the same application record before persisting the returned
-opaque selector. Selector lookup alone does not certify intent or readiness. A
-bound record with missing native history also refuses replacement. Detaching a
-caller leaves its durable intent recoverable and does not imply cancellation.
+opaque selector. The separate historical recovery call checks every stored parameter
+against native history without requiring a connection or mutating the native manager.
+It can complete a lost selector-binding write using the same protected record and
+exact-write recovery rules. Selector lookup alone does not certify intent or
+readiness. A bound record with missing native history refuses replacement; absence
+for an unbound intent does not itself authorize new allocation. Detaching a caller
+leaves its durable intent recoverable and does not imply cancellation.
 
 The initial one-slot schema reserves 4 KiB per request, including future native
 binding, with at most 64 records and 256 KiB total. Unbound intents count toward
@@ -302,7 +306,8 @@ retention policy are still required for repeated receives on one channel.
 Tests restore genuine empty and pending native channel fixtures through NodeBuilder.
 They cover exact retries, native intent mismatches, wrong or stale connections,
 missing application or native history, visible failed writes and restart, exact
-binding recovery, identity substitution, corruption, replacement and quota refusal.
+binding recovery, disconnected exact-history recovery without native mutation,
+identity substitution, corruption, replacement and quota refusal.
 The bounded record codec also has arbitrary-byte property checks. Fixture provenance
 is in `src/ffor/request_store/fixtures/README.md`. No production caller constructs
 this owner yet.
