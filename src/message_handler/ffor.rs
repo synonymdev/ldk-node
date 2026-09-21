@@ -10,12 +10,15 @@
 //! No protocol transition or signature generation exists here, and the production builder leaves
 //! this transport disabled.
 
+pub(super) mod setup;
+
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::secp256k1::PublicKey;
 use lightning::io;
+use lightning::ln::ffor::FFORPeerConnection;
 use lightning::ln::msgs::{DecodeError, ErrorAction, LightningError};
 use lightning::ln::wire::Type;
 use lightning::util::logger::Level;
@@ -149,8 +152,17 @@ impl ReceivedFforMessage {
 
 struct PeerState {
 	connection: ConnectionToken,
+	native_connection: Option<FFORPeerConnection>,
 	messages: usize,
 	bytes: usize,
+}
+
+/// Both observations belong to the same successful PeerManager callback. Native still checks
+/// its generation under the channel lock, and enqueue separately checks the transport token.
+#[derive(Clone)]
+struct NativeConnection {
+	native: FFORPeerConnection,
+	transport: ConnectionToken,
 }
 
 #[derive(Default)]
@@ -196,15 +208,33 @@ pub(crate) struct FforReceiverTransport {
 
 impl FforReceiverTransport {
 	pub(super) fn peer_connected(&self, peer: PublicKey) {
+		self.connect(peer, None);
+	}
+
+	fn connect(&self, peer: PublicKey, native_connection: Option<FFORPeerConnection>) {
 		let mut state = self.state.lock().unwrap();
 		// Defensive replacement also clears old work if callbacks are repeated without disconnect.
 		state.disconnect(peer);
 		if state.peers.len() < MAX_PEERS {
 			state.peers.insert(
 				peer,
-				PeerState { connection: ConnectionToken(Arc::new(())), messages: 0, bytes: 0 },
+				PeerState {
+					connection: ConnectionToken(Arc::new(())),
+					native_connection,
+					messages: 0,
+					bytes: 0,
+				},
 			);
 		}
+	}
+
+	fn native_connection(&self, peer: PublicKey) -> Option<NativeConnection> {
+		let state = self.state.lock().unwrap();
+		let entry = state.peers.get(&peer)?;
+		Some(NativeConnection {
+			native: entry.native_connection.clone()?,
+			transport: entry.connection.clone(),
+		})
 	}
 
 	pub(super) fn peer_disconnected(&self, peer: PublicKey) {

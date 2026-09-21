@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use lightning::io;
-use lightning::ln::msgs::{DecodeError, Init, LightningError};
+use lightning::ln::msgs::{DecodeError, ErrorAction, Init, LightningError};
 use lightning::ln::peer_handler::CustomMessageHandler;
 use lightning::ln::wire::{CustomMessageReader, Type};
 use lightning::util::logger::Logger;
@@ -26,6 +26,7 @@ use lightning_types::features::{InitFeatures, NodeFeatures};
 
 use crate::liquidity::LiquiditySource;
 use crate::types::LiquidityManager;
+use ffor::setup::FforSetupAdapter;
 use ffor::{FforFrame, FforReceiverTransport};
 
 /// Independent LSPS and connection-scoped FFOR messages retain their own queue ordering.
@@ -60,6 +61,7 @@ where
 {
 	liquidity: Option<H>,
 	ffor: Option<Arc<FforReceiverTransport>>,
+	ffor_setup: Option<Arc<FforSetupAdapter>>,
 }
 
 impl NodeCustomMessageHandler {
@@ -77,17 +79,26 @@ where
 	H::Target: CustomMessageHandler<CustomMessage = RawLSPSMessage>,
 {
 	fn new_liquidity_handler(liquidity: H) -> Self {
-		Self { liquidity: Some(liquidity), ffor: None }
+		Self { liquidity: Some(liquidity), ffor: None, ffor_setup: None }
 	}
 
 	pub(crate) fn new_ignoring() -> Self {
-		Self { liquidity: None, ffor: None }
+		Self { liquidity: None, ffor: None, ffor_setup: None }
 	}
 
 	// No production caller enables this seam until a native receiver owns admission and recovery.
 	#[allow(dead_code)]
 	pub(crate) fn with_ffor_receiver(mut self, receiver: Arc<FforReceiverTransport>) -> Self {
 		self.ffor = Some(receiver);
+		self.ffor_setup = None;
+		self
+	}
+
+	// Explicit opt-in only. There is no builder setting, feature bit or invoice-facing API.
+	#[allow(dead_code)]
+	pub(crate) fn with_ffor_setup(mut self, setup: Arc<FforSetupAdapter>) -> Self {
+		self.ffor = Some(Arc::clone(setup.transport()));
+		self.ffor_setup = Some(setup);
 		self
 	}
 }
@@ -128,9 +139,22 @@ where
 				Some(liquidity) => liquidity.handle_custom_message(message, sender),
 				None => Ok(()),
 			},
-			NodeCustomMessage::Ffor(message) => match self.ffor.as_ref() {
-				Some(ffor) => ffor.receive(sender, message),
-				None => Ok(()),
+			NodeCustomMessage::Ffor(message) => {
+				if let Some(setup) = self.ffor_setup.as_ref() {
+					if matches!(message.type_id(), 55003 | 55049) {
+						return setup.handle(sender, &message).map(|_| ()).map_err(|error| {
+							LightningError {
+								err: format!("FFOR receiver setup: {}", error),
+								// Do not process following HTLC frames after failed native admission.
+								action: ErrorAction::DisconnectPeer { msg: None },
+							}
+						});
+					}
+				}
+				match self.ffor.as_ref() {
+					Some(ffor) => ffor.receive(sender, message),
+					None => Ok(()),
+				}
 			},
 		}
 	}
@@ -173,7 +197,9 @@ where
 		if let Some(liquidity) = self.liquidity.as_ref() {
 			liquidity.peer_connected(peer, init, inbound)?;
 		}
-		if let Some(ffor) = self.ffor.as_ref() {
+		if let Some(setup) = self.ffor_setup.as_ref() {
+			setup.peer_connected(peer);
+		} else if let Some(ffor) = self.ffor.as_ref() {
 			// Exhausting optional FFOR capacity must not disconnect an ordinary peer.
 			ffor.peer_connected(peer);
 		}

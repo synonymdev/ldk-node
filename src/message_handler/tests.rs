@@ -17,6 +17,8 @@ use proptest::prelude::*;
 
 use super::*;
 
+mod setup;
+
 #[derive(Default)]
 struct LspsHandler {
 	received: Mutex<Vec<(PublicKey, RawLSPSMessage)>>,
