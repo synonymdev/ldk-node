@@ -9,7 +9,7 @@ use lightning_ffor::witness::{
 
 use super::pending::Epoch;
 use super::{WitnessOwner, WitnessOwnerError};
-use crate::ffor::witness_store::{WitnessStorageBinding, WitnessStoreError};
+use crate::ffor::witness_store::{ReceiptPageRetention, WitnessStorageBinding};
 use crate::message_handler::ffor::{
 	ConnectionToken, FforReceiverTransport, OutboundError, ReceivedFforMessage,
 };
@@ -31,7 +31,7 @@ pub(crate) enum FetchProgress {
 
 enum FetchState {
 	Request { pending: PendingFetch<ConnectionToken>, queued: bool },
-	Page { checked: CheckedFetchPage<ConnectionToken>, next_record: usize, rejected: bool },
+	Page { checked: CheckedFetchPage<ConnectionToken> },
 }
 
 struct FetchEntry {
@@ -150,7 +150,7 @@ impl FetchRequests {
 		// Validate the entire response's identity, manifest, signatures and pagination first.
 		let checked =
 			pending.check_response(&response, &source).map_err(WitnessOwnerError::Protocol)?;
-		entry.state = FetchState::Page { checked, next_record: 0, rejected: false };
+		entry.state = FetchState::Page { checked };
 		Ok(index)
 	}
 }
@@ -261,25 +261,13 @@ impl WitnessOwner {
 		&mut self, index: usize, binding: &WitnessStorageBinding,
 	) -> Result<FetchProgress, WitnessOwnerError> {
 		let entry = &mut self.fetches.entries[index];
-		if let FetchState::Page { checked, next_record, rejected } = &mut entry.state {
-			while *next_record < checked.records().len() {
-				// Store authenticates native AEAD/body terms before accepting each encrypted core.
-				match self.store.retain_receipt(
-					binding,
-					entry.source.node_id,
-					checked.records()[*next_record].record(),
-				) {
-					Ok(_) => {},
-					Err(WitnessStoreError::InvalidReceipt | WitnessStoreError::ReceiptConflict) => {
-						// Only candidate rejection is skippable. Local corruption or uncertainty keeps
-						// this page intact, including later records which may prove valid preimages.
-						*rejected = true;
-					},
-					Err(error) => return Err(WitnessOwnerError::Storage(error)),
-				}
-				*next_record += 1;
-			}
-			if *rejected {
+		if let FetchState::Page { checked } = &mut entry.state {
+			// One bounded page write retains every valid core before any cursor advances.
+			let retained = self
+				.store
+				.retain_receipt_page(binding, entry.source.node_id, checked)
+				.map_err(WitnessOwnerError::Storage)?;
+			if retained == ReceiptPageRetention::Rejected {
 				self.fetches.entries.remove(index);
 				return Ok(FetchProgress::RejectedPage);
 			}

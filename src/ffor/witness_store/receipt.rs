@@ -4,7 +4,10 @@ use bitcoin::secp256k1::PublicKey;
 use lightning_ffor::witness::{EncryptedRecord, CIPHERTEXT_LEN, RECORD_HEADER_LEN};
 use zeroize::Zeroizing;
 
-use super::{hash, StoredWitnessEpoch, WitnessStorageBinding, WitnessStoreError, MAX_WITNESSES};
+use super::{
+	hash, StoredWitnessEpoch, WitnessKeyUseError, WitnessStorageBinding, WitnessStoreError,
+	MAX_WITNESSES,
+};
 
 pub(super) const NAMESPACE: &str = "ffor_witness_receipts";
 pub(super) const MAX_RECEIPT_RECORD_BYTES: usize = 1024 * 1024;
@@ -21,6 +24,14 @@ type Core = [u8; CORE_BYTES];
 pub(crate) enum ReceiptRetention {
 	Stored,
 	AlreadyStored,
+}
+
+/// All valid page evidence is durable. Rejected means at least one candidate was invalid or
+/// differed from the already retained valid core. Neither variant conveys payment status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReceiptPageRetention {
+	Retained,
+	Rejected,
 }
 
 struct WitnessEntries {
@@ -154,6 +165,19 @@ impl ReceiptBook {
 
 	pub(super) fn is_empty(&self) -> bool {
 		self.witnesses.iter().all(|witness| witness.slots.iter().all(Option::is_none))
+	}
+
+	pub(super) fn insert_authenticated(
+		&mut self, secrets: &StoredWitnessEpoch, witness: PublicKey, record: &EncryptedRecord,
+	) -> Result<ReceiptRetention, WitnessStoreError> {
+		secrets.decrypt_record(witness, record.clone()).map_err(|error| match error {
+			WitnessKeyUseError::Record(_) | WitnessKeyUseError::Decryption(_) => {
+				WitnessStoreError::InvalidReceipt
+			},
+			WitnessKeyUseError::UnknownWitness => WitnessStoreError::Binding,
+			_ => WitnessStoreError::Corrupt,
+		})?;
+		self.insert(witness, record)
 	}
 
 	pub(super) fn insert(

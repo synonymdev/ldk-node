@@ -6,7 +6,7 @@
 //! supplies record bindings. Live native registration, fetch response correlation, transport and
 //! native claim reconciliation and deletion are deliberately absent. Retained acknowledgements are historical promises, not current
 //! provisioning authority or invoice readiness.
-//! A future native registration must distinguish a new epoch from a missing sidecar after restore;
+//! The witness owner uses native registration to distinguish new epochs from missing sidecars;
 //! `load` never recreates secrets, and `create` is only for explicitly new registration material.
 //!
 //! Fresh material reserves the exact full receipt envelope before any write. Pending initialization
@@ -24,7 +24,9 @@ use std::sync::{Arc, Mutex};
 use bitcoin::hashes::{sha256, Hash, HashEngine};
 use lightning::ln::ffor::FFORWitnessReceipt;
 use lightning::util::persist::KVStoreSync;
-use lightning_ffor::witness::{CheckedAcknowledgement, EncryptedRecord, SignedManifest};
+use lightning_ffor::witness::{
+	CheckedAcknowledgement, CheckedFetchPage, EncryptedRecord, SignedManifest,
+};
 
 use crate::types::DynStore;
 
@@ -32,6 +34,7 @@ mod binding;
 mod envelope;
 mod receipt;
 mod record;
+pub(super) use receipt::ReceiptPageRetention;
 use receipt::{ReceiptBook, ReceiptRetention};
 use record::ReceiptAllocation;
 
@@ -291,6 +294,12 @@ impl WitnessSecretStore {
 	fn load_locked(
 		&self, state: &mut StoreState, binding: &WitnessStorageBinding,
 	) -> Result<StoredWitnessEpoch, WitnessStoreError> {
+		self.load_with_receipts_locked(state, binding).map(|(record, _)| record)
+	}
+
+	fn load_with_receipts_locked(
+		&self, state: &mut StoreState, binding: &WitnessStorageBinding,
+	) -> Result<(StoredWitnessEpoch, Option<ReceiptBook>), WitnessStoreError> {
 		let key = binding.storage_key();
 		let expected = state.records.get(&key).ok_or(WitnessStoreError::Missing)?;
 		let actual = read(&*self.storage, Namespace::Secrets, &key)?;
@@ -301,16 +310,17 @@ impl WitnessSecretStore {
 		if !state.confirmed.contains(&key) {
 			self.confirm_write(state, Namespace::Secrets, key.clone(), actual)?;
 		}
-		match record.receipt_allocation {
+		let receipts = match record.receipt_allocation {
 			ReceiptAllocation::Pending(_) => {
-				self.finish_initialization(state, binding, &mut record)?
+				self.finish_initialization(state, binding, &mut record)?;
+				Some(self.load_receipt_locked(state, binding, &record)?)
 			},
 			ReceiptAllocation::Reserved(_) => {
-				self.load_receipt_locked(state, binding, &record)?;
+				Some(self.load_receipt_locked(state, binding, &record)?)
 			},
-			ReceiptAllocation::Legacy => {},
-		}
-		Ok(record)
+			ReceiptAllocation::Legacy => None,
+		};
+		Ok((record, receipts))
 	}
 
 	fn finish_initialization(
@@ -381,16 +391,9 @@ impl WitnessSecretStore {
 	) -> Result<ReceiptRetention, WitnessStoreError> {
 		let mut state = self.state.lock().map_err(|_| WitnessStoreError::Uncertain)?;
 		ensure_certain(&state)?;
-		let record = self.load_locked(&mut state, binding)?;
-		let mut receipts = self.load_receipt_locked(&mut state, binding, &record)?;
-		record.decrypt_record(witness, receipt.clone()).map_err(|error| match error {
-			WitnessKeyUseError::Record(_) | WitnessKeyUseError::Decryption(_) => {
-				WitnessStoreError::InvalidReceipt
-			},
-			WitnessKeyUseError::UnknownWitness => WitnessStoreError::Binding,
-			_ => WitnessStoreError::Corrupt,
-		})?;
-		let result = receipts.insert(witness, receipt)?;
+		let (record, receipts) = self.load_with_receipts_locked(&mut state, binding)?;
+		let mut receipts = receipts.ok_or(WitnessStoreError::Unreserved)?;
+		let result = receipts.insert_authenticated(&record, witness, receipt)?;
 		if result == ReceiptRetention::Stored {
 			let bytes = self.receipt_key.seal_plaintext(binding, &receipts.encode())?;
 			if bytes.len() != record.receipt_allocation.bytes() {
@@ -401,6 +404,39 @@ impl WitnessSecretStore {
 		Ok(result)
 	}
 
+	/// Retain all valid records in one already bounded, correlated page with one book write.
+	/// Candidate-only rejection does not discard later evidence. A failed write retains its exact
+	/// encrypted candidate for recovery. The caller keeps its page after any failure.
+	pub(super) fn retain_receipt_page<C>(
+		&self, binding: &WitnessStorageBinding, witness: bitcoin::secp256k1::PublicKey,
+		page: &CheckedFetchPage<C>,
+	) -> Result<ReceiptPageRetention, WitnessStoreError> {
+		let mut state = self.state.lock().map_err(|_| WitnessStoreError::Uncertain)?;
+		ensure_certain(&state)?;
+		let (record, receipts) = self.load_with_receipts_locked(&mut state, binding)?;
+		let mut receipts = receipts.ok_or(WitnessStoreError::Unreserved)?;
+		let mut changed = false;
+		let mut rejected = false;
+		for candidate in page.records() {
+			match receipts.insert_authenticated(&record, witness, candidate.record()) {
+				Ok(ReceiptRetention::Stored) => changed = true,
+				Ok(ReceiptRetention::AlreadyStored) => {},
+				Err(WitnessStoreError::InvalidReceipt | WitnessStoreError::ReceiptConflict) => {
+					rejected = true;
+				},
+				Err(error) => return Err(error),
+			}
+		}
+		if changed {
+			let bytes = self.receipt_key.seal_plaintext(binding, &receipts.encode())?;
+			if bytes.len() != record.receipt_allocation.bytes() {
+				return Err(WitnessStoreError::Corrupt);
+			}
+			self.confirm_write(&mut state, Namespace::Receipts, binding.storage_key(), bytes)?;
+		}
+		Ok(if rejected { ReceiptPageRetention::Rejected } else { ReceiptPageRetention::Retained })
+	}
+
 	/// Re-decrypts durable retained evidence for a future native reconciliation boundary.
 	/// Absence is no evidence of an unpaid voucher. This does not claim channel settlement.
 	pub(super) fn load_receipt(
@@ -408,8 +444,8 @@ impl WitnessSecretStore {
 	) -> Result<Option<FFORWitnessReceipt>, WitnessStoreError> {
 		let mut state = self.state.lock().map_err(|_| WitnessStoreError::Uncertain)?;
 		ensure_certain(&state)?;
-		let record = self.load_locked(&mut state, binding)?;
-		let receipts = self.load_receipt_locked(&mut state, binding, &record)?;
+		let (record, receipts) = self.load_with_receipts_locked(&mut state, binding)?;
+		let receipts = receipts.ok_or(WitnessStoreError::Unreserved)?;
 		receipts
 			.get(witness, slot)?
 			.map(|receipt| {

@@ -232,9 +232,10 @@ later valid evidence from the same page. Once all such evidence is durable, it
 reports a rejected page and permits a fresh traversal from slot zero. Storage
 uncertainty or local corruption keeps the page and its cursor intact. A completed
 or empty traversal does not establish that any slot is unpaid, and this owner
-emits no payment credit or native claim. Receipt retention currently rewrites the
-fixed receipt book for each newly retained core; large-book recovery performance
-still needs measurement before production scheduling is enabled.
+emits no payment credit or native claim. Each authenticated page retains all valid
+cores with one fixed-book write, and an exact retry performs no additional write.
+This avoids revalidating and rewriting the complete book for every candidate.
+Large-book recovery performance still needs measurement before production scheduling.
 
 Tests restore a genuinely funded and signed native Active manager and stock monitor
 through NodeBuilder with a public test seed. They cover registration persistence,
@@ -242,7 +243,8 @@ all three sidecar write boundaries, failed and stale manager persistence tokens,
 exact queued retries, fresh timeout identities, current witness correlation,
 missing-sidecar refusal after reload, historical acknowledgements after channel
 removal, shared quotas, fetch backpressure, pagination, disconnect and storage
-failures, rejected candidates followed by valid evidence and zero payment credit.
+failures, rejected candidates followed by valid evidence, one write per page,
+exact batch recovery and zero payment credit.
 Fixture provenance is in `src/ffor/witness_owner/fixtures/README.md`; test-only
 witness encryption uses ring against the retained public epoch key and never
 exports a protected private key. No builder or scheduler enables this owner yet.

@@ -9,6 +9,7 @@ use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
 
 use super::*;
 use crate::ffor::witness_owner::tests::Harness;
+use crate::ffor::witness_store::WitnessStoreError;
 use crate::message_handler::NodeCustomMessage;
 
 fn secret(byte: u8) -> SecretKey {
@@ -352,4 +353,46 @@ fn ffor_witness_fetch_backpressure_keeps_exact_unsent_request() {
 	assert_eq!(h.owner.fetches.usage(), usage);
 	assert_eq!(h.owner.fetch(&h.context, witness), Ok(FetchProgress::AwaitingResponse));
 	assert!(outgoing(&h).is_empty());
+}
+
+#[test]
+fn ffor_witness_fetch_retains_a_whole_page_with_one_write_and_deduplicates_retry() {
+	let mut h = Harness::new();
+	let first = start(&mut h);
+	let witness = h.policies[0].witness;
+	let records = vec![record(&h, 1, false, 1), record(&h, 2, false, 2)];
+	let page = receive(&h, witness, &response(&first, records.clone(), None));
+	let before = h.storage.writes.load(Ordering::SeqCst);
+	assert_eq!(h.owner.accept_fetch_page(&page), Ok(FetchProgress::Complete));
+	assert_eq!(h.storage.writes.load(Ordering::SeqCst), before + 1);
+	assert!(retained(&h, 1).is_some() && retained(&h, 2).is_some());
+	assert_eq!(h.owner.retry_fetch(&h.context, witness), Ok(FetchProgress::Queued));
+	let retry = outgoing(&h).remove(0);
+	let repeated = receive(&h, witness, &response(&retry, records, None));
+	assert_eq!(h.owner.accept_fetch_page(&repeated), Ok(FetchProgress::Complete));
+	assert_eq!(h.storage.writes.load(Ordering::SeqCst), before + 1);
+}
+
+#[test]
+fn ffor_witness_fetch_uncertain_page_keeps_all_valid_evidence_until_exact_recovery() {
+	for failure in [1, 2] {
+		let mut h = Harness::new();
+		let first = start(&mut h);
+		let witness = h.policies[0].witness;
+		let records = vec![record(&h, 1, false, 1), record(&h, 2, false, 2)];
+		let page = receive(&h, witness, &response(&first, records, None));
+		let before = h.storage.writes.load(Ordering::SeqCst);
+		h.storage.write_failure.store(failure, Ordering::SeqCst);
+		assert_eq!(
+			h.owner.accept_fetch_page(&page),
+			Err(WitnessOwnerError::Storage(WitnessStoreError::Storage))
+		);
+		assert_eq!(h.storage.writes.load(Ordering::SeqCst), before + 1);
+		assert_eq!(h.owner.fetches.usage().0, 1);
+		h.owner.recover_storage().unwrap();
+		assert_eq!(h.storage.writes.load(Ordering::SeqCst), before + 2);
+		assert_eq!(h.owner.fetch(&h.context, witness), Ok(FetchProgress::Complete));
+		assert_eq!(h.storage.writes.load(Ordering::SeqCst), before + 2);
+		assert!(retained(&h, 1).is_some() && retained(&h, 2).is_some());
+	}
 }
