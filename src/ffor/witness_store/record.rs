@@ -14,6 +14,7 @@ use super::{WitnessStorageBinding, WitnessStoreError, MAX_WITNESSES};
 mod key_use;
 
 const RECORD_VERSION: u16 = 2;
+const RESERVED_RECORD_VERSION: u16 = 3;
 const LEGACY_RECORD_VERSION: u16 = 1;
 // Reserved even before provisioning so each acknowledgement fits without growing a new record.
 const ACKNOWLEDGEMENT_BYTES: usize = 1 + 16 + 4;
@@ -48,12 +49,30 @@ struct RetainedAcknowledgement {
 	retention_until: u32,
 }
 
-/// Immutable material recovered from one successful store write, not proof of native activation.
+/// Immutable secrets and monotonic promises from confirmed storage, not native activation authority.
 /// There is no key-export or sending API. A future consumer must rejoin the native epoch owner.
 pub(crate) struct StoredWitnessEpoch {
 	binding_digest: [u8; 32],
 	encryption_secret: Zeroizing<[u8; 32]>,
 	witnesses: Vec<WitnessKeys>,
+	pub(super) receipt_allocation: ReceiptAllocation,
+}
+
+/// Storage initialization only. No variant conveys protocol or invoice authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReceiptAllocation {
+	Legacy,
+	Pending(u32),
+	Reserved(u32),
+}
+
+impl ReceiptAllocation {
+	pub(super) fn bytes(self) -> usize {
+		match self {
+			Self::Legacy => 0,
+			Self::Pending(bytes) | Self::Reserved(bytes) => bytes as usize,
+		}
+	}
 }
 
 impl fmt::Debug for StoredWitnessEpoch {
@@ -116,7 +135,12 @@ impl StoredWitnessEpoch {
 				acknowledgement: None,
 			});
 		}
-		Ok(Self { binding_digest: binding.digest(), encryption_secret, witnesses })
+		Ok(Self {
+			binding_digest: binding.digest(),
+			encryption_secret,
+			witnesses,
+			receipt_allocation: ReceiptAllocation::Legacy,
+		})
 	}
 
 	pub(super) fn manifest(&self, witness: PublicKey) -> Option<&SignedManifest> {
@@ -166,15 +190,32 @@ impl StoredWitnessEpoch {
 			self.witnesses.iter().map(|entry| entry.manifest.encode()).collect();
 		// Reserve the exact size before copying secrets, avoiding freed intermediate allocations.
 		let capacity = 67
+			+ if self.receipt_allocation == ReceiptAllocation::Legacy { 0 } else { 5 }
 			+ manifests
 				.iter()
 				.map(|manifest| 69 + manifest.len() + ACKNOWLEDGEMENT_BYTES)
 				.sum::<usize>();
 		let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
-		bytes.extend_from_slice(&RECORD_VERSION.to_be_bytes());
+		let version = if self.receipt_allocation == ReceiptAllocation::Legacy {
+			RECORD_VERSION
+		} else {
+			RESERVED_RECORD_VERSION
+		};
+		bytes.extend_from_slice(&version.to_be_bytes());
 		bytes.extend_from_slice(&self.binding_digest);
 		bytes.extend_from_slice(self.encryption_secret.as_ref());
 		bytes.push(self.witnesses.len() as u8);
+		match self.receipt_allocation {
+			ReceiptAllocation::Legacy => {},
+			ReceiptAllocation::Pending(size) | ReceiptAllocation::Reserved(size) => {
+				bytes.push(if matches!(self.receipt_allocation, ReceiptAllocation::Pending(_)) {
+					1
+				} else {
+					2
+				});
+				bytes.extend_from_slice(&size.to_be_bytes());
+			},
+		}
 		for (entry, manifest) in self.witnesses.iter().zip(manifests) {
 			bytes.extend_from_slice(&entry.policy.witness.serialize());
 			bytes.extend_from_slice(entry.fetch_secret.as_ref());
@@ -196,7 +237,7 @@ impl StoredWitnessEpoch {
 	) -> Result<Self, WitnessStoreError> {
 		let mut reader = Reader(bytes);
 		let version = u16::from_be_bytes(reader.array()?);
-		if !matches!(version, LEGACY_RECORD_VERSION | RECORD_VERSION)
+		if !matches!(version, LEGACY_RECORD_VERSION | RECORD_VERSION | RESERVED_RECORD_VERSION)
 			|| reader.array::<32>()? != binding.digest()
 		{
 			return Err(WitnessStoreError::Binding);
@@ -207,6 +248,7 @@ impl StoredWitnessEpoch {
 		if count == 0 || count > MAX_WITNESSES {
 			return Err(WitnessStoreError::Capacity);
 		}
+		let receipt_allocation = read_allocation(version, &mut reader)?;
 		let mut witnesses: Vec<WitnessKeys> = Vec::with_capacity(count);
 		for _ in 0..count {
 			let witness =
@@ -237,7 +279,7 @@ impl StoredWitnessEpoch {
 				retention_until: params.retention_until,
 				minimum_receipts: params.minimum_receipts,
 			};
-			let acknowledgement = if version == RECORD_VERSION {
+			let acknowledgement = if version != LEGACY_RECORD_VERSION {
 				let present = reader.array::<1>()?[0];
 				let request_id = reader.array()?;
 				let retention_until = u32::from_be_bytes(reader.array()?);
@@ -256,7 +298,51 @@ impl StoredWitnessEpoch {
 		if !reader.0.is_empty() {
 			return Err(WitnessStoreError::Corrupt);
 		}
-		Ok(Self { binding_digest: binding.digest(), encryption_secret, witnesses })
+		Ok(Self {
+			binding_digest: binding.digest(),
+			encryption_secret,
+			witnesses,
+			receipt_allocation,
+		})
+	}
+
+	// The envelope is authenticated before inventory calls this. Read only the fixed allocation
+	// prefix so reopen can charge Pending quotas without possessing a native context for every epoch.
+	pub(super) fn inventory_allocation(
+		bytes: &[u8], digest: [u8; 32],
+	) -> Result<ReceiptAllocation, WitnessStoreError> {
+		let mut reader = Reader(bytes);
+		let version = u16::from_be_bytes(reader.array()?);
+		if reader.array::<32>()? != digest {
+			return Err(WitnessStoreError::Binding);
+		}
+		reader.take(32)?;
+		let count = reader.array::<1>()?[0] as usize;
+		if count == 0 || count > MAX_WITNESSES {
+			return Err(WitnessStoreError::Corrupt);
+		}
+		read_allocation(version, &mut reader)
+	}
+}
+
+fn read_allocation(
+	version: u16, reader: &mut Reader<'_>,
+) -> Result<ReceiptAllocation, WitnessStoreError> {
+	match version {
+		LEGACY_RECORD_VERSION | RECORD_VERSION => Ok(ReceiptAllocation::Legacy),
+		RESERVED_RECORD_VERSION => {
+			let state = reader.array::<1>()?[0];
+			let size = u32::from_be_bytes(reader.array()?);
+			if size == 0 || size as usize > super::receipt::MAX_RECEIPT_RECORD_BYTES {
+				return Err(WitnessStoreError::Capacity);
+			}
+			match state {
+				1 => Ok(ReceiptAllocation::Pending(size)),
+				2 => Ok(ReceiptAllocation::Reserved(size)),
+				_ => Err(WitnessStoreError::Corrupt),
+			}
+		},
+		_ => Err(WitnessStoreError::Corrupt),
 	}
 }
 

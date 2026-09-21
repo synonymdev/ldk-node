@@ -57,6 +57,7 @@ impl Fixture<'_> {
 		};
 		StoredWitnessEpoch {
 			binding_digest: [1; 32],
+			receipt_allocation: super::super::ReceiptAllocation::Legacy,
 			encryption_secret: Zeroizing::new([44; 32]),
 			witnesses: vec![WitnessKeys {
 				acknowledgement: None,

@@ -19,26 +19,28 @@ use crate::io::test_utils::InMemoryStore;
 
 use super::*;
 
-struct TestStore {
-	inner: InMemoryStore,
-	writes: AtomicUsize,
-	write_failure: AtomicUsize,
-	read_failure: AtomicBool,
+pub(super) struct TestStore {
+	pub(super) inner: InMemoryStore,
+	pub(super) writes: AtomicUsize,
+	pub(super) write_failure: AtomicUsize,
+	pub(super) fail_at: AtomicUsize,
+	pub(super) read_failure: AtomicBool,
 }
 
 impl TestStore {
-	fn new() -> Arc<Self> {
+	pub(super) fn new() -> Arc<Self> {
 		Arc::new(Self {
 			inner: InMemoryStore::new(),
 			writes: AtomicUsize::new(0),
 			write_failure: AtomicUsize::new(0),
+			fail_at: AtomicUsize::new(0),
 			read_failure: AtomicBool::new(false),
 		})
 	}
-	fn bytes(&self, key: &str) -> Vec<u8> {
+	pub(super) fn bytes(&self, key: &str) -> Vec<u8> {
 		KVStoreSync::read(&self.inner, PRIMARY_NAMESPACE, SECONDARY_NAMESPACE, key).unwrap()
 	}
-	fn replace(&self, key: &str, bytes: Vec<u8>) {
+	pub(super) fn replace(&self, key: &str, bytes: Vec<u8>) {
 		KVStoreSync::write(&self.inner, PRIMARY_NAMESPACE, SECONDARY_NAMESPACE, key, bytes)
 			.unwrap();
 	}
@@ -52,8 +54,13 @@ impl KVStoreSync for TestStore {
 		KVStoreSync::read(&self.inner, primary, secondary, key)
 	}
 	fn write(&self, primary: &str, secondary: &str, key: &str, bytes: Vec<u8>) -> io::Result<()> {
-		self.writes.fetch_add(1, Ordering::SeqCst);
-		let failure = self.write_failure.swap(0, Ordering::SeqCst);
+		let number = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
+		let target = self.fail_at.load(Ordering::SeqCst);
+		let failure = if target == 0 || target == number {
+			self.write_failure.swap(0, Ordering::SeqCst)
+		} else {
+			0
+		};
 		if failure != 1 {
 			KVStoreSync::write(&self.inner, primary, secondary, key, bytes)?;
 		}
@@ -98,7 +105,7 @@ impl KVStore for TestStore {
 	}
 }
 
-fn key(byte: u8) -> PublicKey {
+pub(super) fn key(byte: u8) -> PublicKey {
 	PublicKey::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[byte; 32]).unwrap())
 }
 
@@ -168,19 +175,19 @@ pub(super) fn evidence(
 	(identity, setup, activation, ack)
 }
 
-fn binding(epoch: u8) -> WitnessStorageBinding {
+pub(super) fn binding(epoch: u8) -> WitnessStorageBinding {
 	let (identity, setup, activation, ack) = evidence(epoch, 2);
 	WitnessStorageBinding::new(identity, setup, &activation, &ack).unwrap()
 }
 
-fn policies() -> Vec<WitnessPolicy> {
+pub(super) fn policies() -> Vec<WitnessPolicy> {
 	vec![
 		WitnessPolicy { witness: key(2), retention_until: 2144, minimum_receipts: 0 },
 		WitnessPolicy { witness: key(3), retention_until: 2200, minimum_receipts: 2 },
 	]
 }
 
-fn checked_acknowledgement(
+pub(super) fn checked_acknowledgement(
 	record: &StoredWitnessEpoch, witness: PublicKey, id: u8,
 ) -> CheckedAcknowledgement<u64> {
 	checked_manifest_acknowledgement(record.manifest(witness).unwrap().clone(), witness, id)
@@ -204,7 +211,7 @@ fn legacy_plaintext(record: &StoredWitnessEpoch) -> zeroize::Zeroizing<Vec<u8>> 
 	let encoded = record.encode();
 	let mut legacy = zeroize::Zeroizing::new(encoded[..67].to_vec());
 	legacy[..2].copy_from_slice(&1u16.to_be_bytes());
-	let mut offset = 67;
+	let mut offset = if encoded[..2] == 3u16.to_be_bytes() { 72 } else { 67 };
 	for _ in record.policies() {
 		let length =
 			u32::from_be_bytes(encoded[offset + 65..offset + 69].try_into().unwrap()) as usize;
@@ -239,14 +246,14 @@ fn ffor_witness_store_acknowledgements_are_durable_monotonic_and_preserve_keys()
 		store.acknowledge(&binding, &checked_acknowledgement(&initial, key(2), 3)).unwrap();
 	assert_eq!(*repeated.encode(), *complete.encode());
 	assert_eq!(backend.bytes(&binding.storage_key()), complete_bytes);
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 3);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 5);
 	drop(store);
 	let restored = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	let loaded = restored.load(&binding).unwrap();
 	assert!(loaded.all_witnesses_acknowledged());
 	assert_eq!(*loaded.encode(), *complete.encode());
 	assert_eq!(backend.bytes(&binding.storage_key()), complete_bytes);
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 4);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 7);
 }
 
 #[test]
@@ -270,7 +277,7 @@ fn ffor_witness_store_acknowledgement_requires_exact_manifest_and_selected_witne
 		assert_eq!(store.acknowledge(&binding(1), &ack).unwrap_err(), WitnessStoreError::Binding);
 	}
 	assert!(!store.load(&binding(1)).unwrap().all_witnesses_acknowledged());
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 3);
 }
 
 #[test]
@@ -300,7 +307,7 @@ fn ffor_witness_store_acknowledgement_uncertain_update_reuses_exact_ciphertext()
 		assert_ne!(*first.encode(), *initial.encode());
 		assert!(!first.all_witnesses_acknowledged());
 		assert_eq!(first.manifest(key(2)), initial.manifest(key(2)));
-		assert_eq!(backend.writes.load(Ordering::SeqCst), 4);
+		assert_eq!(backend.writes.load(Ordering::SeqCst), 6);
 	}
 }
 
@@ -422,6 +429,7 @@ fn ffor_witness_store_sealed_legacy_ack_upgrade_handles_failure_and_capacity() {
 		.seal_plaintext_fixture(&binding, &legacy_plaintext(&original))
 		.unwrap();
 	backend.replace(&binding.storage_key(), legacy.clone());
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	let mut remaining = MAX_STORE_BYTES - legacy.len();
 	for index in 0..MAX_EPOCHS {
 		if remaining == 0 {
@@ -430,11 +438,10 @@ fn ffor_witness_store_sealed_legacy_ack_upgrade_handles_failure_and_capacity() {
 		let key = format!("f{index:063x}");
 		assert_ne!(key, binding.storage_key());
 		let count = remaining.min(MAX_RECORD_BYTES);
-		backend.replace(&key, vec![9; count]);
+		store.state.lock().unwrap().records.insert(key, vec![9; count]);
 		remaining -= count;
 	}
 	assert_eq!(remaining, 0);
-	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	let loaded = store.load(&binding).unwrap();
 	assert_eq!(
 		store.acknowledge(&binding, &checked_acknowledgement(&loaded, key(2), 1)).unwrap_err(),
@@ -466,7 +473,7 @@ fn ffor_witness_store_concurrent_acknowledgements_do_not_lose_a_promise() {
 		task.join().unwrap();
 	}
 	assert!(store.load(&binding).unwrap().all_witnesses_acknowledged());
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 3);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 5);
 }
 
 #[test]
@@ -481,7 +488,7 @@ fn ffor_witness_store_exact_manifests_survive_retry_and_restart() {
 	let repeated = store.create(&binding, &reordered).unwrap();
 	let reopened = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	let restored = reopened.load(&binding).unwrap();
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 2);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 5);
 	assert_eq!(backend.bytes(&binding.storage_key()), saved);
 	for policy in policies() {
 		let manifest = first.manifest(policy.witness).unwrap();
@@ -547,7 +554,7 @@ fn ffor_witness_key_use_fetch_retries_and_reload_use_fresh_nonces() {
 		}
 	}
 	// One initial write and one restored durability confirmation, with no mutable nonce counter.
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 2);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 5);
 }
 
 #[test]
@@ -600,7 +607,7 @@ fn ffor_witness_store_uncertain_writes_recover_only_the_exact_candidate() {
 		store.recover_write().unwrap();
 		assert_eq!(backend.bytes(&binding.storage_key()), candidate);
 		assert!(store.load(&binding).is_ok());
-		assert_eq!(backend.writes.load(Ordering::SeqCst), 2);
+		assert_eq!(backend.writes.load(Ordering::SeqCst), 4);
 		let reopened = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 		assert!(reopened.load(&binding).is_ok());
 	}
@@ -638,8 +645,12 @@ fn ffor_witness_store_restart_recovers_a_write_whose_success_reply_was_lost() {
 	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	assert!(store.load(&binding).is_ok());
 	assert!(store.create(&binding, &policies()).is_ok());
-	assert_eq!(backend.bytes(&binding.storage_key()), candidate);
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 2);
+	let pending = WrappingKey::derive(&[5; 64]).open(&binding, &candidate).unwrap();
+	let loaded = store.load(&binding).unwrap();
+	for policy in policies() {
+		assert_eq!(pending.manifest(policy.witness), loaded.manifest(policy.witness));
+	}
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 4);
 }
 
 #[test]
@@ -663,8 +674,12 @@ fn ffor_witness_store_visible_bytes_need_a_successful_durability_retry() {
 	assert_eq!(backend.bytes(&binding.storage_key()), candidate);
 	restored.recover_write().unwrap();
 	assert!(restored.load(&binding).is_ok());
-	assert_eq!(backend.bytes(&binding.storage_key()), candidate);
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 4);
+	let pending = WrappingKey::derive(&[5; 64]).open(&binding, &candidate).unwrap();
+	let loaded = restored.load(&binding).unwrap();
+	for policy in policies() {
+		assert_eq!(pending.manifest(policy.witness), loaded.manifest(policy.witness));
+	}
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 6);
 }
 
 #[test]
@@ -698,16 +713,16 @@ fn ffor_witness_store_corruption_missing_and_wrong_seed_never_regenerate() {
 	let binding = binding(1);
 	store.create(&binding, &policies()).unwrap();
 	let original = backend.bytes(&binding.storage_key());
-	let wrong_seed = WitnessSecretStore::open(&[6; 64], backend.clone()).unwrap();
-	assert_eq!(wrong_seed.load(&binding).unwrap_err(), WitnessStoreError::Corrupt);
+	assert_eq!(
+		WitnessSecretStore::open(&[6; 64], backend.clone()).unwrap_err(),
+		WitnessStoreError::Corrupt
+	);
 	for index in [0, 4, 8, 50, original.len() - 1] {
 		let mut corrupted = original.clone();
 		corrupted[index] ^= 1;
 		backend.replace(&binding.storage_key(), corrupted.clone());
 		assert_eq!(store.load(&binding).unwrap_err(), WitnessStoreError::Conflict);
-		let restored = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
-		assert!(restored.load(&binding).is_err());
-		assert!(restored.create(&binding, &policies()).is_err());
+		assert!(WitnessSecretStore::open(&[5; 64], backend.clone()).is_err());
 		assert_eq!(backend.bytes(&binding.storage_key()), corrupted);
 	}
 	KVStoreSync::remove(
@@ -720,7 +735,7 @@ fn ffor_witness_store_corruption_missing_and_wrong_seed_never_regenerate() {
 	.unwrap();
 	assert_eq!(store.load(&binding).unwrap_err(), WitnessStoreError::Missing);
 	assert_eq!(store.create(&binding, &policies()).unwrap_err(), WitnessStoreError::Missing);
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 3);
 }
 
 #[test]
@@ -755,10 +770,16 @@ fn ffor_witness_store_plaintext_parser_checks_every_key_and_manifest() {
 #[test]
 fn ffor_witness_store_limits_refuse_without_eviction_or_partial_write() {
 	let backend = TestStore::new();
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	for index in 0..16 {
 		backend.replace(&format!("{index:064x}"), vec![9; MAX_RECORD_BYTES]);
+		store
+			.state
+			.lock()
+			.unwrap()
+			.records
+			.insert(format!("{index:064x}"), vec![9; MAX_RECORD_BYTES]);
 	}
-	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	assert_eq!(store.create(&binding(1), &policies()).unwrap_err(), WitnessStoreError::Capacity);
 	assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
 	backend.replace(&format!("{:064x}", 16), vec![9]);
@@ -767,10 +788,11 @@ fn ffor_witness_store_limits_refuse_without_eviction_or_partial_write() {
 		WitnessStoreError::Capacity
 	);
 	let backend = TestStore::new();
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	for index in 0..64 {
 		backend.replace(&format!("{index:064x}"), vec![9]);
+		store.state.lock().unwrap().records.insert(format!("{index:064x}"), vec![9]);
 	}
-	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
 	assert_eq!(store.create(&binding(1), &policies()).unwrap_err(), WitnessStoreError::Capacity);
 	backend.replace(&format!("{:064x}", 64), vec![9]);
 	assert_eq!(
@@ -816,7 +838,7 @@ fn ffor_witness_store_concurrent_create_shares_one_durable_candidate() {
 		.collect();
 	let manifests: Vec<_> = tasks.into_iter().map(|task| task.join().unwrap()).collect();
 	assert!(manifests.iter().all(|manifest| manifest == &manifests[0]));
-	assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 3);
 }
 
 proptest! {
