@@ -57,6 +57,52 @@ is recorded in `src/message_handler/test_data.json`. Parser fuzzing remains in t
 shared `lightning-ffor` wire and witness targets; Node also runs arbitrary-byte
 property checks at the length-limited reader boundary.
 
+## Private witness secret storage
+
+The private `ffor::witness_store` module retains an immutable encryption key per
+epoch, plus a separate fetch key, mailbox and exact signed manifest per witness.
+It has no builder, transport or payment-provider caller. Its non-test binding
+constructor accepts only an opaque native recovery context with a retained activation
+acknowledgement. It binds the native context digest, original funding output,
+identities and exact signed setup and activation. Historical evidence and successful
+secret storage do not establish current activation or invoice readiness. Runtime use
+still requires a current native authority check.
+
+The store derives a dedicated wrapping key from the wallet seed using HKDF with
+HMAC-SHA256. It uses the existing pinned VSS client's ChaCha20Poly1305 primitive
+with a fresh operating-system nonce, even for local storage. Associated data binds
+the storage key, schema and exact epoch evidence. Load authenticates the envelope,
+rechecks the manifests and compares their public keys with the retained secrets.
+Own secret buffers are zeroized and debug output is redacted. The dependency makes
+additional plaintext allocations which it does not zeroize; complete memory erasure
+is not claimed. The construction follows [HKDF](https://www.rfc-editor.org/rfc/rfc5869)
+and [ChaCha20Poly1305](https://www.rfc-editor.org/rfc/rfc8439).
+
+One exclusive owner serializes the namespace. Admission is bounded to four witnesses
+per epoch, 512 KiB per encrypted record, 64 epochs and 8 MiB overall. Records are not
+evicted or replaced to admit new work. A failed write blocks that owner until the
+exact retained ciphertext is written successfully. Readable bytes alone do not prove
+durability: a filesystem rename can become visible before directory synchronization
+succeeds. Reopening likewise requires an authenticated, byte-identical successful
+rewrite before returning restored material. No retry creates replacement keys or
+manifests for an existing record.
+
+The threat boundary includes untrusted peers, malformed or altered storage, failed
+entropy, interrupted writes and concurrent callers within one owner. Store success
+is the backend's durability contract. Authenticated encryption does not detect a
+rollback to an older valid backup or protect against wallet-seed compromise. KVStore
+has no cross-process compare-and-swap, so concurrent independent owners are not
+supported. A future native registration must distinguish a new epoch from an
+existing epoch whose entire sidecar is missing; `load` never regenerates secrets.
+Fetch nonce allocation and witness acknowledgement persistence are separate runtime
+work and are not supplied by this store.
+
+Run `cargo test --lib ffor_witness_store` for exact retries and restart, failed writes
+with readable bytes, corruption, wrong seeds and bindings, key separation, capacity,
+concurrent creation, fallible entropy, truncated records and property-based mutation
+checks. These checks do not establish complete branch coverage or process-crash
+interoperability.
+
 ## Required runtime integration
 
 - Bind signed setup to the actual local identity, peer, chain and channel limits.

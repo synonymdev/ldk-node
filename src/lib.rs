@@ -87,6 +87,7 @@ mod error;
 mod event;
 mod fee_estimator;
 mod ffi;
+mod ffor;
 mod gossip;
 pub mod graph;
 mod hex_utils;
