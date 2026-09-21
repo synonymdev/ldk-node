@@ -11,8 +11,9 @@ use crate::Node;
 use super::{RequestIntent, RequestPlan, RequestStore, RequestStoreError, StoredRequest};
 
 impl RequestStore {
-	/// Capture actual Node identity and its concrete manager, without retaining the Node itself.
-	/// The internal caller supplies the same wallet seed and backing store used for that Node.
+	/// Capture actual Node identity, its concrete manager and its actual payment store, without
+	/// retaining the Node itself. The internal caller supplies the same wallet seed and backing
+	/// store used for that Node; no substitute payment store is accepted.
 	pub(in crate::ffor) fn open(
 		seed: &[u8; 64], node: &Node, storage: Arc<DynStore>,
 	) -> Result<Self, RequestStoreError> {
@@ -21,6 +22,7 @@ impl RequestStore {
 			ChainHash::using_genesis_block(node.config.network).to_bytes(),
 			node.node_id(),
 			Arc::clone(&node.channel_manager),
+			Arc::clone(&node.payment_store),
 			storage,
 		)
 	}
@@ -99,7 +101,7 @@ impl RequestStore {
 		self.rejoin_and_bind(client_id, &before, actual).map(Some)
 	}
 
-	fn validate_native(
+	pub(super) fn validate_native(
 		&self, before: &StoredRequest,
 	) -> Result<Option<FFORReceiverId>, RequestStoreError> {
 		let found = self

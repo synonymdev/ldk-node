@@ -7,7 +7,7 @@ use vss_client::types::Storable;
 use vss_client::util::storable_builder::{EntropySource, StorableBuilder};
 use zeroize::Zeroizing;
 
-use super::{RequestStoreError, StoredRequest, MAX_RECORD_BYTES, VERSION};
+use super::{RequestStoreError, StoredRequest, LEGACY_VERSION, MAX_RECORD_BYTES, VERSION};
 
 pub(super) struct EnvelopeKey {
 	key: Zeroizing<[u8; 32]>,
@@ -38,12 +38,15 @@ impl EnvelopeKey {
 		// is not zeroized by that dependency; this makes no complete-erasure guarantee.
 		let storable = StorableBuilder::new(Nonce(nonce)).build(
 			plaintext.to_vec(),
-			i64::from(VERSION),
+			i64::from(record.version()),
 			&self.key,
 			&self.aad(key),
 		);
 		let bytes = storable.encode_to_vec();
 		check_size(&bytes)?;
+		if bytes.len() > record.reserved_bytes() {
+			return Err(RequestStoreError::Capacity);
+		}
 		Ok(bytes)
 	}
 
@@ -60,16 +63,22 @@ impl EnvelopeKey {
 			.deconstruct(sealed, &self.key, &self.aad(key))
 			.map_err(|_| RequestStoreError::Corrupt)?;
 		let plaintext = Zeroizing::new(plaintext);
-		if version != i64::from(VERSION) {
+		if version != i64::from(LEGACY_VERSION) && version != i64::from(VERSION) {
 			return Err(RequestStoreError::Corrupt);
 		}
-		StoredRequest::decode(&plaintext)
+		let record = StoredRequest::decode(&plaintext)?;
+		if i64::from(record.version()) != version || bytes.len() > record.reserved_bytes() {
+			return Err(RequestStoreError::Corrupt);
+		}
+		Ok(record)
 	}
 
+	// Envelope framing and key purpose remain v1. The authenticated encrypted record version
+	// changes independently; a v1 reader refuses v2 records after authentication.
 	fn aad(&self, key: &str) -> Vec<u8> {
 		[
 			b"ldk-node/ffor/request-envelope/v1".as_slice(),
-			&VERSION.to_be_bytes(),
+			&LEGACY_VERSION.to_be_bytes(),
 			&self.identity,
 			key.as_bytes(),
 		]

@@ -456,6 +456,7 @@ fn ffor_request_store_identity_key_and_parameter_substitution_are_authenticated(
 			store.chain,
 			store.node,
 			Arc::clone(&store.manager),
+			Arc::clone(&store.payments),
 			storage
 		),
 		Err(RequestStoreError::Corrupt)
@@ -522,7 +523,7 @@ fn ffor_request_store_codec_rejects_trailing_truncated_and_invalid_parameters() 
 	extra.push(0);
 	assert!(StoredRequest::decode(&extra).is_err());
 	let mut future = bytes.to_vec();
-	future[1] = 2;
+	future[1] = 3;
 	assert!(StoredRequest::decode(&future).is_err());
 	let mut invalid = plan(&store, CLIENT);
 	invalid.parameters.amounts_msat.push(1);
@@ -535,7 +536,10 @@ fn ffor_request_store_codec_rejects_trailing_truncated_and_invalid_parameters() 
 
 proptest! {
 	#[test]
-	fn ffor_request_store_bounded_decoder_never_accepts_noncanonical_bytes(bytes in prop::collection::vec(any::<u8>(), 0..4097)) {
+	fn ffor_request_store_bounded_decoder_never_accepts_noncanonical_bytes(bytes in prop::collection::vec(any::<u8>(), 0..8193)) {
 		if let Ok(record) = StoredRequest::decode(&bytes) { prop_assert_eq!(&*record.encode(), &bytes); }
 	}
 }
+
+mod invoice;
+mod issuer;

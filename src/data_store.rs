@@ -16,6 +16,9 @@ use crate::logger::{log_error, LdkLogger};
 use crate::types::DynStore;
 use crate::Error;
 
+#[allow(dead_code)]
+pub(crate) mod ffor;
+
 pub(crate) trait StorableObject: Clone + Readable + Writeable {
 	type Id: StorableObjectId;
 	type Update: StorableObjectUpdate<Self>;
@@ -97,7 +100,8 @@ where
 	}
 
 	pub(crate) fn remove(&self, id: &SO::Id) -> Result<(), Error> {
-		let removed = self.objects.lock().unwrap().remove(id).is_some();
+		let mut objects = self.objects.lock().unwrap();
+		let removed = objects.remove(id).is_some();
 		if removed {
 			let store_key = id.encode_to_hex_str();
 			KVStoreSync::remove(
@@ -119,6 +123,7 @@ where
 				Error::PersistenceFailed
 			})?;
 		}
+		drop(objects);
 		Ok(())
 	}
 

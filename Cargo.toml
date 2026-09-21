@@ -34,18 +34,18 @@ default = []
 
 [dependencies]
 # Pin runtime dependencies directly so downstream consumers use the same native engine.
-lightning-ffor = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562" }
-lightning = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562", features = ["std"] }
-lightning-types = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562" }
-lightning-invoice = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562", features = ["std"] }
-lightning-net-tokio = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562" }
-lightning-persister = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562", features = ["tokio"] }
-lightning-background-processor = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562" }
-lightning-rapid-gossip-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562" }
-lightning-block-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562", features = ["rest-client", "rpc-client", "tokio"] }
-lightning-transaction-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562", features = ["esplora-async-https", "time", "electrum-rustls-ring"] }
-lightning-liquidity = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562", features = ["std"] }
-lightning-macros = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562" }
+lightning-ffor = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564" }
+lightning = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564", features = ["std"] }
+lightning-types = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564" }
+lightning-invoice = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564", features = ["std"] }
+lightning-net-tokio = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564" }
+lightning-persister = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564", features = ["tokio"] }
+lightning-background-processor = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564" }
+lightning-rapid-gossip-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564" }
+lightning-block-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564", features = ["rest-client", "rpc-client", "tokio"] }
+lightning-transaction-sync = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564", features = ["esplora-async-https", "time", "electrum-rustls-ring"] }
+lightning-liquidity = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564", features = ["std"] }
+lightning-macros = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564" }
 
 bdk_chain = { version = "0.23.0", default-features = false, features = ["std"] }
 bdk_esplora = { version = "0.22.0", default-features = false, features = ["async-https-rustls", "tokio"]}
@@ -81,7 +81,7 @@ prost = { version = "0.11.6", default-features = false}
 winapi = { version = "0.3", features = ["winbase"] }
 
 [dev-dependencies]
-lightning = { git = "https://github.com/synonymdev/rust-lightning", rev = "016778d264edf6c3f7201199cfdc9162fdc29562", features = ["std", "_test_utils"] }
+lightning = { git = "https://github.com/synonymdev/rust-lightning", rev = "a00512b79f33e2db9b1bea691ab3637122c41564", features = ["std", "_test_utils"] }
 proptest = "1.0.0"
 ring = "0.17.14"
 regex = "1.5.6"

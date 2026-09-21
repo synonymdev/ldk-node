@@ -7,7 +7,9 @@ use lightning_ffor::amounts::FeePolicy;
 use lightning_invoice::Description;
 use zeroize::Zeroizing;
 
-use super::{RequestStoreError, VERSION};
+use super::{RequestStoreError, LEGACY_RECORD_BYTES, LEGACY_VERSION, MAX_RECORD_BYTES, VERSION};
+pub(super) mod invoice;
+use invoice::{InvoiceAllocation, InvoicePolicy, RetainedInvoice};
 
 const MAX_CLIENT_ID_BYTES: usize = 128;
 
@@ -85,11 +87,12 @@ pub(in crate::ffor) struct StoredRequest {
 	intent: RequestIntent,
 	plan: RequestPlan,
 	selector: Option<RetainedSelector>,
+	invoice: InvoiceAllocation,
 }
 
 impl StoredRequest {
 	pub(super) fn new(intent: RequestIntent, plan: RequestPlan) -> Result<Self, RequestStoreError> {
-		let record = Self { intent, plan, selector: None };
+		let record = Self { intent, plan, selector: None, invoice: InvoiceAllocation::Legacy };
 		record.validate()?;
 		Ok(record)
 	}
@@ -110,8 +113,110 @@ impl StoredRequest {
 		let mut left = self.clone();
 		let mut right = other.clone();
 		left.selector = None;
+		left.invoice = InvoiceAllocation::Legacy;
 		right.selector = None;
+		right.invoice = InvoiceAllocation::Legacy;
 		left.encode() == right.encode()
+	}
+
+	pub(super) fn validate_identity(
+		&self, chain: [u8; 32], node: PublicKey,
+	) -> Result<(), RequestStoreError> {
+		if let Some(retained) = self.invoice() {
+			let invoice = retained.parsed()?;
+			let network = [
+				bitcoin::Network::Bitcoin,
+				bitcoin::Network::Testnet,
+				bitcoin::Network::Testnet4,
+				bitcoin::Network::Signet,
+				bitcoin::Network::Regtest,
+			]
+			.into_iter()
+			.find(|network| {
+				bitcoin::blockdata::constants::ChainHash::using_genesis_block(*network).to_bytes()
+					== chain
+			})
+			.ok_or(RequestStoreError::Identity)?;
+			if invoice.currency() != network.into() || invoice.recover_payee_pub_key() != node {
+				return Err(RequestStoreError::Identity);
+			}
+		}
+		Ok(())
+	}
+
+	pub(super) fn version(&self) -> u16 {
+		if matches!(self.invoice, InvoiceAllocation::Legacy) {
+			LEGACY_VERSION
+		} else {
+			VERSION
+		}
+	}
+	pub(super) fn reserved_bytes(&self) -> usize {
+		if self.version() == LEGACY_VERSION {
+			LEGACY_RECORD_BYTES
+		} else {
+			MAX_RECORD_BYTES
+		}
+	}
+	pub(super) fn invoice_policy(&self) -> Option<InvoicePolicy> {
+		match self.invoice {
+			InvoiceAllocation::Legacy => None,
+			InvoiceAllocation::Reserved { policy, .. } => Some(policy),
+		}
+	}
+	pub(super) fn reserve_invoice(
+		&mut self, policy: InvoicePolicy,
+	) -> Result<bool, RequestStoreError> {
+		policy.validate()?;
+		if self.plan.parameters.hash_chain {
+			return Err(RequestStoreError::InvalidIntent);
+		}
+		match self.invoice {
+			InvoiceAllocation::Legacy => {
+				self.invoice = InvoiceAllocation::Reserved { policy, invoice: None };
+				Ok(true)
+			},
+			InvoiceAllocation::Reserved { policy: existing, .. } if existing == policy => Ok(false),
+			_ => Err(RequestStoreError::Conflict),
+		}
+	}
+	pub(super) fn invoice(&self) -> Option<&RetainedInvoice> {
+		match &self.invoice {
+			InvoiceAllocation::Reserved { invoice, .. } => invoice.as_ref(),
+			_ => None,
+		}
+	}
+	pub(super) fn retain_invoice(
+		&mut self, value: RetainedInvoice,
+	) -> Result<bool, RequestStoreError> {
+		if self.selector.is_none() {
+			return Err(RequestStoreError::MissingNative);
+		}
+		let InvoiceAllocation::Reserved { policy, invoice } = &mut self.invoice else {
+			return Err(RequestStoreError::Unreserved);
+		};
+		value.validate(&self.intent, *policy)?;
+		match invoice {
+			Some(previous)
+				if previous.context_digest() != value.context_digest()
+					|| previous.invoice() != value.invoice() =>
+			{
+				Err(RequestStoreError::Conflict)
+			},
+			Some(_) => Ok(false),
+			None => {
+				*invoice = Some(value);
+				Ok(true)
+			},
+		}
+	}
+	pub(super) fn confirm_invoice_payment(
+		&mut self, payment: &crate::payment::store::PaymentDetails,
+	) -> Result<bool, RequestStoreError> {
+		let InvoiceAllocation::Reserved { invoice: Some(invoice), .. } = &mut self.invoice else {
+			return Err(RequestStoreError::Missing);
+		};
+		invoice.confirm_payment(payment)
 	}
 
 	pub(super) fn bind(&mut self, id: &FFORReceiverId) -> Result<bool, RequestStoreError> {
@@ -158,12 +263,24 @@ impl StoredRequest {
 				return Err(RequestStoreError::InvalidIntent);
 			}
 		}
+		if let InvoiceAllocation::Reserved { policy, invoice } = &self.invoice {
+			policy.validate()?;
+			if p.hash_chain {
+				return Err(RequestStoreError::InvalidIntent);
+			}
+			if let Some(invoice) = invoice {
+				if self.selector.is_none() {
+					return Err(RequestStoreError::MissingNative);
+				}
+				invoice.validate(&self.intent, *policy)?;
+			}
+		}
 		Ok(())
 	}
 
 	pub(super) fn encode(&self) -> Zeroizing<Vec<u8>> {
 		let mut out = Zeroizing::new(Vec::new());
-		out.extend_from_slice(&VERSION.to_be_bytes());
+		out.extend_from_slice(&self.version().to_be_bytes());
 		string(&mut out, &self.intent.client_id);
 		out.extend_from_slice(&self.intent.amount_msat.to_be_bytes());
 		string(&mut out, &self.intent.description);
@@ -198,12 +315,14 @@ impl StoredRequest {
 				out.extend_from_slice(&selector.epoch);
 			},
 		}
+		self.invoice.encode(&mut out);
 		out
 	}
 
 	pub(super) fn decode(bytes: &[u8]) -> Result<Self, RequestStoreError> {
 		let mut reader = Reader(bytes);
-		if u16::from_be_bytes(reader.array()?) != VERSION {
+		let version = u16::from_be_bytes(reader.array()?);
+		if version != LEGACY_VERSION && version != VERSION {
 			return Err(RequestStoreError::Corrupt);
 		}
 		let client_id = reader.string(MAX_CLIENT_ID_BYTES)?;
@@ -241,11 +360,20 @@ impl StoredRequest {
 			1 => Some(RetainedSelector { channel, epoch: reader.array()? }),
 			_ => return Err(RequestStoreError::Corrupt),
 		};
+		let invoice = if version == LEGACY_VERSION {
+			InvoiceAllocation::Legacy
+		} else {
+			InvoiceAllocation::decode(&mut reader)?
+		};
 		if !reader.0.is_empty() {
 			return Err(RequestStoreError::Corrupt);
 		}
-		let record =
-			Self { intent, plan: RequestPlan { channel, settlement, parameters }, selector };
+		let record = Self {
+			intent,
+			plan: RequestPlan { channel, settlement, parameters },
+			selector,
+			invoice,
+		};
 		record.validate()?;
 		Ok(record)
 	}

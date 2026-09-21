@@ -311,20 +311,64 @@ readiness. A bound record with missing native history refuses replacement; absen
 for an unbound intent does not itself authorize new allocation. Detaching a caller
 leaves its durable intent recoverable and does not imply cancellation.
 
-The initial one-slot schema reserves 4 KiB per request, including future native
-binding, with at most 64 records and 256 KiB total. Unbound intents count toward
-that limit; there is no eviction. This version has no invoice bytes, readiness flag,
-cancellation outcome or completion ledger. Native epoch reuse and historical
-retention policy are still required for repeated receives on one channel.
+Legacy version 1 records reserve 4 KiB per request, including native binding, and
+remain readable. An explicit version 2 upgrade reserves 8 KiB before any native
+invoice issuance, for at most 64 records and 512 KiB total. Unbound intents count
+toward that limit; there is no eviction. Version 2 retains the fixed invoice policy,
+the exact signed invoice, its native context digest, a fixed payment timestamp and a
+monotonic confirmation digest of the exact Pending payment row. These are historical
+storage facts, never a readiness flag, cancellation outcome or completion ledger.
+Native epoch reuse and historical retention policy are still required for repeated
+receives on one channel.
+
+The issuer adapter joins one request to native invoice assignment in a fixed order:
+durable policy reservation, native preparation, native persistence, exact invoice
+retention in the protected record, exact inbound Pending payment confirmation through
+a successful payment-store write, and the protected confirmation marker. Description,
+amount and route terms come from the record and native ownership; the caller supplies
+only a policy and public witness-to-settlement route evidence. A different policy is a
+conflict, the reserved policy is never replaced, and an existing native assignment is
+recovered before any new preparation, so fresh route evidence is accepted on retry.
+Every pending native manager or monitor write reports awaiting persistence instead of
+progress. No production completer for native persistence tokens exists yet.
+
+The payment store confirms the exact Pending Bolt11 row against memory and disk and
+persists before installing it in memory. A payment confirmation write that fails
+ambiguously keeps the exact expected candidate in memory and blocks every owner
+operation, including previously minted handles, until the same confirmation succeeds.
+Restart drops the candidate; the missing marker then forces the same idempotent
+confirmation before a handle exists. A definite refusal (missing, corrupt, conflicting
+or terminal payment) clears the candidate and fails closed without touching native.
+
+A publication handle is opaque, bound to the owner instance and the manager instance,
+and exposes no invoice bytes. Minting it re-reads the protected record, rechecks the
+exact native bytes, digest, intent and epoch context, and performs another successful
+payment write. Release re-reads the record from storage, revalidates the handle,
+acquires the payment-store exclusion and only then enters the native monitor guard,
+whose innermost callback moves the exact bytes into the caller's slot and performs no
+I/O. Repeated release is allowed. Native refusal after expiry, deadline or a moved
+monitor tip leaves the record, native assignment and Pending row unchanged. Generic
+payment removal now holds its object lock through the disk removal so a deletion
+cannot race past a new confirmation.
 
 Tests restore genuine empty and pending native channel fixtures through NodeBuilder.
 They cover exact retries, native intent mismatches, wrong or stale connections,
 missing application or native history, visible failed writes and restart, exact
 binding recovery, disconnected exact-history recovery without native mutation,
 identity substitution, corruption, replacement and quota refusal.
-The bounded record codec also has arbitrary-byte property checks. Fixture provenance
-is in `src/ffor/request_store/fixtures/README.md`. No production caller constructs
-this owner yet.
+The bounded record codec also has arbitrary-byte property checks, strict version 2
+framing, monotonic markers and full-capacity envelopes. Issuer tests restore the genuine
+public-driver invoice fixture (`src/ffor/request_store/fixtures/invoice/README.md`)
+and re-sign fresh route evidence with its public witness seed. They cover live issuance
+through native persistence, exact byte and payment retention, repeated release with no
+extra writes, failure at every application write with the exact candidate retained and
+all handles blocked, restart with a fresh native barrier and obsolete handles refused,
+historical recovery of an expired assignment that never publishes, conflicting policy
+and stale route refusal without a native slot, missing, corrupt and terminal payment
+rows, unbound records, missing native history, a monitor tip ahead of the manager, and
+zero storage I/O under publication. Run `cargo test --lib ffor_request` for the
+request-store, codec and issuer checks and `cargo test --lib ffor_payment` for the
+payment-store checks. No production caller constructs this owner yet.
 
 ## Required runtime integration
 
