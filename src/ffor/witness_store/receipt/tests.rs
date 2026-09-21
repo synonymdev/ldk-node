@@ -164,13 +164,13 @@ fn ffor_receipt_first_valid_evidence_survives_equivocation_and_later_errors() {
 	assert!(secrets.decrypt_record(key(43), different.clone()).is_ok());
 	assert_eq!(
 		store.retain_receipt(&binding, key(43), &different),
-		Err(WitnessStoreError::Conflict)
+		Err(WitnessStoreError::ReceiptConflict)
 	);
-	assert_eq!(store.retain_receipt(&binding, key(40), &first), Err(WitnessStoreError::Corrupt));
+	assert_eq!(store.retain_receipt(&binding, key(40), &first), Err(WitnessStoreError::Binding));
 	let (_, _, other_epoch) = fixture(1);
 	assert_eq!(
 		store.retain_receipt(&binding, key(43), &other_epoch),
-		Err(WitnessStoreError::Corrupt)
+		Err(WitnessStoreError::InvalidReceipt)
 	);
 	assert!(store.load_receipt(&binding, key(43), 0).is_err());
 	assert!(store.load_receipt(&binding, key(43), 2).is_err());

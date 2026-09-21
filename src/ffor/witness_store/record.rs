@@ -31,9 +31,9 @@ pub(crate) enum WitnessKeyUseError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WitnessPolicy {
-	pub(super) witness: PublicKey,
-	pub(super) retention_until: u32,
-	pub(super) minimum_receipts: u8,
+	pub(in crate::ffor) witness: PublicKey,
+	pub(in crate::ffor) retention_until: u32,
+	pub(in crate::ffor) minimum_receipts: u8,
 }
 
 struct WitnessKeys {

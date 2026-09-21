@@ -18,7 +18,7 @@ impl StoredWitnessEpoch {
 	/// The runtime must correlate responses with the authenticated connection and must never resend
 	/// an earlier request after ambiguous delivery. The witness still enforces nonce replay refusal.
 	/// This operation neither sends a request nor establishes current native activation authority.
-	pub(in crate::ffor::witness_store) fn prepare_fetch(
+	pub(in crate::ffor) fn prepare_fetch(
 		&self, witness: PublicKey, after_slot: Option<u16>,
 	) -> Result<SignedFetch, WitnessKeyUseError> {
 		self.prepare_fetch_with(witness, after_slot, random_bytes::<80>)

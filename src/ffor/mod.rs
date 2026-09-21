@@ -1,9 +1,11 @@
-//! Private witness recovery storage, not a native activation or invoice authority.
+//! Private witness recovery storage and bounded orchestration, not invoice authority.
 //!
-//! No builder, transport, or payment provider constructs this module yet. Bindings come from opaque
-//! native historical contexts; future registration and external work still require current native
-//! authority checked under the manager's transition locks.
+//! No builder or payment provider constructs the witness owner. Bindings come from opaque native
+//! historical contexts; provisioning requires current native authority checked under the manager's
+//! transition locks. Retained acknowledgements and encrypted evidence confer no payment credit.
 
-// This bounded storage boundary remains disconnected until native lifecycle ownership exists.
 #[allow(dead_code)]
 mod witness_store;
+
+#[allow(dead_code)]
+mod witness_owner;

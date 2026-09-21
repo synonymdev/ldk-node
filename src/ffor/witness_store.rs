@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use bitcoin::hashes::{sha256, Hash, HashEngine};
 use lightning::ln::ffor::FFORWitnessReceipt;
 use lightning::util::persist::KVStoreSync;
-use lightning_ffor::witness::{CheckedAcknowledgement, EncryptedRecord};
+use lightning_ffor::witness::{CheckedAcknowledgement, EncryptedRecord, SignedManifest};
 
 use crate::types::DynStore;
 
@@ -39,9 +39,7 @@ pub(super) use binding::WitnessStorageBinding;
 #[cfg(test)]
 use binding::WitnessStorageIdentity;
 use envelope::WrappingKey;
-#[cfg(test)]
-use record::WitnessKeyUseError;
-pub(super) use record::{StoredWitnessEpoch, WitnessPolicy};
+pub(super) use record::{StoredWitnessEpoch, WitnessKeyUseError, WitnessPolicy};
 
 const PRIMARY_NAMESPACE: &str = "ffor_witness";
 const SECONDARY_NAMESPACE: &str = "";
@@ -64,6 +62,10 @@ pub(crate) enum WitnessStoreError {
 	Entropy,
 	Uncertain,
 	Unreserved,
+	/// Only the supplied candidate failed authentication after retained storage was checked.
+	InvalidReceipt,
+	/// A valid candidate differs from the already durable core for this witness and slot.
+	ReceiptConflict,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -241,6 +243,28 @@ impl WitnessSecretStore {
 		self.load_locked(&mut state, binding)
 	}
 
+	/// Reload and confirm exact selected manifests with their full encrypted-receipt reservation.
+	/// Legacy material stays historical-only. This storage check grants no native release authority.
+	pub(super) fn provisioning_manifests(
+		&self, binding: &WitnessStorageBinding,
+	) -> Result<Vec<(bitcoin::secp256k1::PublicKey, SignedManifest)>, WitnessStoreError> {
+		let record = self.load(binding)?;
+		if !matches!(record.receipt_allocation, ReceiptAllocation::Reserved(_)) {
+			return Err(WitnessStoreError::Unreserved);
+		}
+		record
+			.policies()
+			.iter()
+			.map(|policy| {
+				record
+					.manifest(policy.witness)
+					.cloned()
+					.map(|manifest| (policy.witness, manifest))
+					.ok_or(WitnessStoreError::Corrupt)
+			})
+			.collect()
+	}
+
 	/// Durably retain a correlated witness promise for the exact stored manifest.
 	/// The caller owns real transport correlation and current native provisioning authority.
 	/// Neither a returned record nor all historical promises authorize an offline invoice.
@@ -359,7 +383,13 @@ impl WitnessSecretStore {
 		ensure_certain(&state)?;
 		let record = self.load_locked(&mut state, binding)?;
 		let mut receipts = self.load_receipt_locked(&mut state, binding, &record)?;
-		record.decrypt_record(witness, receipt.clone()).map_err(|_| WitnessStoreError::Corrupt)?;
+		record.decrypt_record(witness, receipt.clone()).map_err(|error| match error {
+			WitnessKeyUseError::Record(_) | WitnessKeyUseError::Decryption(_) => {
+				WitnessStoreError::InvalidReceipt
+			},
+			WitnessKeyUseError::UnknownWitness => WitnessStoreError::Binding,
+			_ => WitnessStoreError::Corrupt,
+		})?;
 		let result = receipts.insert(witness, receipt)?;
 		if result == ReceiptRetention::Stored {
 			let bytes = self.receipt_key.seal_plaintext(binding, &receipts.encode())?;
@@ -515,4 +545,4 @@ fn hash(parts: &[&[u8]]) -> [u8; 32] {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::ffor) mod tests;

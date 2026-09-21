@@ -19,16 +19,16 @@ use crate::io::test_utils::InMemoryStore;
 
 use super::*;
 
-pub(super) struct TestStore {
-	pub(super) inner: InMemoryStore,
-	pub(super) writes: AtomicUsize,
-	pub(super) write_failure: AtomicUsize,
-	pub(super) fail_at: AtomicUsize,
-	pub(super) read_failure: AtomicBool,
+pub(in crate::ffor) struct TestStore {
+	pub(in crate::ffor) inner: InMemoryStore,
+	pub(in crate::ffor) writes: AtomicUsize,
+	pub(in crate::ffor) write_failure: AtomicUsize,
+	pub(in crate::ffor) fail_at: AtomicUsize,
+	pub(in crate::ffor) read_failure: AtomicBool,
 }
 
 impl TestStore {
-	pub(super) fn new() -> Arc<Self> {
+	pub(in crate::ffor) fn new() -> Arc<Self> {
 		Arc::new(Self {
 			inner: InMemoryStore::new(),
 			writes: AtomicUsize::new(0),
@@ -37,10 +37,10 @@ impl TestStore {
 			read_failure: AtomicBool::new(false),
 		})
 	}
-	pub(super) fn bytes(&self, key: &str) -> Vec<u8> {
+	pub(in crate::ffor) fn bytes(&self, key: &str) -> Vec<u8> {
 		KVStoreSync::read(&self.inner, PRIMARY_NAMESPACE, SECONDARY_NAMESPACE, key).unwrap()
 	}
-	pub(super) fn replace(&self, key: &str, bytes: Vec<u8>) {
+	pub(in crate::ffor) fn replace(&self, key: &str, bytes: Vec<u8>) {
 		KVStoreSync::write(&self.inner, PRIMARY_NAMESPACE, SECONDARY_NAMESPACE, key, bytes)
 			.unwrap();
 	}
@@ -862,4 +862,42 @@ proptest! {
 		bytes[index] ^= 1 << bit;
 		prop_assert!(wrapping.open(&binding, &bytes).is_err());
 	}
+}
+
+#[test]
+fn ffor_witness_owner_material_requires_confirmed_reserved_storage() {
+	let backend = TestStore::new();
+	let binding = binding(1);
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	let record = store.create(&binding, &policies()).unwrap();
+	let expected: Vec<_> = record
+		.policies()
+		.iter()
+		.map(|policy| (policy.witness, record.manifest(policy.witness).unwrap().clone()))
+		.collect();
+	assert_eq!(store.provisioning_manifests(&binding).unwrap(), expected);
+	drop(store);
+	let restored = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	backend.write_failure.store(2, Ordering::SeqCst);
+	assert_eq!(restored.provisioning_manifests(&binding), Err(WitnessStoreError::Storage));
+	assert_eq!(restored.provisioning_manifests(&binding), Err(WitnessStoreError::Uncertain));
+	restored.recover_write().unwrap();
+	assert_eq!(restored.provisioning_manifests(&binding).unwrap(), expected);
+	KVStoreSync::remove(&backend.inner, receipt::NAMESPACE, "", &binding.storage_key(), false)
+		.unwrap();
+	assert_eq!(restored.provisioning_manifests(&binding), Err(WitnessStoreError::Missing));
+}
+
+#[test]
+fn ffor_witness_owner_material_refuses_historical_legacy_record() {
+	let backend = TestStore::new();
+	let binding = binding(1);
+	let record = StoredWitnessEpoch::generate(&binding, &policies()).unwrap();
+	backend.replace(
+		&binding.storage_key(),
+		WrappingKey::derive(&[5; 64]).seal(&binding, &record).unwrap(),
+	);
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	assert_eq!(store.provisioning_manifests(&binding), Err(WitnessStoreError::Unreserved));
+	assert!(KVStoreSync::list(&*backend, receipt::NAMESPACE, "").unwrap().is_empty());
 }

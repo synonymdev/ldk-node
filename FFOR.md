@@ -45,7 +45,7 @@ that monitor guard before passing the opaque snapshot and original paired genera
 back to the manager. Stock peer events, STFU, commitment rounds and persistence must
 continue between advances. The adapter retains no independent lifecycle state and
 does not treat Active progress as invoice readiness. No builder constructs it yet;
-runtime scheduling, witness orchestration and payment recovery remain necessary before
+runtime scheduling and payment recovery remain necessary before
 offering offline invoices.
 
 The transport accepts peer identity only from PeerManager's authenticated callback.
@@ -99,7 +99,8 @@ property checks at the length-limited reader boundary.
 
 The private `ffor::witness_store` module retains an immutable encryption key per
 epoch, plus a separate fetch key, mailbox and exact signed manifest per witness.
-It has no builder, transport or payment-provider caller. Its non-test binding
+A private witness owner composes its storage and transport operations; no production
+builder or payment provider constructs either owner. Its non-test binding
 constructor accepts only an opaque native recovery context with a retained activation
 acknowledgement. It binds the native context digest, original funding output,
 identities and exact signed setup and activation. Historical evidence and successful
@@ -166,8 +167,9 @@ entropy, interrupted writes and concurrent callers within one owner. Store succe
 is the backend's durability contract. Authenticated encryption does not detect a
 rollback to an older valid backup or protect against wallet-seed compromise. KVStore
 has no cross-process compare-and-swap, so concurrent independent owners are not
-supported. A future native registration must distinguish a new epoch from an
-existing epoch whose entire sidecar is missing; `load` never regenerates secrets.
+supported. Native immutable registration distinguishes a new epoch from an
+existing epoch whose sidecar is missing; the witness owner uses load-only recovery
+for registered epochs, and `load` never regenerates secrets.
 Protected key operations sign fetch requests and decrypt witness records without
 exporting either private key. Each fetch call draws a fresh operating-system request
 identity, 256-bit nonce and signature entropy, including retries after a lost response
@@ -175,7 +177,8 @@ or restart. The witness still enforces replay refusal. Decryption authenticates 
 retained witness and manifest before native AEAD and body checks. These helpers do not
 correlate a response connection, change a channel or credit a payment. Receipt
 retention preserves authenticated evidence for later native reconciliation. Witness
-transport orchestration and native monitor reconciliation remain separate work.
+transport orchestration is described below; native monitor reconciliation remains
+separate work.
 
 Run `cargo test --lib ffor_witness` for exact retries and restart, failed writes
 with readable bytes, corruption, wrong seeds and bindings, key separation, capacity,
@@ -188,6 +191,61 @@ equivocation, allocation quotas, missing reservations, legacy refusal and concur
 acknowledgement and receipt retention. Fixture provenance is recorded beside the
 receipt tests. These checks do not establish complete branch coverage or process-crash
 interoperability.
+
+## Private witness owner
+
+The concrete `ffor::witness_owner` composes the actual ChannelManager, protected
+store and authenticated transport. Exclusive access serializes bounded transient
+work, with a combined 64-request and 8 MiB encoded-payload reservation across
+provisioning and fetches. Each fetch reserves its complete response, request and
+bounded pagination history before release. Fixed metadata has a separate count
+bound. Capacity refusal preserves admitted work.
+
+New registration first completes all protected sidecar writes, then registers the
+exact immutable selection in native state. Existing native registration requires
+load-only recovery with identical manifests, selected identities and key metadata.
+Provisioning waits for the native registration barrier and fresh Active authority.
+Native release rechecks phase, deadline, original commitment evidence and current
+persistence under its transition locks; its callback only checks the witness's
+original transport token and enqueues. No storage or network operation holds those
+native locks. The settlement peer need not be connected for witness provisioning.
+
+The owner stages exact response correlation before queue acceptance. Backpressure
+keeps the same unsent request. Accepted requests are not resent after transport
+drain; explicit timeout retry generates a fresh request ID with the same manifest.
+Acknowledgements must match the actual witness, original connection and exact
+pending request. The owner rejoins retained native identity and sidecar manifests
+before storing a historical promise, then removes correlation only after a
+successful write. Such a promise is not invoice authority.
+
+Historical fetches remain available after channel removal and admission expiry.
+Each traversal and retry uses fresh signed request identity and nonce. Every page
+must match the actual witness and connection, retained manifest, request, signed
+records and strictly increasing cursor. Each encrypted record becomes durable
+before the cursor advances. Checked pages survive disconnect and uncertain writes;
+recovery must complete the exact write before they can be replaced. Once retained,
+evidence remains even if a later page is invalid or the witness disappears.
+
+Candidate-only authentication failures and valid conflicting cores are distinct
+from local storage corruption. The owner rejects those candidates while retaining
+later valid evidence from the same page. Once all such evidence is durable, it
+reports a rejected page and permits a fresh traversal from slot zero. Storage
+uncertainty or local corruption keeps the page and its cursor intact. A completed
+or empty traversal does not establish that any slot is unpaid, and this owner
+emits no payment credit or native claim. Receipt retention currently rewrites the
+fixed receipt book for each newly retained core; large-book recovery performance
+still needs measurement before production scheduling is enabled.
+
+Tests restore a genuinely funded and signed native Active manager and stock monitor
+through NodeBuilder with a public test seed. They cover registration persistence,
+all three sidecar write boundaries, failed and stale manager persistence tokens,
+exact queued retries, fresh timeout identities, current witness correlation,
+missing-sidecar refusal after reload, historical acknowledgements after channel
+removal, shared quotas, fetch backpressure, pagination, disconnect and storage
+failures, rejected candidates followed by valid evidence and zero payment credit.
+Fixture provenance is in `src/ffor/witness_owner/fixtures/README.md`; test-only
+witness encryption uses ring against the retained public epoch key and never
+exports a protected private key. No builder or scheduler enables this owner yet.
 
 ## Required runtime integration
 

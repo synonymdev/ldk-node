@@ -173,7 +173,7 @@ impl ReceiptBook {
 		let core = canonical_core(record)?;
 		match slot {
 			Some(existing) if existing == &core => Ok(ReceiptRetention::AlreadyStored),
-			Some(_) => Err(WitnessStoreError::Conflict),
+			Some(_) => Err(WitnessStoreError::ReceiptConflict),
 			None => {
 				*slot = Some(core);
 				Ok(ReceiptRetention::Stored)
