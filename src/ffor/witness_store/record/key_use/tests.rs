@@ -59,6 +59,7 @@ impl Fixture<'_> {
 			binding_digest: [1; 32],
 			encryption_secret: Zeroizing::new([44; 32]),
 			witnesses: vec![WitnessKeys {
+				acknowledgement: None,
 				policy,
 				fetch_secret: Zeroizing::new([42; 32]),
 				manifest,

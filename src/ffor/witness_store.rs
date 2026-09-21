@@ -1,10 +1,11 @@
-//! Immutable per-epoch witness secrets sealed before they can leave the storage boundary.
+//! Immutable per-epoch witness secrets and monotonic provisioning promises, sealed before use.
 //!
 //! One exclusive owner serializes all operations for this namespace. KVStore has no cross-process
 //! compare-and-swap, so concurrent owners are unsupported. Store success is the durability contract;
 //! authenticated encryption does not detect rollback to an older valid store. Opaque native history
-//! supplies record bindings. Live native registration, fetch response correlation, transport, witness
-//! acknowledgement handling and deletion are deliberately absent.
+//! supplies record bindings. Live native registration, fetch response correlation, transport and
+//! deletion are deliberately absent. Retained acknowledgements are historical promises, not current
+//! provisioning authority or invoice readiness.
 //! A future native registration must distinguish a new epoch from a missing sidecar after restore;
 //! `load` never recreates secrets, and `create` is only for explicitly new registration material.
 //!
@@ -17,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use bitcoin::hashes::{sha256, Hash, HashEngine};
 use lightning::util::persist::KVStoreSync;
+use lightning_ffor::witness::CheckedAcknowledgement;
 
 use crate::types::DynStore;
 
@@ -57,6 +59,9 @@ pub(crate) enum WitnessStoreError {
 struct PendingWrite {
 	key: String,
 	bytes: Vec<u8>,
+	// Only this exact predecessor may remain after a failed update. Absence is permitted only
+	// for creation, never for an update to already retained recovery material.
+	previous: Option<Vec<u8>>,
 }
 
 struct StoreState {
@@ -155,6 +160,29 @@ impl WitnessSecretStore {
 		self.load_locked(&mut state, binding)
 	}
 
+	/// Durably retain a correlated witness promise for the exact stored manifest.
+	/// The caller owns real transport correlation and current native provisioning authority.
+	/// Neither a returned record nor all historical promises authorize an offline invoice.
+	pub(super) fn acknowledge<C>(
+		&self, binding: &WitnessStorageBinding, checked: &CheckedAcknowledgement<C>,
+	) -> Result<StoredWitnessEpoch, WitnessStoreError> {
+		let mut state = self.state.lock().map_err(|_| WitnessStoreError::Uncertain)?;
+		ensure_certain(&state)?;
+		let mut record = self.load_locked(&mut state, binding)?;
+		if !record.retain_acknowledgement(checked)? {
+			return Ok(record);
+		}
+		let key = binding.storage_key();
+		let bytes = self.wrapping_key.seal(binding, &record)?;
+		let previous = state.records.get(&key).ok_or(WitnessStoreError::Missing)?;
+		let total = state.records.values().map(Vec::len).sum::<usize>() - previous.len();
+		if total.checked_add(bytes.len()).filter(|sum| *sum <= MAX_STORE_BYTES).is_none() {
+			return Err(WitnessStoreError::Capacity);
+		}
+		self.confirm_write(&mut state, key, bytes)?;
+		Ok(record)
+	}
+
 	fn load_locked(
 		&self, state: &mut StoreState, binding: &WitnessStorageBinding,
 	) -> Result<StoredWitnessEpoch, WitnessStoreError> {
@@ -174,7 +202,14 @@ impl WitnessSecretStore {
 	fn confirm_write(
 		&self, state: &mut StoreState, key: String, bytes: Vec<u8>,
 	) -> Result<(), WitnessStoreError> {
-		state.uncertain = Some(PendingWrite { key: key.clone(), bytes: bytes.clone() });
+		// Preserve the original predecessor through retries, including when the proposed new
+		// ciphertext became visible but the backend reported a failed sync.
+		let previous = state
+			.uncertain
+			.as_ref()
+			.and_then(|pending| pending.previous.clone())
+			.or_else(|| state.records.get(&key).cloned());
+		state.uncertain = Some(PendingWrite { key: key.clone(), bytes: bytes.clone(), previous });
 		write(&*self.storage, &key, bytes.clone())?;
 		state.confirmed.insert(key.clone());
 		state.records.insert(key, bytes);
@@ -182,7 +217,8 @@ impl WitnessSecretStore {
 		Ok(())
 	}
 
-	/// Reconciles an uncertain write, accepting only identical ciphertext or an absent key.
+	/// Reconciles an uncertain write, accepting only its exact candidate or predecessor.
+	/// An absent key is acceptable only for creation, never for an existing record update.
 	/// Always rewrites retained ciphertext: visibility through read does not establish durability.
 	/// No fresh keys, signatures or encryption nonces are allocated.
 	/// A read error, conflict, or another failed write leaves the owner blocked.
@@ -194,8 +230,9 @@ impl WitnessSecretStore {
 		};
 		match read(&*self.storage, &pending.key) {
 			Ok(bytes) if bytes == pending.bytes => {},
+			Ok(bytes) if pending.previous.as_ref() == Some(&bytes) => {},
 			Ok(_) => return Err(WitnessStoreError::Conflict),
-			Err(WitnessStoreError::Missing) => {},
+			Err(WitnessStoreError::Missing) if pending.previous.is_none() => {},
 			Err(error) => return Err(error),
 		}
 		let key = pending.key.clone();

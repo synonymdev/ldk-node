@@ -27,17 +27,30 @@ impl WrappingKey {
 	pub(super) fn seal(
 		&self, binding: &WitnessStorageBinding, record: &StoredWitnessEpoch,
 	) -> Result<Vec<u8>, WitnessStoreError> {
+		let plaintext = record.encode();
+		self.seal_plaintext(binding, &plaintext)
+	}
+
+	fn seal_plaintext(
+		&self, binding: &WitnessStorageBinding, plaintext: &[u8],
+	) -> Result<Vec<u8>, WitnessStoreError> {
 		let nonce = random_bytes::<12>()?;
 		let builder = StorableBuilder::new(EnvelopeNonce(nonce));
 		let mut bytes = header(binding);
 		let aad = associated_data(binding, &bytes);
-		let plaintext = record.encode();
 		// Our buffer is zeroized. StorableBuilder owns additional plaintext allocations during
 		// encryption and decryption which it does not zeroize. No total erasure is claimed.
 		let sealed = builder.build(plaintext.to_vec(), i64::from(SCHEMA_VERSION), &self.0, &aad);
 		bytes.extend_from_slice(&sealed.encode_to_vec());
 		check_record_size(&bytes)?;
 		Ok(bytes)
+	}
+
+	#[cfg(test)]
+	pub(super) fn seal_plaintext_fixture(
+		&self, binding: &WitnessStorageBinding, plaintext: &[u8],
+	) -> Result<Vec<u8>, WitnessStoreError> {
+		self.seal_plaintext(binding, plaintext)
 	}
 
 	pub(super) fn open(

@@ -9,6 +9,10 @@ use lightning::util::persist::{KVStore, KVStoreSync};
 use lightning_ffor::setup::AuthenticatedSetup;
 use lightning_ffor::transcript;
 use lightning_ffor::wire::{Accept, Activate, Header, Init, Message, Payload};
+use lightning_ffor::witness::{
+	Acknowledgement, AcknowledgementResult, CheckedAcknowledgement, PendingProvision, Provision,
+	WitnessConnection,
+};
 use proptest::prelude::*;
 
 use crate::io::test_utils::InMemoryStore;
@@ -174,6 +178,295 @@ fn policies() -> Vec<WitnessPolicy> {
 		WitnessPolicy { witness: key(2), retention_until: 2144, minimum_receipts: 0 },
 		WitnessPolicy { witness: key(3), retention_until: 2200, minimum_receipts: 2 },
 	]
+}
+
+fn checked_acknowledgement(
+	record: &StoredWitnessEpoch, witness: PublicKey, id: u8,
+) -> CheckedAcknowledgement<u64> {
+	checked_manifest_acknowledgement(record.manifest(witness).unwrap().clone(), witness, id)
+}
+
+fn checked_manifest_acknowledgement(
+	manifest: lightning_ffor::witness::SignedManifest, witness: PublicKey, id: u8,
+) -> CheckedAcknowledgement<u64> {
+	let retention_until = manifest.unsigned().parameters().retention_until;
+	let source = WitnessConnection { node_id: witness, identity: u64::from(id) };
+	let pending = PendingProvision::new(Provision::new([id; 16], manifest), source.clone());
+	let response = Acknowledgement::new(
+		[id; 16],
+		AcknowledgementResult::Accepted { witness, retention_until },
+	)
+	.unwrap();
+	pending.check_acknowledgement(&response, &source).unwrap()
+}
+
+fn legacy_plaintext(record: &StoredWitnessEpoch) -> zeroize::Zeroizing<Vec<u8>> {
+	let encoded = record.encode();
+	let mut legacy = zeroize::Zeroizing::new(encoded[..67].to_vec());
+	legacy[..2].copy_from_slice(&1u16.to_be_bytes());
+	let mut offset = 67;
+	for _ in record.policies() {
+		let length =
+			u32::from_be_bytes(encoded[offset + 65..offset + 69].try_into().unwrap()) as usize;
+		legacy.extend_from_slice(&encoded[offset..offset + 69 + length]);
+		offset += 69 + length + 21;
+	}
+	assert_eq!(offset, encoded.len());
+	legacy
+}
+
+#[test]
+fn ffor_witness_store_acknowledgements_are_durable_monotonic_and_preserve_keys() {
+	let backend = TestStore::new();
+	let binding = binding(1);
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	let initial = store.create(&binding, &policies()).unwrap();
+	let initial_bytes = backend.bytes(&binding.storage_key());
+	assert!(!initial.all_witnesses_acknowledged());
+	let first = store.acknowledge(&binding, &checked_acknowledgement(&initial, key(2), 1)).unwrap();
+	assert!(!first.all_witnesses_acknowledged());
+	let complete =
+		store.acknowledge(&binding, &checked_acknowledgement(&first, key(3), 2)).unwrap();
+	assert!(complete.all_witnesses_acknowledged());
+	let complete_bytes = backend.bytes(&binding.storage_key());
+	assert_eq!(initial_bytes.len(), complete_bytes.len());
+	assert_ne!(initial_bytes, complete_bytes);
+	for policy in policies() {
+		assert_eq!(initial.manifest(policy.witness), complete.manifest(policy.witness));
+	}
+	// Reprovisioning uses a new connection/request, but retains the first valid promise.
+	let repeated =
+		store.acknowledge(&binding, &checked_acknowledgement(&initial, key(2), 3)).unwrap();
+	assert_eq!(*repeated.encode(), *complete.encode());
+	assert_eq!(backend.bytes(&binding.storage_key()), complete_bytes);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 3);
+	drop(store);
+	let restored = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	let loaded = restored.load(&binding).unwrap();
+	assert!(loaded.all_witnesses_acknowledged());
+	assert_eq!(*loaded.encode(), *complete.encode());
+	assert_eq!(backend.bytes(&binding.storage_key()), complete_bytes);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn ffor_witness_store_acknowledgement_requires_exact_manifest_and_selected_witness() {
+	let backend = TestStore::new();
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	let original = store.create(&binding(1), &policies()).unwrap();
+	let new_keys =
+		StoredWitnessEpoch::generate(&binding(1), &record::checked_policies(&policies()).unwrap())
+			.unwrap();
+	let other_epoch =
+		StoredWitnessEpoch::generate(&binding(2), &record::checked_policies(&policies()).unwrap())
+			.unwrap();
+	let wrong_witness =
+		checked_manifest_acknowledgement(original.manifest(key(2)).unwrap().clone(), key(9), 1);
+	for ack in [
+		checked_acknowledgement(&new_keys, key(2), 1),
+		checked_acknowledgement(&other_epoch, key(2), 1),
+		wrong_witness,
+	] {
+		assert_eq!(store.acknowledge(&binding(1), &ack).unwrap_err(), WitnessStoreError::Binding);
+	}
+	assert!(!store.load(&binding(1)).unwrap().all_witnesses_acknowledged());
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn ffor_witness_store_acknowledgement_uncertain_update_reuses_exact_ciphertext() {
+	for failure in [1, 2] {
+		let backend = TestStore::new();
+		let binding = binding(1);
+		let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+		let initial = store.create(&binding, &policies()).unwrap();
+		let before = backend.bytes(&binding.storage_key());
+		let ack = checked_acknowledgement(&initial, key(2), 1);
+		backend.write_failure.store(failure, Ordering::SeqCst);
+		assert_eq!(store.acknowledge(&binding, &ack).unwrap_err(), WitnessStoreError::Storage);
+		let candidate = store.state.lock().unwrap().uncertain.as_ref().unwrap().bytes.clone();
+		assert_eq!(
+			backend.bytes(&binding.storage_key()),
+			if failure == 1 { before } else { candidate.clone() }
+		);
+		assert_eq!(store.load(&binding).unwrap_err(), WitnessStoreError::Uncertain);
+		assert_eq!(store.acknowledge(&binding, &ack).unwrap_err(), WitnessStoreError::Uncertain);
+		backend.write_failure.store(2, Ordering::SeqCst);
+		assert_eq!(store.recover_write(), Err(WitnessStoreError::Storage));
+		assert_eq!(backend.bytes(&binding.storage_key()), candidate);
+		store.recover_write().unwrap();
+		assert_eq!(backend.bytes(&binding.storage_key()), candidate);
+		let first = store.load(&binding).unwrap();
+		assert_ne!(*first.encode(), *initial.encode());
+		assert!(!first.all_witnesses_acknowledged());
+		assert_eq!(first.manifest(key(2)), initial.manifest(key(2)));
+		assert_eq!(backend.writes.load(Ordering::SeqCst), 4);
+	}
+}
+
+#[test]
+fn ffor_witness_store_acknowledgement_recovery_refuses_deleted_or_replaced_predecessor() {
+	let backend = TestStore::new();
+	let binding = binding(1);
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	let initial = store.create(&binding, &policies()).unwrap();
+	backend.write_failure.store(1, Ordering::SeqCst);
+	assert!(store.acknowledge(&binding, &checked_acknowledgement(&initial, key(2), 1)).is_err());
+	let candidate = store.state.lock().unwrap().uncertain.as_ref().unwrap().bytes.clone();
+	KVStoreSync::remove(
+		&*backend,
+		PRIMARY_NAMESPACE,
+		SECONDARY_NAMESPACE,
+		&binding.storage_key(),
+		false,
+	)
+	.unwrap();
+	assert_eq!(store.recover_write(), Err(WitnessStoreError::Missing));
+	assert_eq!(store.load(&binding).unwrap_err(), WitnessStoreError::Uncertain);
+	let mut changed = candidate.clone();
+	changed[50] ^= 1;
+	backend.replace(&binding.storage_key(), changed.clone());
+	assert_eq!(store.recover_write(), Err(WitnessStoreError::Conflict));
+	assert_eq!(backend.bytes(&binding.storage_key()), changed);
+	backend.replace(&binding.storage_key(), candidate);
+	store.recover_write().unwrap();
+	assert!(store.load(&binding).is_ok());
+}
+
+#[test]
+fn ffor_witness_store_acknowledgement_visible_update_requires_confirmation_after_restart() {
+	let backend = TestStore::new();
+	let binding = binding(1);
+	let candidate;
+	{
+		let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+		let initial = store.create(&binding, &policies()[..1]).unwrap();
+		backend.write_failure.store(2, Ordering::SeqCst);
+		assert!(store
+			.acknowledge(&binding, &checked_acknowledgement(&initial, key(2), 1))
+			.is_err());
+		candidate = backend.bytes(&binding.storage_key());
+	}
+	for _ in 0..3 {
+		let restored = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+		backend.write_failure.store(2, Ordering::SeqCst);
+		assert_eq!(restored.load(&binding).unwrap_err(), WitnessStoreError::Storage);
+		assert_eq!(restored.load(&binding).unwrap_err(), WitnessStoreError::Uncertain);
+		assert_eq!(backend.bytes(&binding.storage_key()), candidate);
+	}
+	let restored = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	assert!(restored.load(&binding).unwrap().all_witnesses_acknowledged());
+	assert_eq!(backend.bytes(&binding.storage_key()), candidate);
+}
+
+#[test]
+fn ffor_witness_store_acknowledgement_encoding_and_legacy_upgrade_are_strict() {
+	let binding = binding(1);
+	let mut record =
+		StoredWitnessEpoch::generate(&binding, &record::checked_policies(&policies()).unwrap())
+			.unwrap();
+	let encoded = record.encode();
+	// Legacy schema has no acknowledgement slots. Upgrade keeps every protected key/manifest.
+	let legacy = legacy_plaintext(&record);
+	let upgraded = StoredWitnessEpoch::decode(&binding, &legacy).unwrap();
+	assert!(!upgraded.all_witnesses_acknowledged());
+	assert_eq!(*upgraded.encode(), *encoded);
+	for offset in [encoded.len() - 21, encoded.len() - 20, encoded.len() - 1] {
+		let mut damaged = encoded.clone();
+		damaged[offset] = 2;
+		assert!(StoredWitnessEpoch::decode(&binding, &damaged).is_err());
+	}
+	let last = record.policies().last().unwrap().witness;
+	let ack = checked_acknowledgement(&record, last, 1);
+	assert!(record.retain_acknowledgement(&ack).unwrap());
+	let mut too_short = record.encode();
+	let length = too_short.len();
+	too_short[length - 4..].copy_from_slice(&2000u32.to_be_bytes());
+	assert!(StoredWitnessEpoch::decode(&binding, &too_short).is_err());
+	assert_eq!(record.encode().len(), encoded.len());
+}
+
+#[test]
+fn ffor_witness_store_sealed_legacy_ack_upgrade_handles_failure_and_capacity() {
+	for failure in [1, 2] {
+		let backend = TestStore::new();
+		let binding = binding(1);
+		let original = StoredWitnessEpoch::generate(&binding, &policies()[..1]).unwrap();
+		let legacy = WrappingKey::derive(&[5; 64])
+			.seal_plaintext_fixture(&binding, &legacy_plaintext(&original))
+			.unwrap();
+		backend.replace(&binding.storage_key(), legacy.clone());
+		let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+		let loaded = store.load(&binding).unwrap();
+		assert_eq!(*loaded.encode(), *original.encode());
+		assert_eq!(backend.bytes(&binding.storage_key()), legacy);
+		backend.write_failure.store(failure, Ordering::SeqCst);
+		assert_eq!(
+			store.acknowledge(&binding, &checked_acknowledgement(&loaded, key(2), 1)).unwrap_err(),
+			WitnessStoreError::Storage
+		);
+		let candidate = store.state.lock().unwrap().uncertain.as_ref().unwrap().bytes.clone();
+		assert!(candidate.len() > legacy.len());
+		store.recover_write().unwrap();
+		drop(store);
+		let restored = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+		let complete = restored.load(&binding).unwrap();
+		assert!(complete.all_witnesses_acknowledged());
+		assert_eq!(complete.manifest(key(2)), original.manifest(key(2)));
+		assert_eq!(backend.bytes(&binding.storage_key()), candidate);
+	}
+	let backend = TestStore::new();
+	let binding = binding(1);
+	let original = StoredWitnessEpoch::generate(&binding, &policies()[..1]).unwrap();
+	let legacy = WrappingKey::derive(&[5; 64])
+		.seal_plaintext_fixture(&binding, &legacy_plaintext(&original))
+		.unwrap();
+	backend.replace(&binding.storage_key(), legacy.clone());
+	let mut remaining = MAX_STORE_BYTES - legacy.len();
+	for index in 0..MAX_EPOCHS {
+		if remaining == 0 {
+			break;
+		}
+		let key = format!("f{index:063x}");
+		assert_ne!(key, binding.storage_key());
+		let count = remaining.min(MAX_RECORD_BYTES);
+		backend.replace(&key, vec![9; count]);
+		remaining -= count;
+	}
+	assert_eq!(remaining, 0);
+	let store = WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap();
+	let loaded = store.load(&binding).unwrap();
+	assert_eq!(
+		store.acknowledge(&binding, &checked_acknowledgement(&loaded, key(2), 1)).unwrap_err(),
+		WitnessStoreError::Capacity
+	);
+	assert!(!store.load(&binding).unwrap().all_witnesses_acknowledged());
+	assert_eq!(backend.bytes(&binding.storage_key()), legacy);
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+	assert!(store.state.lock().unwrap().uncertain.is_none());
+}
+
+#[test]
+fn ffor_witness_store_concurrent_acknowledgements_do_not_lose_a_promise() {
+	let backend = TestStore::new();
+	let binding = binding(1);
+	let store = Arc::new(WitnessSecretStore::open(&[5; 64], backend.clone()).unwrap());
+	let initial = store.create(&binding, &policies()).unwrap();
+	let tasks: Vec<_> = [key(2), key(3)]
+		.into_iter()
+		.enumerate()
+		.map(|(index, witness)| {
+			let ack = checked_acknowledgement(&initial, witness, index as u8);
+			let store = Arc::clone(&store);
+			let binding = binding.clone();
+			std::thread::spawn(move || store.acknowledge(&binding, &ack).unwrap())
+		})
+		.collect();
+	for task in tasks {
+		task.join().unwrap();
+	}
+	assert!(store.load(&binding).unwrap().all_witnesses_acknowledged());
+	assert_eq!(backend.writes.load(Ordering::SeqCst), 3);
 }
 
 #[test]
@@ -531,7 +824,9 @@ proptest! {
 	fn ffor_witness_store_bounded_plaintext_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
 		let binding = binding(1);
 		if let Ok(record) = StoredWitnessEpoch::decode(&binding, &bytes) {
-			prop_assert_eq!(&*record.encode(), &bytes);
+			let canonical = record.encode();
+			let repeated = StoredWitnessEpoch::decode(&binding, &canonical).unwrap();
+			prop_assert_eq!(&*repeated.encode(), &*canonical);
 		}
 	}
 

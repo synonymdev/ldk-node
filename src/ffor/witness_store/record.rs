@@ -2,14 +2,21 @@ use std::fmt;
 
 use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
 use lightning::ln::ffor::FFORWitnessDecryptionError;
-use lightning_ffor::witness::{ManifestParameters, SignedManifest, UnsignedManifest, WitnessError};
+use lightning_ffor::witness::{
+	CheckedAcknowledgement, ManifestParameters, SignedManifest, UnsignedManifest, WitnessError,
+};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use zeroize::Zeroizing;
 
-use super::{WitnessStorageBinding, WitnessStoreError, MAX_WITNESSES, SCHEMA_VERSION};
+use super::{WitnessStorageBinding, WitnessStoreError, MAX_WITNESSES};
 
 mod key_use;
+
+const RECORD_VERSION: u16 = 2;
+const LEGACY_RECORD_VERSION: u16 = 1;
+// Reserved even before provisioning so each acknowledgement fits without growing a new record.
+const ACKNOWLEDGEMENT_BYTES: usize = 1 + 16 + 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WitnessKeyUseError {
@@ -32,6 +39,13 @@ struct WitnessKeys {
 	policy: WitnessPolicy,
 	fetch_secret: Zeroizing<[u8; 32]>,
 	manifest: SignedManifest,
+	acknowledgement: Option<RetainedAcknowledgement>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RetainedAcknowledgement {
+	request_id: [u8; 16],
+	retention_until: u32,
 }
 
 /// Immutable material recovered from one successful store write, not proof of native activation.
@@ -95,7 +109,12 @@ impl StoredWitnessEpoch {
 			secret.erase();
 			let manifest =
 				unsigned.authenticate(signature).map_err(|_| WitnessStoreError::Corrupt)?;
-			witnesses.push(WitnessKeys { policy: *policy, fetch_secret, manifest });
+			witnesses.push(WitnessKeys {
+				policy: *policy,
+				fetch_secret,
+				manifest,
+				acknowledgement: None,
+			});
 		}
 		Ok(Self { binding_digest: binding.digest(), encryption_secret, witnesses })
 	}
@@ -111,13 +130,48 @@ impl StoredWitnessEpoch {
 		self.witnesses.iter().map(|entry| entry.policy).collect()
 	}
 
+	/// Historical storage promises only. The native owner still controls current invoice readiness.
+	pub(super) fn all_witnesses_acknowledged(&self) -> bool {
+		!self.witnesses.is_empty()
+			&& self.witnesses.iter().all(|entry| entry.acknowledgement.is_some())
+	}
+
+	/// Retain the first correlated promise for this exact witness and immutable manifest.
+	/// A later reprovision may use a new request ID; it cannot replace the original evidence.
+	pub(super) fn retain_acknowledgement<C>(
+		&mut self, checked: &CheckedAcknowledgement<C>,
+	) -> Result<bool, WitnessStoreError> {
+		let entry = self
+			.witnesses
+			.iter_mut()
+			.find(|entry| entry.policy.witness == checked.connection().node_id)
+			.ok_or(WitnessStoreError::Binding)?;
+		if checked.provision().manifest() != &entry.manifest
+			|| checked.retention_until() < entry.policy.retention_until
+		{
+			return Err(WitnessStoreError::Binding);
+		}
+		if entry.acknowledgement.is_some() {
+			return Ok(false);
+		}
+		entry.acknowledgement = Some(RetainedAcknowledgement {
+			request_id: checked.provision().request_id(),
+			retention_until: checked.retention_until(),
+		});
+		Ok(true)
+	}
+
 	pub(super) fn encode(&self) -> Zeroizing<Vec<u8>> {
 		let manifests: Vec<_> =
 			self.witnesses.iter().map(|entry| entry.manifest.encode()).collect();
 		// Reserve the exact size before copying secrets, avoiding freed intermediate allocations.
-		let capacity = 67 + manifests.iter().map(|manifest| 69 + manifest.len()).sum::<usize>();
+		let capacity = 67
+			+ manifests
+				.iter()
+				.map(|manifest| 69 + manifest.len() + ACKNOWLEDGEMENT_BYTES)
+				.sum::<usize>();
 		let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
-		bytes.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
+		bytes.extend_from_slice(&RECORD_VERSION.to_be_bytes());
 		bytes.extend_from_slice(&self.binding_digest);
 		bytes.extend_from_slice(self.encryption_secret.as_ref());
 		bytes.push(self.witnesses.len() as u8);
@@ -126,6 +180,13 @@ impl StoredWitnessEpoch {
 			bytes.extend_from_slice(entry.fetch_secret.as_ref());
 			bytes.extend_from_slice(&(manifest.len() as u32).to_be_bytes());
 			bytes.extend_from_slice(&manifest);
+			if let Some(acknowledgement) = entry.acknowledgement {
+				bytes.push(1);
+				bytes.extend_from_slice(&acknowledgement.request_id);
+				bytes.extend_from_slice(&acknowledgement.retention_until.to_be_bytes());
+			} else {
+				bytes.extend_from_slice(&[0; ACKNOWLEDGEMENT_BYTES]);
+			}
 		}
 		bytes
 	}
@@ -134,7 +195,8 @@ impl StoredWitnessEpoch {
 		binding: &WitnessStorageBinding, bytes: &[u8],
 	) -> Result<Self, WitnessStoreError> {
 		let mut reader = Reader(bytes);
-		if u16::from_be_bytes(reader.array()?) != SCHEMA_VERSION
+		let version = u16::from_be_bytes(reader.array()?);
+		if !matches!(version, LEGACY_RECORD_VERSION | RECORD_VERSION)
 			|| reader.array::<32>()? != binding.digest()
 		{
 			return Err(WitnessStoreError::Binding);
@@ -175,7 +237,21 @@ impl StoredWitnessEpoch {
 				retention_until: params.retention_until,
 				minimum_receipts: params.minimum_receipts,
 			};
-			witnesses.push(WitnessKeys { policy, fetch_secret, manifest });
+			let acknowledgement = if version == RECORD_VERSION {
+				let present = reader.array::<1>()?[0];
+				let request_id = reader.array()?;
+				let retention_until = u32::from_be_bytes(reader.array()?);
+				match present {
+					0 if request_id == [0; 16] && retention_until == 0 => None,
+					1 if retention_until >= policy.retention_until => {
+						Some(RetainedAcknowledgement { request_id, retention_until })
+					},
+					_ => return Err(WitnessStoreError::Corrupt),
+				}
+			} else {
+				None
+			};
+			witnesses.push(WitnessKeys { policy, fetch_secret, manifest, acknowledgement });
 		}
 		if !reader.0.is_empty() {
 			return Err(WitnessStoreError::Corrupt);

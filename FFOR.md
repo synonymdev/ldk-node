@@ -29,8 +29,18 @@ and peer callbacks. An optional private FFOR receiver can parse the seven suppor
 signed lifecycle types, witness acknowledgement type 55057 and fetch response type
 55061 through the shared canonical codecs. Its bounded outbox accepts exact wire messages from a future
 native-authorized release callback. The production builder leaves this transport
-disabled. This slice has no operational sender, feature advertisement, protocol
-transition or public setting.
+disabled. This slice has no feature advertisement or public setting.
+
+The private setup adapter uses the concrete native manager and pairs its opaque
+authenticated generation with the transport token in the same bounded peer map.
+Accept and pre-accept Abort are processed synchronously before the custom callback
+returns, so following ordinary HTLC frames cannot overtake native voucher ownership.
+A native error requests disconnection and never falls back to the mailbox. Other
+unsupported lifecycle inputs and witness replies remain bounded queued work. Failed
+LSPS connection callbacks, disconnect and replacement clear both tokens and queues.
+Preparation, exact Init release, retry lookup and cancellation delegate to native
+authority. No builder constructs this adapter yet; activation and recovery orchestration
+remain necessary before offering offline invoices.
 
 The transport accepts peer identity only from PeerManager's authenticated callback.
 Each successful connection gets a distinct opaque token. Disconnect or replacement
@@ -102,12 +112,26 @@ and [ChaCha20Poly1305](https://www.rfc-editor.org/rfc/rfc8439).
 
 One exclusive owner serializes the namespace. Admission is bounded to four witnesses
 per epoch, 512 KiB per encrypted record, 64 epochs and 8 MiB overall. Records are not
-evicted or replaced to admit new work. A failed write blocks that owner until the
+evicted to admit new work. Keys and signed manifests cannot be replaced. A failed write blocks that owner until the
 exact retained ciphertext is written successfully. Readable bytes alone do not prove
 durability: a filesystem rename can become visible before directory synchronization
 succeeds. Reopening likewise requires an authenticated, byte-identical successful
 rewrite before returning restored material. No retry creates replacement keys or
 manifests for an existing record.
+
+The store also retains each selected witness's first exactly correlated provisioning
+acknowledgement. It rechecks the complete immutable manifest and retention promise
+before sealing the update. Subsequent requests cannot replace the first promise.
+Schema 2 reserves fixed acknowledgement slots when keys are created, so recording
+all promises does not grow the record. Schema 1 loads with no promises; its first
+update upgrades the format only if the existing global capacity permits it.
+
+A failed update retains the exact proposed ciphertext and its original predecessor.
+Retry accepts only those bytes and always requires another successful write. A deleted
+existing record or conflicting replacement blocks recovery. Restored promises likewise
+require successful durability confirmation before being returned. Historical promises
+from every selected witness are necessary storage evidence, not current native
+provisioning authority or invoice readiness.
 
 The threat boundary includes untrusted peers, malformed or altered storage, failed
 entropy, interrupted writes and concurrent callers within one owner. Store success
@@ -122,13 +146,15 @@ identity, 256-bit nonce and signature entropy, including retries after a lost re
 or restart. The witness still enforces replay refusal. Decryption authenticates the
 retained witness and manifest before native AEAD and body checks. These helpers do not
 correlate a response connection, persist a receipt, change a channel or credit a
-payment. Witness acknowledgement persistence and runtime recovery remain separate work.
+payment. Witness transport orchestration, durable payment-receipt retention and native
+monitor reconciliation remain separate work.
 
 Run `cargo test --lib ffor_witness` for exact retries and restart, failed writes
 with readable bytes, corruption, wrong seeds and bindings, key separation, capacity,
 concurrent creation, fallible entropy, truncated records and property-based mutation
-checks, fresh fetch authorization after restart and protected decryption of pinned
-Beignet records. These checks do not establish complete branch coverage or process-crash
+checks, fresh fetch authorization after restart, protected decryption of pinned
+Beignet records, exact acknowledgement retention, concurrent acknowledgements, failed
+updates and sealed legacy-record upgrades. These checks do not establish complete branch coverage or process-crash
 interoperability.
 
 ## Required runtime integration
