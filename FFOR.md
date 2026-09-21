@@ -26,8 +26,8 @@ and recovery are implemented together.
 
 Node's custom-message composition retains the existing LSPS reader, outbox, features
 and peer callbacks. An optional private FFOR receiver can parse the seven supported
-signed lifecycle types and witness acknowledgement type 55057 through the shared
-canonical codecs. Its bounded outbox accepts exact wire messages from a future
+signed lifecycle types, witness acknowledgement type 55057 and fetch response type
+55061 through the shared canonical codecs. Its bounded outbox accepts exact wire messages from a future
 native-authorized release callback. The production builder leaves this transport
 disabled. This slice has no operational sender, feature advertisement, protocol
 transition or public setting.
@@ -41,16 +41,23 @@ before applying a transition; a successful parse or point-in-time token check gr
 no such authority. Claimed wire identities cannot replace the authenticated peer.
 
 Frames are limited to 65,535 bytes including the message type. The combined queues
-tracks at most 64 peers, eight frames and 256 KiB per peer, and 128 frames and 1 MiB
+track at most 64 peers, eight frames and 256 KiB per peer, and 128 frames and 1 MiB
 globally. Those byte limits cover retained wire payloads; bounded peer and frame
 metadata adds fixed overhead. Queue refusals preserve existing work and do not
 disconnect ordinary peers. Consumers take one frame at a time and remain responsible
 for bounding any work they retain after removal from the queue. Debug formatting
 exposes only the FFOR type and length, so PeerManager trace logs cannot print
 lifecycle preimages or other wire payloads. Malformed recognized frames fail the
-custom reader; unknown types keep the
-existing ignore behavior. Witness service requests and receipt retrieval are outside
-this receiver slice.
+custom reader; unknown types keep the existing ignore behavior. Inbound witness
+service requests remain unhandled. A parsed fetch response is uncorrelated encrypted
+input until the recovery owner verifies the pending request, connection and manifest.
+
+Outbound witness provisioning (55055) and signed fetch requests (55059) accept only
+the shared immutable `Provision` and `SignedFetch` types. Their constructors require
+an authenticated setup or the trusted mailbox fetch key. Raw request bytes cannot
+bypass those checks, and the Noise peer key is never substituted for the fetch key.
+Provisioning still requires durable secrets and current native authority. Fetching
+historical evidence does not establish current activation or payment authority.
 
 An outbound enqueue checks the original connection token and shared capacity in one
 critical section. Backpressure preserves all queued messages, and an exact retry
@@ -65,8 +72,10 @@ replay is legal. No transport mutex may span a native manager call.
 
 Run `cargo test --lib message_handler` for exact public fixture routing, LSPS
 coexistence, disabled behavior, malformed frame bounds, connection replacement,
-concurrent disconnect, outbound backpressure and property-based queue accounting checks. Fixture provenance
-is recorded in `src/message_handler/test_data.json`. Parser fuzzing remains in the
+concurrent disconnect, outbound backpressure, typed witness requests, bounded fetch
+responses and property-based queue accounting checks. Fixture provenance is recorded
+in `src/message_handler/test_data.json` and beside the witness key-operation fixtures.
+Parser fuzzing remains in the
 shared `lightning-ffor` wire and witness targets; Node also runs arbitrary-byte
 property checks at the length-limited reader boundary.
 

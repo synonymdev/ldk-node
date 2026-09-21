@@ -4,8 +4,11 @@
 //! one successful init callback, including reconnects to the same key. Consumers must recheck that
 //! token under the eventual native channel authority before mutation; a queue pop is not a lock on
 //! the connection. An outbound enqueue callback checks its token and queue capacity atomically;
-//! the native caller must first authorize and durably retain the exact bytes. No protocol transition
-//! or signature generation exists here, and the production builder leaves this transport disabled.
+//! native lifecycle callers must first authorize and durably retain the exact bytes. Witness callers
+//! must retain their manifests and protected keys; provisioning additionally needs current native
+//! authority. Fetching historical evidence establishes no current activation or payment authority.
+//! No protocol transition or signature generation exists here, and the production builder leaves
+//! this transport disabled.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -18,7 +21,7 @@ use lightning::ln::wire::Type;
 use lightning::util::logger::Level;
 use lightning::util::ser::{LengthLimitedRead, Writeable, Writer};
 use lightning_ffor::wire::{Message, MAX_MESSAGE_LEN};
-use lightning_ffor::witness::Acknowledgement;
+use lightning_ffor::witness::{Acknowledgement, FetchResponse, Provision, SignedFetch};
 
 const MAX_PEERS: usize = 64;
 const MAX_PEER_MESSAGES: usize = 8;
@@ -26,7 +29,7 @@ const MAX_PEER_BYTES: usize = 256 * 1024;
 const MAX_QUEUED_MESSAGES: usize = 128;
 const MAX_QUEUED_BYTES: usize = 1024 * 1024;
 
-/// Exact canonical input, including the message type. Authentication remains the consumer's job.
+/// Exact canonical bytes, including the message type. Parsing grants no protocol authority.
 #[derive(PartialEq, Eq)]
 pub(crate) struct FforFrame(Vec<u8>);
 
@@ -44,7 +47,12 @@ impl fmt::Debug for FforFrame {
 
 impl FforFrame {
 	pub(super) fn handles_type(message_type: u16) -> bool {
-		matches!(message_type, 55001 | 55003 | 55045 | 55047 | 55049 | 55051 | 55053 | 55057)
+		// Witness service requests are outbound-only. Unkeyed input cannot authenticate a
+		// Provision's setup or a Fetch's expected mailbox key.
+		matches!(
+			message_type,
+			55001 | 55003 | 55045 | 55047 | 55049 | 55051 | 55053 | 55057 | 55061
+		)
 	}
 
 	pub(super) fn read<R: LengthLimitedRead>(
@@ -69,10 +77,16 @@ impl FforFrame {
 		if !Self::handles_type(message_type) {
 			return Err(DecodeError::InvalidValue);
 		}
-		if message_type == 55057 {
-			Acknowledgement::decode(bytes).map_err(|_| DecodeError::InvalidValue)?;
-		} else {
-			Message::decode(bytes).map_err(|_| DecodeError::InvalidValue)?;
+		match message_type {
+			55057 => {
+				Acknowledgement::decode(bytes).map_err(|_| DecodeError::InvalidValue)?;
+			},
+			55061 => {
+				FetchResponse::decode(bytes).map_err(|_| DecodeError::InvalidValue)?;
+			},
+			_ => {
+				Message::decode(bytes).map_err(|_| DecodeError::InvalidValue)?;
+			},
 		}
 		Ok(())
 	}
@@ -228,6 +242,37 @@ impl FforReceiverTransport {
 		&self, peer: PublicKey, connection: &ConnectionToken, wire: &[u8],
 	) -> Result<(), OutboundError> {
 		FforFrame::validate_wire(wire).map_err(|_| OutboundError::InvalidMessage)?;
+		self.enqueue_validated(peer, connection, wire)
+	}
+
+	/// Queues an immutable shared manifest that was authenticated against its retained setup.
+	/// The caller still owns durable key/manifest storage and current native provisioning authority.
+	/// Raw Provision bytes cannot enter through `enqueue`, which has no trusted setup to check.
+	#[allow(dead_code)]
+	pub(crate) fn enqueue_provision(
+		&self, peer: PublicKey, connection: &ConnectionToken, provision: &Provision,
+	) -> Result<(), OutboundError> {
+		self.enqueue_validated(peer, connection, &provision.encode())
+	}
+
+	/// Queues an immutable fetch whose signature was checked against the trusted mailbox fetch key.
+	/// The Noise peer key is not a substitute for that key. After ambiguous delivery, the owner must
+	/// create a fresh nonce/request rather than replay an earlier fetch on a replacement connection.
+	#[allow(dead_code)]
+	pub(crate) fn enqueue_fetch(
+		&self, peer: PublicKey, connection: &ConnectionToken, fetch: &SignedFetch,
+	) -> Result<(), OutboundError> {
+		self.enqueue_validated(peer, connection, &fetch.encode())
+	}
+
+	// Only a bounded canonical decoder or an immutable authenticated shared type can reach this
+	// insertion path. The queue does not infer signature authority from an arbitrary wire key.
+	fn enqueue_validated(
+		&self, peer: PublicKey, connection: &ConnectionToken, wire: &[u8],
+	) -> Result<(), OutboundError> {
+		if wire.len() < 2 || wire.len() > MAX_MESSAGE_LEN {
+			return Err(OutboundError::InvalidMessage);
+		}
 		let mut state = self.state.lock().unwrap();
 		let peer_state = state.peers.get(&peer).ok_or(OutboundError::StaleConnection)?;
 		if peer_state.connection != *connection {

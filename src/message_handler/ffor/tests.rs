@@ -206,6 +206,46 @@ fn ffor_outbound_disconnect_race_cannot_rebind_queued_bytes() {
 }
 
 #[test]
+fn ffor_witness_typed_outbound_uses_shared_budget_retry_and_disconnect_rules() {
+	let receiver = FforReceiverTransport::default();
+	let peer = key(1);
+	receiver.peer_connected(peer);
+	let connection = receiver.connection(peer).unwrap();
+	let (provision, fetch, _) = super::super::tests::witness_messages();
+	let another = Provision::new([8; 16], provision.manifest().clone());
+	for _ in 0..MAX_PEER_MESSAGES - 2 {
+		receiver.receive(peer, frame(21)).unwrap();
+	}
+	receiver.enqueue_provision(peer, &connection, &provision).unwrap();
+	receiver.enqueue_fetch(peer, &connection, &fetch).unwrap();
+	receiver.enqueue_provision(peer, &connection, &provision).unwrap();
+	receiver.enqueue_fetch(peer, &connection, &fetch).unwrap();
+	assert_eq!(
+		receiver.enqueue_provision(peer, &connection, &another),
+		Err(OutboundError::Capacity)
+	);
+	assert_accounting(&receiver);
+	let pending = receiver.drain_outbound();
+	assert_eq!(pending.len(), 2);
+	assert_eq!(pending[0].1.wire(), provision.encode());
+	assert_eq!(pending[1].1.wire(), fetch.encode());
+	receiver.enqueue_provision(peer, &connection, &another).unwrap();
+	receiver.peer_disconnected(peer);
+	receiver.peer_connected(peer);
+	assert!(receiver.drain_outbound().is_empty());
+	assert!(receiver.pop().is_none());
+	assert_eq!(
+		receiver.enqueue_provision(peer, &connection, &provision),
+		Err(OutboundError::StaleConnection)
+	);
+	assert_eq!(
+		receiver.enqueue_fetch(peer, &connection, &fetch),
+		Err(OutboundError::StaleConnection)
+	);
+	assert_accounting(&receiver);
+}
+
+#[test]
 fn ffor_disconnect_and_rebind_invalidate_popped_and_pending_work() {
 	let receiver = FforReceiverTransport::default();
 	let peer = key(1);
