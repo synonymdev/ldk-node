@@ -47,6 +47,26 @@ dictionary AnchorChannelsConfig {
 	u64 per_channel_reserve_sats;
 };
 
+dictionary OfflineReceiveWitnessConfig {
+	PublicKey node_id;
+	u32 retention_blocks;
+	u8 minimum_receipts;
+};
+
+dictionary OfflineReceiveConfig {
+	PublicKey settlement_node_id;
+	sequence<OfflineReceiveWitnessConfig> witnesses;
+	u32 invoice_expiry_seconds;
+	u32 invoice_safety_margin_seconds;
+	u32 settlement_deadline_blocks;
+	u32 deadline_safety_margin_blocks;
+	u32 claim_margin_blocks;
+	u32 voucher_expiry_blocks;
+	u32 fee_base_msat;
+	u32 fee_proportional_millionths;
+	u64 poll_interval_secs;
+};
+
 dictionary BackgroundSyncConfig {
 	u64 onchain_wallet_sync_interval_secs;
 	u64 lightning_wallet_sync_interval_secs;
@@ -179,6 +199,7 @@ interface Builder {
 	void set_announcement_addresses(sequence<SocketAddress> announcement_addresses);
 	[Throws=BuildError]
 	void set_node_alias(string node_alias);
+	void set_offline_receive_config(OfflineReceiveConfig config);
 	[Throws=BuildError]
 	void set_async_payments_role(AsyncPaymentsRole? role);
 	[Throws=BuildError]
@@ -211,6 +232,7 @@ interface Node {
 	sequence<SocketAddress>? announcement_addresses();
 	NodeAlias? node_alias();
 	Bolt11Payment bolt11_payment();
+	OfflineReceivePayment offline_receive();
 	Bolt12Payment bolt12_payment();
 	SpontaneousPayment spontaneous_payment();
 	OnchainPayment onchain_payment();
@@ -504,6 +526,11 @@ enum NodeError {
     "AddressTypeNotMonitored",
     "OnchainWalletAccountNotRegistered",
     "InvalidSeedBytes",
+    "OfflineReceiveDisabled",
+    "OfflineReceiveUnavailable",
+    "OfflineReceiveIneligible",
+    "OfflineReceiveRequestNotFound",
+    "OfflineReceiveRequestConflict",
 };
 
 dictionary NodeStatus {
@@ -542,6 +569,7 @@ enum BuildError {
 	"LoggerSetupFailed",
 	"NetworkMismatch",
 	"AsyncPaymentsConfigMismatch",
+	"InvalidOfflineReceiveConfig",
 };
 
 [Trait]
@@ -658,6 +686,33 @@ interface QrPaymentResult {
 	Onchain(Txid txid);
 	Bolt11(PaymentId payment_id);
 	Bolt12(PaymentId payment_id);
+};
+
+enum OfflineReceiveOutcome {
+	"Fulfilled",
+	"Failed",
+};
+
+[Enum]
+interface OfflineReceiveStatus {
+	Preparing();
+	AwaitingActivation();
+	AwaitingWitnesses();
+	Ready(string bolt11);
+	Expired();
+	Settled(OfflineReceiveOutcome outcome);
+	Failed(string reason);
+};
+
+interface OfflineReceivePayment {
+	[Throws=NodeError]
+	boolean can_receive(u64 amount_msat);
+	[Throws=NodeError]
+	OfflineReceiveStatus prepare(string request_id, u64 amount_msat, string description);
+	[Throws=NodeError]
+	OfflineReceiveStatus status(string request_id);
+	[Throws=NodeError]
+	void cancel(string request_id);
 };
 
 enum PaymentDirection {

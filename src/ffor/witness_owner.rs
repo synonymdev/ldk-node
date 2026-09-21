@@ -1,6 +1,6 @@
 //! Private orchestration of native-authorized witness provisioning and durable acknowledgement.
 //!
-//! No builder constructs this owner. Methods require exclusive access, while the protected store
+//! Only the opt-in runtime constructs this owner. Methods require exclusive access, while the protected store
 //! remains the single persistence owner. Native registration and release own phase authority;
 //! this module retains only bounded transient response correlation. Historical acknowledgements
 //! authorize neither an invoice nor a native transition. Transport callbacks never call the store.
@@ -22,6 +22,8 @@ mod fetch;
 mod pending;
 mod provisioning;
 mod recovery;
+pub(crate) use fetch::FetchProgress;
+pub(crate) use provisioning::{ProvisioningProgress, RegistrationProgress};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WitnessOwnerError {

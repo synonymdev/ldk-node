@@ -1,7 +1,7 @@
 //! Durable application intent, without invoice, activation or payment authority.
 //!
 //! One exclusive owner retains exact arguments before native preparation. Native alone owns the
-//! epoch and lifecycle. No builder constructs this store yet. The 64-record bound matches the
+//! epoch and lifecycle. Only the opt-in runtime constructs this store. The 64-record bound matches the
 //! current native archive and includes unbound intents; neither this store nor native currently
 //! retires historical requests. Legacy intents reserve 4 KiB; an explicit v2 upgrade reserves 8 KiB before invoice issuance,
 //! for at most 512 KiB. Exact invoice and Pending payment confirmation are historical storage facts,
@@ -39,6 +39,8 @@ mod invoice;
 mod native;
 mod record;
 use envelope::EnvelopeKey;
+pub(super) use invoice::InvoiceProgress;
+pub(super) use record::invoice::InvoicePolicy;
 pub(super) use record::{RequestIntent, RequestPlan, StoredRequest};
 
 const NAMESPACE: &str = "ffor_requests";
@@ -52,7 +54,7 @@ const MAX_RECORD_BYTES: usize = 8192;
 const MAX_STORE_BYTES: usize = MAX_REQUESTS * MAX_RECORD_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RequestStoreError {
+pub(crate) enum RequestStoreError {
 	InvalidIntent,
 	Conflict,
 	Missing,
@@ -97,7 +99,7 @@ pub(super) struct RequestStore {
 }
 
 impl RequestStore {
-	fn open_bound(
+	pub(in crate::ffor) fn open_bound(
 		seed: &[u8; 64], chain: [u8; 32], node: PublicKey, manager: Arc<ChannelManager>,
 		payments: Arc<PaymentStore>, storage: Arc<DynStore>,
 	) -> Result<Self, RequestStoreError> {

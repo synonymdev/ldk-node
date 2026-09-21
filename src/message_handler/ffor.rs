@@ -7,8 +7,8 @@
 //! native lifecycle callers must first authorize and durably retain the exact bytes. Witness callers
 //! must retain their manifests and protected keys; provisioning additionally needs current native
 //! authority. Fetching historical evidence establishes no current activation or payment authority.
-//! No protocol transition or signature generation exists here, and the production builder leaves
-//! this transport disabled.
+//! No protocol transition or signature generation exists here; the builder installs this
+//! transport only with the builder's offline-receive configuration.
 
 pub(super) mod setup;
 use std::collections::{HashMap, VecDeque};
@@ -24,7 +24,6 @@ use lightning::util::logger::Level;
 use lightning::util::ser::{LengthLimitedRead, Writeable, Writer};
 use lightning_ffor::wire::{Message, MAX_MESSAGE_LEN};
 use lightning_ffor::witness::{Acknowledgement, FetchResponse, Provision, SignedFetch};
-#[cfg(test)]
 pub(crate) use setup::FforSetupAdapter;
 
 const MAX_PEERS: usize = 64;

@@ -108,6 +108,28 @@ impl StoredRequest {
 	pub(in crate::ffor) fn local_request_id(&self) -> [u8; 32] {
 		self.plan.parameters.local_request_id
 	}
+	/// The exact confirmed Pending payment row for the retained invoice, if the invoice and its
+	/// payment confirmation marker are both retained. This is storage history, not readiness.
+	pub(in crate::ffor) fn confirmed_payment(
+		&self,
+	) -> Result<Option<crate::payment::store::PaymentDetails>, RequestStoreError> {
+		match self.invoice() {
+			Some(retained) if retained.payment_confirmed() => retained.payment().map(Some),
+			_ => Ok(None),
+		}
+	}
+	/// Absolute UNIX expiry of the retained invoice, when one is retained.
+	pub(in crate::ffor) fn invoice_expires_at(&self) -> Result<Option<u64>, RequestStoreError> {
+		match self.invoice() {
+			Some(retained) => {
+				let invoice = retained.parsed()?;
+				Ok(Some(
+					invoice.duration_since_epoch().saturating_add(invoice.expiry_time()).as_secs(),
+				))
+			},
+			None => Ok(None),
+		}
+	}
 
 	pub(super) fn same_request(&self, other: &Self) -> bool {
 		let mut left = self.clone();

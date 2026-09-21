@@ -42,6 +42,8 @@ pub(super) use binding::WitnessStorageBinding;
 #[cfg(test)]
 use binding::WitnessStorageIdentity;
 use envelope::WrappingKey;
+#[cfg(test)]
+pub(super) use record::FixtureWitness;
 pub(super) use record::{StoredWitnessEpoch, WitnessKeyUseError, WitnessPolicy};
 
 const PRIMARY_NAMESPACE: &str = "ffor_witness";
@@ -210,7 +212,29 @@ impl WitnessSecretStore {
 			Ok(_) => return Err(WitnessStoreError::Conflict),
 			Err(error) => return Err(error),
 		}
-		let mut record = StoredWitnessEpoch::generate(binding, &policies)?;
+		let record = StoredWitnessEpoch::generate(binding, &policies)?;
+		self.install_locked(&mut state, binding, record)
+	}
+
+	/// Test-only: install a record built from public fixture secrets through the exact
+	/// production write sequence. Never available outside tests.
+	#[cfg(test)]
+	pub(in crate::ffor) fn install_fixture(
+		&self, binding: &WitnessStorageBinding, record: StoredWitnessEpoch,
+	) -> Result<StoredWitnessEpoch, WitnessStoreError> {
+		let mut state = self.state.lock().map_err(|_| WitnessStoreError::Uncertain)?;
+		ensure_certain(&state)?;
+		if state.records.contains_key(&binding.storage_key()) {
+			return Err(WitnessStoreError::Conflict);
+		}
+		self.install_locked(&mut state, binding, record)
+	}
+
+	fn install_locked(
+		&self, state: &mut StoreState, binding: &WitnessStorageBinding,
+		mut record: StoredWitnessEpoch,
+	) -> Result<StoredWitnessEpoch, WitnessStoreError> {
+		let key = binding.storage_key();
 		let receipt = self
 			.receipt_key
 			.seal_plaintext(binding, &ReceiptBook::empty(binding, &record).encode())?;
@@ -231,9 +255,9 @@ impl WitnessSecretStore {
 			return Err(WitnessStoreError::Capacity);
 		}
 		state.receipt_reservations.insert(key.clone(), receipt.len());
-		self.confirm_write(&mut state, Namespace::Secrets, key.clone(), bytes)?;
-		self.confirm_write(&mut state, Namespace::Receipts, key, receipt)?;
-		self.finish_initialization(&mut state, binding, &mut record)?;
+		self.confirm_write(state, Namespace::Secrets, key.clone(), bytes)?;
+		self.confirm_write(state, Namespace::Receipts, key, receipt)?;
+		self.finish_initialization(state, binding, &mut record)?;
 		Ok(record)
 	}
 

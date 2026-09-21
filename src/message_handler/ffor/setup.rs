@@ -1,5 +1,6 @@
 //! Private receiver bridge. The concrete native manager owns lifecycle and persistence authority.
-//! No production builder constructs this bridge, and progress grants no invoice authority.
+//! The builder installs this bridge only with its offline-receive configuration; progress grants no
+//! invoice authority.
 
 use std::sync::Arc;
 
@@ -20,7 +21,6 @@ pub(crate) struct FforSetupAdapter {
 	transport: Arc<FforReceiverTransport>,
 }
 
-// The production builder deliberately does not install this experimental adapter yet.
 #[allow(dead_code)]
 impl FforSetupAdapter {
 	pub(crate) fn new(
@@ -30,7 +30,7 @@ impl FforSetupAdapter {
 		Self { manager, monitor, transport }
 	}
 
-	pub(in crate::message_handler) fn transport(&self) -> &Arc<FforReceiverTransport> {
+	pub(crate) fn transport(&self) -> &Arc<FforReceiverTransport> {
 		&self.transport
 	}
 

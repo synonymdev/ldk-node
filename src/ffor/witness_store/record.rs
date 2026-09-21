@@ -36,6 +36,15 @@ pub(crate) struct WitnessPolicy {
 	pub(in crate::ffor) minimum_receipts: u8,
 }
 
+/// Test-only fixture input for [`StoredWitnessEpoch::from_fixture`].
+#[cfg(test)]
+pub(in crate::ffor) struct FixtureWitness {
+	pub(in crate::ffor) witness: PublicKey,
+	pub(in crate::ffor) fetch_secret: [u8; 32],
+	pub(in crate::ffor) manifest: Vec<u8>,
+	pub(in crate::ffor) acknowledged: bool,
+}
+
 struct WitnessKeys {
 	policy: WitnessPolicy,
 	fetch_secret: Zeroizing<[u8; 32]>,
@@ -139,6 +148,42 @@ impl StoredWitnessEpoch {
 			binding_digest: binding.digest(),
 			encryption_secret,
 			witnesses,
+			receipt_allocation: ReceiptAllocation::Legacy,
+		})
+	}
+
+	/// Test-only: rebuild a record from public fixture secrets and the exact signed manifest.
+	#[cfg(test)]
+	pub(in crate::ffor) fn from_fixture(
+		binding: &WitnessStorageBinding, encryption_secret: [u8; 32],
+		witnesses: Vec<FixtureWitness>,
+	) -> Result<Self, WitnessStoreError> {
+		let mut entries = Vec::with_capacity(witnesses.len());
+		for fixture in witnesses {
+			let manifest = SignedManifest::decode(&fixture.manifest, binding.setup())
+				.map_err(|_| WitnessStoreError::Corrupt)?;
+			let params = manifest.unsigned().parameters();
+			let policy = WitnessPolicy {
+				witness: fixture.witness,
+				retention_until: params.retention_until,
+				minimum_receipts: params.minimum_receipts,
+			};
+			let acknowledgement = fixture.acknowledged.then_some(RetainedAcknowledgement {
+				request_id: [1; 16],
+				retention_until: params.retention_until,
+			});
+			entries.push(WitnessKeys {
+				policy,
+				fetch_secret: Zeroizing::new(fixture.fetch_secret),
+				manifest,
+				acknowledgement,
+			});
+		}
+		entries.sort_by_key(|entry| entry.policy.witness);
+		Ok(Self {
+			binding_digest: binding.digest(),
+			encryption_secret: Zeroizing::new(encryption_secret),
+			witnesses: entries,
 			receipt_allocation: ReceiptAllocation::Legacy,
 		})
 	}

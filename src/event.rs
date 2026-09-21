@@ -1018,6 +1018,13 @@ where
 		locked_queue.front().cloned()
 	}
 
+	/// Whether a not-yet-handled `PaymentReceived` for `payment_hash` is still queued.
+	pub(crate) fn contains_payment_received(&self, payment_hash: &PaymentHash) -> bool {
+		self.queue.lock().unwrap().iter().any(|event| {
+			matches!(event, Event::PaymentReceived { payment_hash: hash, .. } if hash == payment_hash)
+		})
+	}
+
 	pub(crate) async fn next_event_async(&self) -> Event {
 		EventFuture { event_queue: Arc::clone(&self.queue), waker: Arc::clone(&self.waker) }.await
 	}

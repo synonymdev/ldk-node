@@ -6,9 +6,9 @@
 //! store exclusion and the native monitor guard. Amount, hash, description and route terms come
 //! from the record and native ownership; the caller supplies only a policy and route evidence.
 //!
-//! `AwaitingPersistence` covers every pending native manager or monitor write. No production
-//! completer for native persistence tokens exists yet; the runtime that drives the background
-//! persister remains separate work. Nothing here emits payment events or credits a payment.
+//! `AwaitingPersistence` covers every pending native manager or monitor write; the background
+//! processor completes native persistence tokens and the runtime re-polls. Nothing here emits
+//! payment events or credits a payment.
 
 use std::fmt;
 

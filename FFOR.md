@@ -27,9 +27,9 @@ and recovery are implemented together.
 Node's custom-message composition retains the existing LSPS reader, outbox, features
 and peer callbacks. An optional private FFOR receiver can parse the seven supported
 signed lifecycle types, witness acknowledgement type 55057 and fetch response type
-55061 through the shared canonical codecs. Its bounded outbox accepts exact wire messages from a future
-native-authorized release callback. The production builder leaves this transport
-disabled. This slice has no feature advertisement or public setting.
+55061 through the shared canonical codecs. Its bounded outbox accepts exact wire messages from the
+native-authorized release callback. The builder installs this transport only with
+`NodeBuilder::set_offline_receive_config`. There is no feature advertisement.
 
 The private receiver adapter uses the concrete native manager and pairs its opaque
 authenticated generation with the transport token in the same bounded peer map.
@@ -44,9 +44,8 @@ Only a native request for proof reads the concrete ChainMonitor; the adapter dro
 that monitor guard before passing the opaque snapshot and original paired generation
 back to the manager. Stock peer events, STFU, commitment rounds and persistence must
 continue between advances. The adapter retains no independent lifecycle state and
-does not treat Active progress as invoice readiness. No builder constructs it yet;
-runtime scheduling and payment recovery remain necessary before
-offering offline invoices.
+does not treat Active progress as invoice readiness. The opt-in runtime described
+below schedules it.
 
 The transport accepts peer identity only from PeerManager's authenticated callback.
 Each successful connection gets a distinct opaque token. Disconnect or replacement
@@ -99,8 +98,8 @@ property checks at the length-limited reader boundary.
 
 The private `ffor::witness_store` module retains an immutable encryption key per
 epoch, plus a separate fetch key, mailbox and exact signed manifest per witness.
-A private witness owner composes its storage and transport operations; no production
-builder or payment provider constructs either owner. Its non-test binding
+A private witness owner composes its storage and transport operations; only the
+opt-in runtime constructs either owner. Its non-test binding
 constructor accepts only an opaque native recovery context with a retained activation
 acknowledgement. It binds the native context digest, original funding output,
 identities and exact signed setup and activation. Historical evidence and successful
@@ -260,7 +259,7 @@ failures, rejected candidates followed by valid evidence, one write per page,
 exact batch recovery and zero payment credit.
 Fixture provenance is in `src/ffor/witness_owner/fixtures/README.md`; test-only
 witness encryption uses ring against the retained public epoch key and never
-exports a protected private key. No builder or scheduler enables this owner yet.
+exports a protected private key. The opt-in runtime schedules this owner.
 
 The separate receipt-recovery call first rejoins immutable native witness
 registration and confirmed protected evidence. It captures an opaque snapshot from
@@ -278,8 +277,8 @@ payment or authorizes an invoice. Tests use the actual Node persister and restor
 its durable monitor updates; they never manufacture a monitor-completion signal.
 They cover live and archive-only recovery, idempotence after restart, and uncertain
 receipt writes before native import. Delayed and failed native monitor writes are
-covered in the pinned channel engine. Authoritative settlement outcomes and the
-production recovery scheduler remain unfinished.
+covered in the pinned channel engine. The opt-in runtime schedules this recovery and joins settlement outcomes only
+from the native journal after Closed.
 
 ## Private durable receive requests
 
@@ -330,7 +329,7 @@ only a policy and public witness-to-settlement route evidence. A different polic
 conflict, the reserved policy is never replaced, and an existing native assignment is
 recovered before any new preparation, so fresh route evidence is accepted on retry.
 Every pending native manager or monitor write reports awaiting persistence instead of
-progress. No production completer for native persistence tokens exists yet.
+progress; the background processor completes native tokens and the runtime re-polls.
 
 The payment store confirms the exact Pending Bolt11 row against memory and disk and
 persists before installing it in memory. A payment confirmation write that fails
@@ -368,21 +367,112 @@ and stale route refusal without a native slot, missing, corrupt and terminal pay
 rows, unbound records, missing native history, a monitor tip ahead of the manager, and
 zero storage I/O under publication. Run `cargo test --lib ffor_request` for the
 request-store, codec and issuer checks and `cargo test --lib ffor_payment` for the
-payment-store checks. No production caller constructs this owner yet.
+payment-store checks. Only the opt-in runtime constructs this owner.
 
-## Required runtime integration
+## Opt-in receiver runtime
 
-- Bind signed setup to the actual local identity, peer, chain and channel limits.
-- Park a complete voucher book outside ordinary invoice and forwarding handling.
-- Freeze the verified commitment pair through the real quiescence protocol.
-- Persist exact activation and acknowledgement evidence before releasing either
-  acknowledgement or invoice readiness. Retain evidence after channel removal.
-- Restore active epochs, reconcile reconnect state and fail setup safely after a
-  disconnect, timeout, partial round or storage failure.
-- Connect settlement, slot accounting, witness/mailbox recovery and on-chain
-  protection before offering an offline invoice.
-- Generate native bindings and connect the Android and iOS providers to the same
-  exact-amount, single-channel eligibility and invoice metadata contract.
+The runtime is disabled unless `NodeBuilder::set_offline_receive_config` (or the `Arc`
+builder's method) is called; `Config` is unchanged so the existing UDL still mirrors it.
+At build time the builder validates the `OfflineReceiveConfig` (settlement peer, one through four distinct witness peers with a
+retention and minimum-receipt policy, invoice expiry and safety margin, settlement
+deadline, deadline safety margin, claim margin, voucher expiry, fee policy and poll
+interval; the constants are development defaults, not production policy), installs the
+private transport and setup adapter into the custom message handler, and constructs
+`ffor::runtime::FforReceiverRuntime`. The runtime opens the request store and witness
+store with the wallet seed at build time only, composes the witness owner, and keeps a
+bounded in-memory table of at most 64 live requests. `Node::start` runs recovery and
+spawns one stop-aware worker; `Node::offline_receive()` returns the handler. Without the
+configuration no transport, adapter, runtime or handler state exists and every handler
+method fails with `OfflineReceiveDisabled`.
+
+The handler exposes `can_receive(amount_msat)`, `prepare(request_id, amount_msat,
+description)`, `status(request_id)` and `cancel(request_id)`. Eligibility is a positive
+amount whose fee-inclusive gross fits one channel-ready channel's inbound capacity with the
+settlement peer, with no live request on that channel and every historical native epoch
+on it terminal; the only public terminal signal is a completed cooperative drain (the
+journal outcome getter answers for slot one), so an aborted previous epoch keeps its
+channel ineligible here even though native may admit a replacement. Peer connectivity is
+not part of eligibility. Native remains the admission authority: `AlreadyRegistered` and
+`RecoveryUnavailable` from preparation fail the request, `PendingUpdates` waits. `prepare` is idempotent per request ID
+through the protected request record; different arguments for a known ID are a conflict.
+The status enum is `Preparing`, `AwaitingActivation`, `AwaitingWitnesses`, `Ready`,
+`Expired`, `Settled` and `Failed`. `Ready` carries the BOLT 11 string only after the exact
+invoice was retained, its Pending payment confirmed and native publication released it
+into the runtime's slot in this process; after restart the same request reports
+`AwaitingWitnesses` until a fresh native barrier and a fresh release.
+
+Each worker pass first retries uncertain store writes, then pops bounded transport input
+(witness acknowledgements to the witness owner, fetch pages to receipt retention, with at
+most 32 acknowledgements retained across a native persistence wait), then advances every
+live request by one bounded step. Stages are `Prepare` (native preparation on the genuine
+settlement connection; a channel that native refuses because it is not yet reestablished
+keeps waiting), `Setup` (Active observed through the native active-context capture, or
+the setup adapter advanced on the live connection), `Witnesses` (registration and
+provisioning with policies from the configuration, explicit retry after sixty seconds
+without acknowledgement, a missing sidecar fails closed without regenerating keys),
+`Invoice` (signed witness-to-settlement announcement and witness-signed update taken from
+the node's own network graph; absent evidence waits, it is never fabricated; then
+issuance, confirmation and release), `Ready`, `Closing` and `Closed`. Cancellation before
+binding writes a durable marker; before activation it cancels the native setup; afterwards
+it requests a cooperative close. The runtime requests a close when the invoice expires, at
+the deadline safety margin or at voucher expiry, and drives Draining to Closed on the live
+connection. `ReconnectRequired` and `ResolutionRequired` schedule witness fetches and
+receipt import into the original monitor; nothing there credits a payment.
+
+After `Closed`, the single slot's outcome comes only from
+`ffor_receiver_voucher_outcome` on the current native context. `Fulfilled` credits the
+exact Pending payment exactly once through a durable intent record in the `ffor_runtime`
+namespace keyed by channel, epoch and slot: `Intended` is written before the payment row
+changes, `Credited` after the successful payment write (preimage from a retained
+authenticated witness receipt when one exists, otherwise none), and `Notified` after the
+`PaymentReceived` event is durably queued. Resumption from `Credited` does not queue the
+event again when the queue already holds it. An event handled by the application between
+queueing and the `Notified` write can still be delivered twice; that window is not hidden.
+`Failed` marks the row failed; `None` after `Closed` reports `Expired`.
+
+Run `cargo test --lib ffor_runtime`. Verified with the genuine exported fixtures:
+`ffor_runtime_is_absent_without_config_and_refuses_invalid_config`,
+`ffor_runtime_handler_requires_running_node_for_mutations`,
+`ffor_runtime_prepare_is_idempotent_and_eligibility_tracks_channel_and_live_requests`,
+`ffor_runtime_cancel_and_deadline_before_binding_are_durable_and_release_nothing`,
+`ffor_runtime_recovers_active_epoch_and_reports_ready_only_after_native_release`
+(restored Active epoch, existing native registration rejoined through a fixture sidecar,
+route evidence from the graph, issuance through native persistence, release, no credit,
+restart with the same bytes, deadline close), `ffor_runtime_missing_witness_sidecar_never_regenerates_keys_or_issues`,
+`ffor_runtime_unknown_witness_acknowledgement_is_dropped`,
+`ffor_runtime_credit_sequence_survives_a_failed_write_at_every_step_and_restart`
+(both failure modes at each of the five writes, then restart through the ordinary
+builder reload) and `ffor_runtime_credit_sequence_refuses_conflicts_and_missing_rows`.
+
+Not verified in Node unit tests: fresh native preparation and Init release on a
+reestablished channel, witness provisioning driven by the runtime against a live witness,
+Draining to Closed, a `Fulfilled` journal outcome and receipt-driven preimage recovery.
+No exported native fixture reaches Closed with a journal; those paths need the regtest
+end-to-end run below.
+
+## What remains
+
+- Repeated epochs on one channel: native revision `996f5b0` admits a new epoch once the
+  previous one is terminal (drain Closed with its retained completion hash, or aborted
+  without a drain) and its terminal write completed. The runtime admits a channel whose
+  historical epochs all have a completed journal; aborted epochs need a public terminal
+  getter before the runtime can offer their channel again. Sequential epochs are not
+  exercised in Node unit tests because no exported fixture reaches Closed.
+- No native pre-close observation of a paid voucher exists; the runtime closes only on
+  invoice expiry, deadline margin or voucher expiry, and credits after `Closed`.
+- Rapid gossip sync retains no signed announcements or updates, so route evidence is
+  available only with P2P gossip.
+- Bindings: the Rust API is shaped for a UDL mirror (plain structs and enums, an `Arc`
+  handler under the `uniffi` feature) but `bindings/ldk_node.udl` and the generated
+  `bindings/ldk_node.udl` now declares `BuildError.InvalidOfflineReceiveConfig`, the
+  five `NodeError.OfflineReceive*` variants, `OfflineReceiveConfig`,
+  `OfflineReceiveWitnessConfig`, `OfflineReceiveStatus`, `OfflineReceiveOutcome`, the
+  `OfflineReceivePayment` interface, `Builder.set_offline_receive_config` and
+  `Node.offline_receive`; `cargo check --features uniffi` compiles. The generated Swift,
+  Kotlin and Python bindings have not been regenerated (`./bindgen.sh` not run), and the
+  mobile providers are not connected. `Config` itself is unchanged.
+- Regtest end-to-end: process crashes, reconnection, chain enforcement, cooperative close
+  with a fulfilled voucher, and mobile lifecycle tests.
 
 ## Trust boundaries and validation
 

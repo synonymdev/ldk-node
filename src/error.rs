@@ -156,6 +156,16 @@ pub enum Error {
 	OnchainWalletAccountNotRegistered,
 	/// The seed bytes or a seed-derived wallet account are invalid.
 	InvalidSeedBytes,
+	/// Offline receiving is not enabled in the node configuration.
+	OfflineReceiveDisabled,
+	/// The offline-receive runtime is not ready or a durable step could not complete.
+	OfflineReceiveUnavailable,
+	/// No eligible channel with the configured settlement peer can admit the request.
+	OfflineReceiveIneligible,
+	/// No offline-receive request with the given ID is known.
+	OfflineReceiveRequestNotFound,
+	/// An offline-receive request with the given ID exists with different arguments.
+	OfflineReceiveRequestConflict,
 }
 
 impl fmt::Display for Error {
@@ -263,6 +273,19 @@ impl fmt::Display for Error {
 			},
 			Self::InvalidSeedBytes => {
 				write!(f, "The seed bytes or seed-derived wallet account are invalid.")
+			},
+			Self::OfflineReceiveDisabled => write!(f, "Offline receiving is not enabled."),
+			Self::OfflineReceiveUnavailable => {
+				write!(f, "The offline-receive runtime is not ready or a durable step failed.")
+			},
+			Self::OfflineReceiveIneligible => {
+				write!(f, "No eligible channel with the settlement peer can admit the request.")
+			},
+			Self::OfflineReceiveRequestNotFound => {
+				write!(f, "No offline-receive request with the given ID is known.")
+			},
+			Self::OfflineReceiveRequestConflict => {
+				write!(f, "An offline-receive request with the given ID has different arguments.")
 			},
 		}
 	}

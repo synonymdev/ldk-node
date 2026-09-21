@@ -5,7 +5,8 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-//! Compose LSPS with an optional bounded FFOR transport. The builder leaves FFOR disabled.
+//! Compose LSPS with an optional bounded FFOR transport, installed only when the builder's
+//! offline-receive configuration is set.
 
 pub(crate) mod ffor;
 #[cfg(test)]
@@ -86,7 +87,6 @@ where
 		Self { liquidity: None, ffor: None, ffor_setup: None }
 	}
 
-	// No production caller enables this seam until a native receiver owns admission and recovery.
 	#[allow(dead_code)]
 	pub(crate) fn with_ffor_receiver(mut self, receiver: Arc<FforReceiverTransport>) -> Self {
 		self.ffor = Some(receiver);
@@ -94,8 +94,7 @@ where
 		self
 	}
 
-	// Explicit opt-in only. There is no builder setting, feature bit or invoice-facing API.
-	#[allow(dead_code)]
+	// Explicit opt-in only through the builder; there is no feature bit.
 	pub(crate) fn with_ffor_setup(mut self, setup: Arc<FforSetupAdapter>) -> Self {
 		self.ffor = Some(Arc::clone(setup.transport()));
 		self.ffor_setup = Some(setup);
