@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/bdk-wallet-aggregate", "crates/ffor-protocol"]
+members = [".", "crates/bdk-wallet-aggregate"]
 exclude = ["bindings/uniffi-bindgen"]
 
 [package]
@@ -33,6 +33,7 @@ panic = 'abort'     # Abort on panic
 default = []
 
 [dependencies]
+lightning-ffor = { git = "https://github.com/synonymdev/rust-lightning", rev = "364d8f905743a2bd7a91c1757ef85454c1d258a6" }
 lightning = { version = "0.2.0", features = ["std"] }
 lightning-types = { version = "0.3.0" }
 lightning-invoice = { version = "0.34.0", features = ["std"] }

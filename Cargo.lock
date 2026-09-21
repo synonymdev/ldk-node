@@ -1033,16 +1033,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
-name = "ffor-protocol"
-version = "0.1.0"
-dependencies = [
- "bitcoin",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "filetime"
 version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1934,6 +1924,7 @@ dependencies = [
  "lightning 0.2.5",
  "lightning-background-processor 0.2.3",
  "lightning-block-sync 0.2.0",
+ "lightning-ffor",
  "lightning-invoice 0.34.1",
  "lightning-liquidity 0.2.3",
  "lightning-macros 0.2.1",
@@ -2070,6 +2061,14 @@ dependencies = [
  "lightning 0.2.5",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "lightning-ffor"
+version = "0.1.0"
+source = "git+https://github.com/synonymdev/rust-lightning?rev=364d8f905743a2bd7a91c1757ef85454c1d258a6#364d8f905743a2bd7a91c1757ef85454c1d258a6"
+dependencies = [
+ "bitcoin",
 ]
 
 [[package]]
