@@ -1185,6 +1185,7 @@ mod tests {
 	use std::sync::{Arc, Condvar, Mutex};
 	use std::time::Duration;
 
+	use bdk_wallet::event::WalletEvent;
 	use bitcoin::absolute::LockTime;
 	use bitcoin::block::Header;
 	use bitcoin::blockdata::constants::genesis_block;
@@ -1193,6 +1194,7 @@ mod tests {
 	use bitcoin::{Amount, Block, Network, ScriptBuf, Transaction, TxMerkleNode, TxOut, Txid};
 	use lightning::io;
 	use lightning::util::persist::{KVStore, KVStoreSync};
+	use lightning::util::ser::Writeable;
 
 	use super::OnchainPayment;
 	use crate::builder::NodeBuilder;
@@ -1220,6 +1222,7 @@ mod tests {
 		state_changed: Condvar,
 		fail_next_write_namespace: Mutex<Option<String>>,
 		fail_next_remove_namespace: Mutex<Option<String>>,
+		fail_event_queue_write_after: Mutex<Option<usize>>,
 	}
 
 	impl BlockingBroadcastIntentStore {
@@ -1230,6 +1233,7 @@ mod tests {
 				state_changed: Condvar::new(),
 				fail_next_write_namespace: Mutex::new(None),
 				fail_next_remove_namespace: Mutex::new(None),
+				fail_event_queue_write_after: Mutex::new(None),
 			}
 		}
 
@@ -1306,6 +1310,23 @@ mod tests {
 		fn write(
 			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
 		) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'static + Send>> {
+			if primary_namespace == crate::io::EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE
+				&& key == crate::io::EVENT_QUEUE_PERSISTENCE_KEY
+			{
+				let mut countdown = self.fail_event_queue_write_after.lock().unwrap();
+				if let Some(remaining) = countdown.as_mut() {
+					if *remaining == 0 {
+						*countdown = None;
+						return Box::pin(async {
+							Err(io::Error::new(
+								io::ErrorKind::Other,
+								"Injected event queue write failure",
+							))
+						});
+					}
+					*remaining -= 1;
+				}
+			}
 			KVStore::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
 		}
 
@@ -1825,6 +1846,175 @@ mod tests {
 		.await
 		.unwrap();
 		assert!(restarted.next_event().is_none());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn reorg_retires_confirmation_receipt_left_by_interrupted_cleanup() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(Arc::clone(&store));
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+		let block = confirmation_block(tx.clone());
+		node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+		node.wallet.finish_pending_sync(false).unwrap();
+		let old_block_time = node.wallet.transaction_confirmations()[&txid];
+		// Persist confirmation and retire the wallet marker, but fail the receipt cleanup.
+		*concrete_store.fail_event_queue_write_after.lock().unwrap() = Some(1);
+		assert_eq!(
+			process_test_wallet_events(&node, Vec::new()).await,
+			Err(Error::PersistenceFailed)
+		);
+		assert!(node.wallet.ready_locally_applied_unconfirmed_txids().unwrap().is_empty());
+		drop(node);
+
+		let node = test_node(Arc::clone(&store));
+		assert!(
+			matches!(node.next_event(), Some(Event::OnchainTransactionConfirmed { txid: id, .. }) if id == txid)
+		);
+		node.event_handled().unwrap();
+		let mut replacement = block.clone();
+		replacement.header.nonce += 1;
+		replacement.txdata.clear();
+		node.wallet.apply_block_to_account(account, &replacement, 1).unwrap();
+		node.wallet.finish_pending_sync(false).unwrap();
+		assert!(!node.wallet.transaction_confirmations().contains_key(&txid));
+		let reorg = WalletEvent::TxUnconfirmed {
+			txid,
+			tx: Arc::new(tx.clone()),
+			old_block_time: Some(old_block_time),
+		};
+		*concrete_store.fail_event_queue_write_after.lock().unwrap() = Some(0);
+		assert_eq!(
+			process_test_wallet_events(&node, vec![reorg.clone()]).await,
+			Err(Error::PersistenceFailed)
+		);
+		assert!(node.next_event().is_none(), "failed reorg commit must not be exposed");
+		drop(node);
+
+		let node = test_node(Arc::clone(&store));
+		assert!(node.next_event().is_none());
+		process_test_wallet_events(&node, vec![reorg]).await.unwrap();
+		drop(node);
+		let node = test_node(Arc::clone(&store));
+		assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+		node.event_handled().unwrap();
+		let mut reconfirmed = block;
+		reconfirmed.header.nonce += 2;
+		node.wallet.apply_block_to_account(account, &reconfirmed, 1).unwrap();
+		node.wallet.finish_pending_sync(false).unwrap();
+		let block_time = node.wallet.transaction_confirmations()[&txid];
+		process_test_wallet_events(
+			&node,
+			vec![WalletEvent::TxConfirmed {
+				txid,
+				tx: Arc::new(tx),
+				block_time,
+				old_block_time: None,
+			}],
+		)
+		.await
+		.unwrap();
+		drop(node);
+		let node = test_node(store);
+		assert!(
+			matches!(node.next_event(), Some(Event::OnchainTransactionConfirmed { txid: id, block_hash, .. }) if id == txid && block_hash == reconfirmed.block_hash())
+		);
+		node.event_handled().unwrap();
+		assert!(node.next_event().is_none());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn handled_legacy_event_is_not_replayed_after_upgrade() {
+		for confirmed in [false, true] {
+			let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+			let store: Arc<DynStore> = concrete_store.clone();
+			let node = test_node(Arc::clone(&store));
+			let tx = tracked_test_transaction(
+				node.onchain_payment().new_address().unwrap().script_pubkey(),
+			);
+			let txid = tx.compute_txid();
+			let block = confirmation_block(tx.clone());
+			let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+			node.wallet.prepare_pending_broadcast(&tx).unwrap();
+			node.wallet.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+			if confirmed {
+				node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+				node.wallet.finish_pending_sync(false).unwrap();
+			}
+			concrete_store.fail_next_remove_in(ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+			assert_eq!(
+				process_test_wallet_events(&node, Vec::new()).await,
+				Err(Error::PersistenceFailed)
+			);
+			assert!(matches!((confirmed, node.next_event()),
+				(true, Some(Event::OnchainTransactionConfirmed { txid: id, .. })) |
+				(false, Some(Event::OnchainTransactionReceived { txid: id, .. })) if id == txid));
+			node.event_handled().unwrap();
+			assert_eq!(node.wallet.ready_locally_applied_unconfirmed_txids().unwrap(), vec![txid]);
+			// Exact version-one state after acknowledgement: empty queue, untyped receipt.
+			let mut bytes = Vec::new();
+			0u16.write(&mut bytes).unwrap();
+			1u8.write(&mut bytes).unwrap();
+			1u16.write(&mut bytes).unwrap();
+			txid.write(&mut bytes).unwrap();
+			KVStoreSync::write(
+				&*store,
+				crate::io::EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
+				crate::io::EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
+				crate::io::EVENT_QUEUE_PERSISTENCE_KEY,
+				bytes,
+			)
+			.unwrap();
+			drop(node);
+
+			let node = test_node(Arc::clone(&store));
+			process_test_wallet_events(&node, Vec::new()).await.unwrap();
+			assert!(node.next_event().is_none());
+			assert!(node.wallet.ready_locally_applied_unconfirmed_txids().unwrap().is_empty());
+			drop(node);
+			let node = test_node(store);
+			process_test_wallet_events(&node, Vec::new()).await.unwrap();
+			assert!(node.next_event().is_none());
+			if !confirmed {
+				// Retiring an ambiguous received marker also removes the confirmation alias.
+				node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+				node.wallet.finish_pending_sync(false).unwrap();
+				let block_time = node.wallet.transaction_confirmations()[&txid];
+				process_test_wallet_events(
+					&node,
+					vec![WalletEvent::TxConfirmed {
+						txid,
+						tx: Arc::new(tx),
+						block_time,
+						old_block_time: None,
+					}],
+				)
+				.await
+				.unwrap();
+				assert!(
+					matches!(node.next_event(), Some(Event::OnchainTransactionConfirmed { txid: id, .. }) if id == txid)
+				);
+			}
+		}
+	}
+
+	async fn process_test_wallet_events(
+		node: &Node, events: Vec<WalletEvent>,
+	) -> Result<(), Error> {
+		crate::chain::process_wallet_events(
+			events,
+			&node.wallet,
+			&node.event_queue,
+			&node.logger,
+			Some(&node.channel_manager),
+			None,
+		)
+		.await
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]

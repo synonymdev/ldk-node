@@ -521,8 +521,7 @@ where
 							"Onchain transaction {} became unconfirmed (reorg)",
 							txid
 						);
-						let event = Event::OnchainTransactionReorged { txid };
-						event_queue.add_event(event).await.map_err(|e| {
+						event_queue.add_onchain_reorg_event(txid).await.map_err(|e| {
 							log_error!(logger, "Failed to push onchain event to queue: {}", e);
 							e
 						})?;
@@ -564,6 +563,7 @@ where
 						event_queue
 							.clear_idempotency_keys(&[
 								EventIdempotencyKey::OnchainTransactionReceived(txid),
+								EventIdempotencyKey::OnchainTransactionConfirmed(txid),
 							])
 							.await?;
 					},
@@ -649,7 +649,10 @@ where
 			})?;
 		wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
 		event_queue
-			.clear_idempotency_keys(&[EventIdempotencyKey::OnchainTransactionReceived(txid)])
+			.clear_idempotency_keys(&[
+				EventIdempotencyKey::OnchainTransactionReceived(txid),
+				EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+			])
 			.await?;
 	}
 	Ok(())

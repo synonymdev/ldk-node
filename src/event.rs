@@ -1075,6 +1075,23 @@ where
 		Ok(())
 	}
 
+	// A reorg starts a new confirmation transition. Commit the event and retirement
+	// together so a crash cannot expose the reorg while retaining the old receipt.
+	pub(crate) async fn add_onchain_reorg_event(&self, txid: Txid) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
+		let mut queue = self.queue.lock().unwrap().clone();
+		let mut keys = self.idempotency_keys.lock().unwrap().clone();
+		queue.push_back(Event::OnchainTransactionReorged { txid });
+		keys.remove(&EventIdempotencyKey::OnchainTransactionConfirmed(txid));
+		self.persist_queue(EventQueueSerWrapper(&queue, &keys).encode()).await?;
+		*self.queue.lock().unwrap() = queue;
+		*self.idempotency_keys.lock().unwrap() = keys;
+		if let Some(waker) = self.waker.lock().unwrap().take() {
+			waker.wake();
+		}
+		Ok(())
+	}
+
 	pub(crate) async fn clear_idempotency_keys(
 		&self, idempotency_keys: &[EventIdempotencyKey],
 	) -> Result<(), Error> {
@@ -1182,11 +1199,36 @@ impl Readable for EventQueueDeserWrapper {
 		};
 		let idempotency_keys = match extension_version {
 			1 => {
+				let queued_keys: HashSet<_> = queue
+					.iter()
+					.filter_map(|event| match event {
+						Event::OnchainTransactionReceived { txid, .. } => {
+							Some(EventIdempotencyKey::OnchainTransactionReceived(*txid))
+						},
+						Event::OnchainTransactionConfirmed { txid, .. } => {
+							Some(EventIdempotencyKey::OnchainTransactionConfirmed(*txid))
+						},
+						_ => None,
+					})
+					.collect();
 				let key_count: u16 = Readable::read(reader)?;
 				let mut idempotency_keys = HashSet::with_capacity(key_count as usize);
 				for _ in 0..key_count {
 					let txid = Readable::read(reader)?;
-					idempotency_keys.insert(EventIdempotencyKey::OnchainTransactionReceived(txid));
+					let received = EventIdempotencyKey::OnchainTransactionReceived(txid);
+					let confirmed = EventIdempotencyKey::OnchainTransactionConfirmed(txid);
+					let known_received = queued_keys.contains(&received);
+					let known_confirmed = queued_keys.contains(&confirmed);
+					// Version one used one receipt for both event types. Once handled,
+					// its type is irrecoverable: retain the old broad suppression rather
+					// than invent a received-only receipt and replay a confirmation.
+					// Marker retirement clears both; a reorg retires confirmation alone.
+					if known_received || !known_confirmed {
+						idempotency_keys.insert(received);
+					}
+					if known_confirmed || !known_received {
+						idempotency_keys.insert(confirmed);
+					}
 				}
 				idempotency_keys
 			},
@@ -2800,7 +2842,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn version_one_idempotency_keys_migrate_as_received_transitions() {
+	async fn acknowledged_version_one_receipts_preserve_ambiguous_transitions() {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		let logger = Arc::new(TestLogger::new());
 		let txid = Txid::from_byte_array([41; 32]);
@@ -2814,7 +2856,46 @@ mod tests {
 		let idempotency_keys = event_queue.idempotency_keys.lock().unwrap();
 
 		assert!(idempotency_keys.contains(&EventIdempotencyKey::OnchainTransactionReceived(txid)));
-		assert!(!idempotency_keys.contains(&EventIdempotencyKey::OnchainTransactionConfirmed(txid)));
+		assert!(idempotency_keys.contains(&EventIdempotencyKey::OnchainTransactionConfirmed(txid)));
+	}
+
+	#[tokio::test]
+	async fn queued_version_one_receipts_recover_the_known_transition() {
+		let txid = Txid::from_byte_array([41; 32]);
+		let details =
+			TransactionDetails { amount_sats: 1, inputs: Vec::new(), outputs: Vec::new() };
+		for (event, expected_key, absent_key) in [
+			(
+				Event::OnchainTransactionReceived { txid, details: details.clone() },
+				EventIdempotencyKey::OnchainTransactionReceived(txid),
+				EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+			),
+			(
+				Event::OnchainTransactionConfirmed {
+					txid,
+					details: details.clone(),
+					block_hash: bitcoin::BlockHash::all_zeros(),
+					block_height: 1,
+					confirmation_time: 1,
+				},
+				EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+				EventIdempotencyKey::OnchainTransactionReceived(txid),
+			),
+		] {
+			let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+			let logger = Arc::new(TestLogger::new());
+			let mut bytes = Vec::new();
+			1u16.write(&mut bytes).unwrap();
+			event.write(&mut bytes).unwrap();
+			1u8.write(&mut bytes).unwrap();
+			1u16.write(&mut bytes).unwrap();
+			txid.write(&mut bytes).unwrap();
+			let queue = EventQueue::read(&mut &bytes[..], (store, logger)).unwrap();
+			assert_eq!(queue.next_event(), Some(event));
+			let keys = queue.idempotency_keys.lock().unwrap();
+			assert!(keys.contains(&expected_key));
+			assert!(!keys.contains(&absent_key));
+		}
 	}
 
 	#[tokio::test]
@@ -2903,6 +2984,49 @@ mod tests {
 		let restored_queue =
 			EventQueue::read(&mut &persisted_bytes[..], (dyn_store, logger)).unwrap();
 		assert_eq!(restored_queue.next_event(), None);
+	}
+
+	#[tokio::test]
+	async fn reorg_commit_serializes_event_acknowledgement() {
+		let store = Arc::new(DelayedWriteStore::new());
+		let dyn_store: Arc<DynStore> = store.clone();
+		let logger = Arc::new(TestLogger::new());
+		let queue = Arc::new(EventQueue::new(Arc::clone(&dyn_store), Arc::clone(&logger)));
+		let txid = Txid::from_byte_array([44; 32]);
+		let key = EventIdempotencyKey::OnchainTransactionConfirmed(txid);
+		let event = Event::OnchainTransactionConfirmed {
+			txid,
+			block_hash: bitcoin::BlockHash::all_zeros(),
+			block_height: 1,
+			confirmation_time: 1,
+			details: TransactionDetails { amount_sats: 1, inputs: Vec::new(), outputs: Vec::new() },
+		};
+		queue.add_event_with_idempotency_key(event.clone(), key).await.unwrap();
+		store.block_next_write.store(true, Ordering::SeqCst);
+		let reorg_queue = Arc::clone(&queue);
+		let reorg = tokio::spawn(async move { reorg_queue.add_onchain_reorg_event(txid).await });
+		store.write_started.notified().await;
+		assert_eq!(queue.next_event(), Some(event));
+		assert!(queue.idempotency_keys.lock().unwrap().contains(&key));
+		let ack_queue = Arc::clone(&queue);
+		let mut ack = tokio::spawn(async move { ack_queue.event_handled().await });
+		assert!(tokio::time::timeout(Duration::from_millis(100), &mut ack).await.is_err());
+		store.release_write.notify_one();
+		reorg.await.unwrap().unwrap();
+		ack.await.unwrap().unwrap();
+		let bytes = KVStore::read(
+			&*dyn_store,
+			EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_KEY,
+		)
+		.await
+		.unwrap();
+		let restored = EventQueue::read(&mut &bytes[..], (dyn_store, logger)).unwrap();
+		assert_eq!(restored.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+		assert!(!restored.idempotency_keys.lock().unwrap().contains(&key));
+		restored.event_handled().await.unwrap();
+		assert!(restored.next_event().is_none());
 	}
 
 	#[tokio::test]
