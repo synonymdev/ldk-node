@@ -4996,27 +4996,41 @@ mod tests {
 
 	#[test]
 	fn rejected_rbf_cleanup_failure_keeps_the_replacement_queryable() {
-		let concrete_store = Arc::new(NamespaceFailStore::new());
-		let store: Arc<DynStore> = concrete_store.clone();
-		let node = replacement_test_node(store);
-		let original = replacement_test_transaction(3);
-		let replacement = replacement_test_transaction(4);
-		let original_txid = original.compute_txid();
-		let replacement_txid = replacement.compute_txid();
-		let mut intent = BroadcastIntent::replacement(None, original, replacement).unwrap();
-		intent.outcome_retention_armed = true;
-		node.wallet.write_broadcast_intent(&intent).unwrap();
-		concrete_store.fail_next_remove_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
+		for predecessor_was_pending in [false, true] {
+			let concrete_store = Arc::new(NamespaceFailStore::new());
+			let store: Arc<DynStore> = concrete_store.clone();
+			let node = replacement_test_node(Arc::clone(&store));
+			let original = replacement_test_transaction(3);
+			let replacement = replacement_test_transaction(4);
+			let original_txid = original.compute_txid();
+			let replacement_txid = replacement.compute_txid();
+			// An absent prior intent means the predecessor was already accepted.
+			let existing = predecessor_was_pending.then(|| BroadcastIntent::new(original.clone()));
+			let mut intent = BroadcastIntent::replacement(existing, original, replacement).unwrap();
+			intent.outcome_retention_armed = true;
+			node.wallet.write_broadcast_intent(&intent).unwrap();
+			concrete_store
+				.fail_next_remove_in(crate::io::ONCHAIN_BROADCAST_EVENT_PRIMARY_NAMESPACE);
 
-		assert_eq!(
-			node.wallet.reject_rbf_broadcast(&replacement_txid),
-			Err(Error::PersistenceFailed)
-		);
-		assert_eq!(
-			node.wallet.broadcast_outcome(&replacement_txid).unwrap(),
-			Some((BroadcastOutcomeStatus::Abandoned, replacement_txid, vec![replacement_txid],))
-		);
-		assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), vec![original_txid]);
+			assert_eq!(
+				node.wallet.reject_rbf_broadcast(&replacement_txid),
+				Err(Error::PersistenceFailed)
+			);
+			let expected_outcome =
+				Some((BroadcastOutcomeStatus::Abandoned, replacement_txid, vec![replacement_txid]));
+			assert_eq!(node.wallet.broadcast_outcome(&replacement_txid).unwrap(), expected_outcome);
+			let expected_pending =
+				if predecessor_was_pending { vec![original_txid] } else { Vec::new() };
+			assert_eq!(node.wallet.list_pending_broadcasts().unwrap(), expected_pending);
+			drop(node);
+
+			let restarted = replacement_test_node(store);
+			assert_eq!(
+				restarted.wallet.broadcast_outcome(&replacement_txid).unwrap(),
+				expected_outcome
+			);
+			assert_eq!(restarted.wallet.list_pending_broadcasts().unwrap(), expected_pending);
+		}
 	}
 
 	#[test]
