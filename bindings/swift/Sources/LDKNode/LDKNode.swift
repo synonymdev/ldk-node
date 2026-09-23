@@ -13,7 +13,7 @@ import Foundation
 #endif
 
 private extension RustBuffer {
-    /// Allocate a new buffer, copying the contents of a `UInt8` array.
+    // Allocate a new buffer, copying the contents of a `UInt8` array.
     init(bytes: [UInt8]) {
         let rbuf = bytes.withUnsafeBufferPointer { ptr in
             RustBuffer.from(ptr)
@@ -29,8 +29,8 @@ private extension RustBuffer {
         try! rustCall { ffi_ldk_node_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
     }
 
-    /// Frees the buffer in place.
-    /// The buffer must not be used after this is called.
+    // Frees the buffer in place.
+    // The buffer must not be used after this is called.
     func deallocate() {
         try! rustCall { ffi_ldk_node_rustbuffer_free(self, $0) }
     }
@@ -77,9 +77,9 @@ private func createReader(data: Data) -> (data: Data, offset: Data.Index) {
     (data: data, offset: 0)
 }
 
-/// Reads an integer at the current offset, in big-endian order, and advances
-/// the offset on success. Throws if reading the integer would move the
-/// offset past the end of the buffer.
+// Reads an integer at the current offset, in big-endian order, and advances
+// the offset on success. Throws if reading the integer would move the
+// offset past the end of the buffer.
 private func readInt<T: FixedWidthInteger>(_ reader: inout (data: Data, offset: Data.Index)) throws -> T {
     let range = reader.offset ..< reader.offset + MemoryLayout<T>.size
     guard reader.data.count >= range.upperBound else {
@@ -96,8 +96,8 @@ private func readInt<T: FixedWidthInteger>(_ reader: inout (data: Data, offset: 
     return value.bigEndian
 }
 
-/// Reads an arbitrary number of bytes, to be used to read
-/// raw bytes, this is useful when lifting strings
+// Reads an arbitrary number of bytes, to be used to read
+// raw bytes, this is useful when lifting strings
 private func readBytes(_ reader: inout (data: Data, offset: Data.Index), count: Int) throws -> [UInt8] {
     let range = reader.offset ..< (reader.offset + count)
     guard reader.data.count >= range.upperBound else {
@@ -111,17 +111,17 @@ private func readBytes(_ reader: inout (data: Data, offset: Data.Index), count: 
     return value
 }
 
-/// Reads a float at the current offset.
+// Reads a float at the current offset.
 private func readFloat(_ reader: inout (data: Data, offset: Data.Index)) throws -> Float {
     return try Float(bitPattern: readInt(&reader))
 }
 
-/// Reads a float at the current offset.
+// Reads a float at the current offset.
 private func readDouble(_ reader: inout (data: Data, offset: Data.Index)) throws -> Double {
     return try Double(bitPattern: readInt(&reader))
 }
 
-/// Indicates if the offset has reached the end of the buffer.
+// Indicates if the offset has reached the end of the buffer.
 private func hasRemaining(_ reader: (data: Data, offset: Data.Index)) -> Bool {
     return reader.offset < reader.data.count
 }
@@ -134,14 +134,14 @@ private func createWriter() -> [UInt8] {
     return []
 }
 
-private func writeBytes<S: Sequence>(_ writer: inout [UInt8], _ byteArr: S) where S.Element == UInt8 {
+private func writeBytes<S>(_ writer: inout [UInt8], _ byteArr: S) where S: Sequence, S.Element == UInt8 {
     writer.append(contentsOf: byteArr)
 }
 
-/// Writes an integer in big-endian order.
-///
-/// Warning: make sure what you are trying to write
-/// is in the correct type!
+// Writes an integer in big-endian order.
+//
+// Warning: make sure what you are trying to write
+// is in the correct type!
 private func writeInt<T: FixedWidthInteger>(_ writer: inout [UInt8], _ value: T) {
     var value = value.bigEndian
     withUnsafeBytes(of: &value) { writer.append(contentsOf: $0) }
@@ -155,8 +155,8 @@ private func writeDouble(_ writer: inout [UInt8], _ value: Double) {
     writeInt(&writer, value.bitPattern)
 }
 
-/// Protocol for types that transfer other types across the FFI. This is
-/// analogous to the Rust trait of the same name.
+// Protocol for types that transfer other types across the FFI. This is
+// analogous to the Rust trait of the same name.
 private protocol FfiConverter {
     associatedtype FfiType
     associatedtype SwiftType
@@ -167,7 +167,7 @@ private protocol FfiConverter {
     static func write(_ value: SwiftType, into buf: inout [UInt8])
 }
 
-/// Types conforming to `Primitive` pass themselves directly over the FFI.
+// Types conforming to `Primitive` pass themselves directly over the FFI.
 private protocol FfiConverterPrimitive: FfiConverter where FfiType == SwiftType {}
 
 extension FfiConverterPrimitive {
@@ -186,8 +186,8 @@ extension FfiConverterPrimitive {
     }
 }
 
-/// Types conforming to `FfiConverterRustBuffer` lift and lower into a `RustBuffer`.
-/// Used for complex types where it's hard to write a custom lift/lower.
+// Types conforming to `FfiConverterRustBuffer` lift and lower into a `RustBuffer`.
+// Used for complex types where it's hard to write a custom lift/lower.
 private protocol FfiConverterRustBuffer: FfiConverter where FfiType == RustBuffer {}
 
 extension FfiConverterRustBuffer {
@@ -214,8 +214,8 @@ extension FfiConverterRustBuffer {
     }
 }
 
-/// An error type for FFI errors. These errors occur at the UniFFI level, not
-/// the library level.
+// An error type for FFI errors. These errors occur at the UniFFI level, not
+// the library level.
 private enum UniffiInternalError: LocalizedError {
     case bufferOverflow
     case incompleteData
@@ -601,7 +601,7 @@ open class Bolt11Invoice:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -862,7 +862,7 @@ open class Bolt11Payment:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -906,13 +906,12 @@ open class Bolt11Payment:
         try! rustCall { uniffi_ldk_node_fn_free_bolt11payment(pointer, $0) }
     }
 
-    open func claimForHash(paymentHash: PaymentHash, claimableAmountMsat: UInt64, preimage: PaymentPreimage) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_bolt11payment_claim_for_hash(self.uniffiClonePointer(),
-                                                                   FfiConverterTypePaymentHash.lower(paymentHash),
-                                                                   FfiConverterUInt64.lower(claimableAmountMsat),
-                                                                   FfiConverterTypePaymentPreimage.lower(preimage), $0)
-        }
+    open func claimForHash(paymentHash: PaymentHash, claimableAmountMsat: UInt64, preimage: PaymentPreimage) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_bolt11payment_claim_for_hash(self.uniffiClonePointer(),
+                                                               FfiConverterTypePaymentHash.lower(paymentHash),
+                                                               FfiConverterUInt64.lower(claimableAmountMsat),
+                                                               FfiConverterTypePaymentPreimage.lower(preimage), $0)
+    }
     }
 
     open func estimateRoutingFees(invoice: Bolt11Invoice) throws -> UInt64 {
@@ -930,11 +929,10 @@ open class Bolt11Payment:
         })
     }
 
-    open func failForHash(paymentHash: PaymentHash) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_bolt11payment_fail_for_hash(self.uniffiClonePointer(),
-                                                                  FfiConverterTypePaymentHash.lower(paymentHash), $0)
-        }
+    open func failForHash(paymentHash: PaymentHash) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_bolt11payment_fail_for_hash(self.uniffiClonePointer(),
+                                                              FfiConverterTypePaymentHash.lower(paymentHash), $0)
+    }
     }
 
     open func receive(amountMsat: UInt64, description: Bolt11InvoiceDescription, expirySecs: UInt32) throws -> Bolt11Invoice {
@@ -1142,7 +1140,7 @@ open class Bolt12Invoice:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -1387,7 +1385,7 @@ open class Bolt12Payment:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -1501,11 +1499,10 @@ open class Bolt12Payment:
         })
     }
 
-    open func setPathsToStaticInvoiceServer(paths: Data) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_bolt12payment_set_paths_to_static_invoice_server(self.uniffiClonePointer(),
-                                                                                       FfiConverterData.lower(paths), $0)
-        }
+    open func setPathsToStaticInvoiceServer(paths: Data) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_bolt12payment_set_paths_to_static_invoice_server(self.uniffiClonePointer(),
+                                                                                   FfiConverterData.lower(paths), $0)
+    }
     }
 }
 
@@ -1611,6 +1608,8 @@ public protocol BuilderProtocol: AnyObject {
 
     func setNodeAlias(nodeAlias: String) throws
 
+    func setOfflineReceiveConfig(config: OfflineReceiveConfig)
+
     func setPathfindingScoresSource(url: String)
 
     func setScoringDecayParams(params: ScoringDecayParameters)
@@ -1625,7 +1624,7 @@ open class Builder:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -1662,7 +1661,8 @@ open class Builder:
     public convenience init() {
         let pointer =
             try! rustCall {
-                uniffi_ldk_node_fn_constructor_builder_new($0)
+                uniffi_ldk_node_fn_constructor_builder_new($0
+                )
             }
         self.init(unsafeFromRawPointer: pointer)
     }
@@ -1723,200 +1723,180 @@ open class Builder:
         })
     }
 
-    open func setAddressType(addressType: AddressType) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_address_type(self.uniffiClonePointer(),
-                                                               FfiConverterTypeAddressType.lower(addressType), $0)
-        }
+    open func setAddressType(addressType: AddressType) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_address_type(self.uniffiClonePointer(),
+                                                           FfiConverterTypeAddressType.lower(addressType), $0)
+    }
     }
 
-    open func setAddressTypesToMonitor(addressTypesToMonitor: [AddressType]) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_address_types_to_monitor(self.uniffiClonePointer(),
-                                                                           FfiConverterSequenceTypeAddressType.lower(addressTypesToMonitor), $0)
-        }
+    open func setAddressTypesToMonitor(addressTypesToMonitor: [AddressType]) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_address_types_to_monitor(self.uniffiClonePointer(),
+                                                                       FfiConverterSequenceTypeAddressType.lower(addressTypesToMonitor), $0)
+    }
     }
 
-    open func setAnnouncementAddresses(announcementAddresses: [SocketAddress]) throws {
-        try rustCallWithError(FfiConverterTypeBuildError.lift) {
-            uniffi_ldk_node_fn_method_builder_set_announcement_addresses(self.uniffiClonePointer(),
-                                                                         FfiConverterSequenceTypeSocketAddress.lower(announcementAddresses), $0)
-        }
+    open func setAnnouncementAddresses(announcementAddresses: [SocketAddress]) throws { try rustCallWithError(FfiConverterTypeBuildError.lift) {
+        uniffi_ldk_node_fn_method_builder_set_announcement_addresses(self.uniffiClonePointer(),
+                                                                     FfiConverterSequenceTypeSocketAddress.lower(announcementAddresses), $0)
+    }
     }
 
-    open func setAsyncPaymentsRole(role: AsyncPaymentsRole?) throws {
-        try rustCallWithError(FfiConverterTypeBuildError.lift) {
-            uniffi_ldk_node_fn_method_builder_set_async_payments_role(self.uniffiClonePointer(),
-                                                                      FfiConverterOptionTypeAsyncPaymentsRole.lower(role), $0)
-        }
+    open func setAsyncPaymentsRole(role: AsyncPaymentsRole?) throws { try rustCallWithError(FfiConverterTypeBuildError.lift) {
+        uniffi_ldk_node_fn_method_builder_set_async_payments_role(self.uniffiClonePointer(),
+                                                                  FfiConverterOptionTypeAsyncPaymentsRole.lower(role), $0)
+    }
     }
 
-    open func setChainSourceBitcoindRest(restHost: String, restPort: UInt16, rpcHost: String, rpcPort: UInt16, rpcUser: String, rpcPassword: String) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_chain_source_bitcoind_rest(self.uniffiClonePointer(),
-                                                                             FfiConverterString.lower(restHost),
-                                                                             FfiConverterUInt16.lower(restPort),
-                                                                             FfiConverterString.lower(rpcHost),
-                                                                             FfiConverterUInt16.lower(rpcPort),
-                                                                             FfiConverterString.lower(rpcUser),
-                                                                             FfiConverterString.lower(rpcPassword), $0)
-        }
+    open func setChainSourceBitcoindRest(restHost: String, restPort: UInt16, rpcHost: String, rpcPort: UInt16, rpcUser: String, rpcPassword: String) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_chain_source_bitcoind_rest(self.uniffiClonePointer(),
+                                                                         FfiConverterString.lower(restHost),
+                                                                         FfiConverterUInt16.lower(restPort),
+                                                                         FfiConverterString.lower(rpcHost),
+                                                                         FfiConverterUInt16.lower(rpcPort),
+                                                                         FfiConverterString.lower(rpcUser),
+                                                                         FfiConverterString.lower(rpcPassword), $0)
+    }
     }
 
-    open func setChainSourceBitcoindRpc(rpcHost: String, rpcPort: UInt16, rpcUser: String, rpcPassword: String) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_chain_source_bitcoind_rpc(self.uniffiClonePointer(),
-                                                                            FfiConverterString.lower(rpcHost),
-                                                                            FfiConverterUInt16.lower(rpcPort),
-                                                                            FfiConverterString.lower(rpcUser),
-                                                                            FfiConverterString.lower(rpcPassword), $0)
-        }
+    open func setChainSourceBitcoindRpc(rpcHost: String, rpcPort: UInt16, rpcUser: String, rpcPassword: String) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_chain_source_bitcoind_rpc(self.uniffiClonePointer(),
+                                                                        FfiConverterString.lower(rpcHost),
+                                                                        FfiConverterUInt16.lower(rpcPort),
+                                                                        FfiConverterString.lower(rpcUser),
+                                                                        FfiConverterString.lower(rpcPassword), $0)
+    }
     }
 
-    open func setChainSourceElectrum(serverUrl: String, config: ElectrumSyncConfig?) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_chain_source_electrum(self.uniffiClonePointer(),
-                                                                        FfiConverterString.lower(serverUrl),
-                                                                        FfiConverterOptionTypeElectrumSyncConfig.lower(config), $0)
-        }
+    open func setChainSourceElectrum(serverUrl: String, config: ElectrumSyncConfig?) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_chain_source_electrum(self.uniffiClonePointer(),
+                                                                    FfiConverterString.lower(serverUrl),
+                                                                    FfiConverterOptionTypeElectrumSyncConfig.lower(config), $0)
+    }
     }
 
-    open func setChainSourceEsplora(serverUrl: String, config: EsploraSyncConfig?) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_chain_source_esplora(self.uniffiClonePointer(),
-                                                                       FfiConverterString.lower(serverUrl),
-                                                                       FfiConverterOptionTypeEsploraSyncConfig.lower(config), $0)
-        }
+    open func setChainSourceEsplora(serverUrl: String, config: EsploraSyncConfig?) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_chain_source_esplora(self.uniffiClonePointer(),
+                                                                   FfiConverterString.lower(serverUrl),
+                                                                   FfiConverterOptionTypeEsploraSyncConfig.lower(config), $0)
+    }
     }
 
-    open func setChannelDataMigration(migration: ChannelDataMigration) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_channel_data_migration(self.uniffiClonePointer(),
-                                                                         FfiConverterTypeChannelDataMigration.lower(migration), $0)
-        }
+    open func setChannelDataMigration(migration: ChannelDataMigration) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_channel_data_migration(self.uniffiClonePointer(),
+                                                                     FfiConverterTypeChannelDataMigration.lower(migration), $0)
+    }
     }
 
-    open func setCustomLogger(logWriter: LogWriter) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_custom_logger(self.uniffiClonePointer(),
-                                                                FfiConverterTypeLogWriter.lower(logWriter), $0)
-        }
+    open func setCustomLogger(logWriter: LogWriter) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_custom_logger(self.uniffiClonePointer(),
+                                                            FfiConverterTypeLogWriter.lower(logWriter), $0)
+    }
     }
 
-    open func setEntropyBip39Mnemonic(mnemonic: Mnemonic, passphrase: String?) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_entropy_bip39_mnemonic(self.uniffiClonePointer(),
-                                                                         FfiConverterTypeMnemonic.lower(mnemonic),
-                                                                         FfiConverterOptionString.lower(passphrase), $0)
-        }
+    open func setEntropyBip39Mnemonic(mnemonic: Mnemonic, passphrase: String?) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_entropy_bip39_mnemonic(self.uniffiClonePointer(),
+                                                                     FfiConverterTypeMnemonic.lower(mnemonic),
+                                                                     FfiConverterOptionString.lower(passphrase), $0)
+    }
     }
 
-    open func setEntropySeedBytes(seedBytes: [UInt8]) throws {
-        try rustCallWithError(FfiConverterTypeBuildError.lift) {
-            uniffi_ldk_node_fn_method_builder_set_entropy_seed_bytes(self.uniffiClonePointer(),
-                                                                     FfiConverterSequenceUInt8.lower(seedBytes), $0)
-        }
+    open func setEntropySeedBytes(seedBytes: [UInt8]) throws { try rustCallWithError(FfiConverterTypeBuildError.lift) {
+        uniffi_ldk_node_fn_method_builder_set_entropy_seed_bytes(self.uniffiClonePointer(),
+                                                                 FfiConverterSequenceUInt8.lower(seedBytes), $0)
+    }
     }
 
-    open func setEntropySeedPath(seedPath: String) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_entropy_seed_path(self.uniffiClonePointer(),
-                                                                    FfiConverterString.lower(seedPath), $0)
-        }
+    open func setEntropySeedPath(seedPath: String) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_entropy_seed_path(self.uniffiClonePointer(),
+                                                                FfiConverterString.lower(seedPath), $0)
+    }
     }
 
-    open func setFilesystemLogger(logFilePath: String?, maxLogLevel: LogLevel?) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_filesystem_logger(self.uniffiClonePointer(),
-                                                                    FfiConverterOptionString.lower(logFilePath),
-                                                                    FfiConverterOptionTypeLogLevel.lower(maxLogLevel), $0)
-        }
+    open func setFilesystemLogger(logFilePath: String?, maxLogLevel: LogLevel?) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_filesystem_logger(self.uniffiClonePointer(),
+                                                                FfiConverterOptionString.lower(logFilePath),
+                                                                FfiConverterOptionTypeLogLevel.lower(maxLogLevel), $0)
+    }
     }
 
-    open func setGossipSourceP2p() {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_gossip_source_p2p(self.uniffiClonePointer(), $0)
-        }
+    open func setGossipSourceP2p() { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_gossip_source_p2p(self.uniffiClonePointer(), $0)
+    }
     }
 
-    open func setGossipSourceRgs(rgsServerUrl: String) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_gossip_source_rgs(self.uniffiClonePointer(),
-                                                                    FfiConverterString.lower(rgsServerUrl), $0)
-        }
+    open func setGossipSourceRgs(rgsServerUrl: String) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_gossip_source_rgs(self.uniffiClonePointer(),
+                                                                FfiConverterString.lower(rgsServerUrl), $0)
+    }
     }
 
-    open func setLiquiditySourceLsps1(nodeId: PublicKey, address: SocketAddress, token: String?) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_liquidity_source_lsps1(self.uniffiClonePointer(),
-                                                                         FfiConverterTypePublicKey.lower(nodeId),
-                                                                         FfiConverterTypeSocketAddress.lower(address),
-                                                                         FfiConverterOptionString.lower(token), $0)
-        }
+    open func setLiquiditySourceLsps1(nodeId: PublicKey, address: SocketAddress, token: String?) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_liquidity_source_lsps1(self.uniffiClonePointer(),
+                                                                     FfiConverterTypePublicKey.lower(nodeId),
+                                                                     FfiConverterTypeSocketAddress.lower(address),
+                                                                     FfiConverterOptionString.lower(token), $0)
+    }
     }
 
-    open func setLiquiditySourceLsps2(nodeId: PublicKey, address: SocketAddress, token: String?) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_liquidity_source_lsps2(self.uniffiClonePointer(),
-                                                                         FfiConverterTypePublicKey.lower(nodeId),
-                                                                         FfiConverterTypeSocketAddress.lower(address),
-                                                                         FfiConverterOptionString.lower(token), $0)
-        }
+    open func setLiquiditySourceLsps2(nodeId: PublicKey, address: SocketAddress, token: String?) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_liquidity_source_lsps2(self.uniffiClonePointer(),
+                                                                     FfiConverterTypePublicKey.lower(nodeId),
+                                                                     FfiConverterTypeSocketAddress.lower(address),
+                                                                     FfiConverterOptionString.lower(token), $0)
+    }
     }
 
-    open func setListeningAddresses(listeningAddresses: [SocketAddress]) throws {
-        try rustCallWithError(FfiConverterTypeBuildError.lift) {
-            uniffi_ldk_node_fn_method_builder_set_listening_addresses(self.uniffiClonePointer(),
-                                                                      FfiConverterSequenceTypeSocketAddress.lower(listeningAddresses), $0)
-        }
+    open func setListeningAddresses(listeningAddresses: [SocketAddress]) throws { try rustCallWithError(FfiConverterTypeBuildError.lift) {
+        uniffi_ldk_node_fn_method_builder_set_listening_addresses(self.uniffiClonePointer(),
+                                                                  FfiConverterSequenceTypeSocketAddress.lower(listeningAddresses), $0)
+    }
     }
 
-    open func setLogFacadeLogger() {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_log_facade_logger(self.uniffiClonePointer(), $0)
-        }
+    open func setLogFacadeLogger() { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_log_facade_logger(self.uniffiClonePointer(), $0)
+    }
     }
 
-    open func setNetwork(network: Network) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_network(self.uniffiClonePointer(),
-                                                          FfiConverterTypeNetwork.lower(network), $0)
-        }
+    open func setNetwork(network: Network) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_network(self.uniffiClonePointer(),
+                                                      FfiConverterTypeNetwork.lower(network), $0)
+    }
     }
 
-    open func setNodeAlias(nodeAlias: String) throws {
-        try rustCallWithError(FfiConverterTypeBuildError.lift) {
-            uniffi_ldk_node_fn_method_builder_set_node_alias(self.uniffiClonePointer(),
-                                                             FfiConverterString.lower(nodeAlias), $0)
-        }
+    open func setNodeAlias(nodeAlias: String) throws { try rustCallWithError(FfiConverterTypeBuildError.lift) {
+        uniffi_ldk_node_fn_method_builder_set_node_alias(self.uniffiClonePointer(),
+                                                         FfiConverterString.lower(nodeAlias), $0)
+    }
     }
 
-    open func setPathfindingScoresSource(url: String) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source(self.uniffiClonePointer(),
-                                                                            FfiConverterString.lower(url), $0)
-        }
+    open func setOfflineReceiveConfig(config: OfflineReceiveConfig) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_offline_receive_config(self.uniffiClonePointer(),
+                                                                     FfiConverterTypeOfflineReceiveConfig.lower(config), $0)
+    }
     }
 
-    open func setScoringDecayParams(params: ScoringDecayParameters) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_scoring_decay_params(self.uniffiClonePointer(),
-                                                                       FfiConverterTypeScoringDecayParameters.lower(params), $0)
-        }
+    open func setPathfindingScoresSource(url: String) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source(self.uniffiClonePointer(),
+                                                                        FfiConverterString.lower(url), $0)
+    }
     }
 
-    open func setScoringFeeParams(params: ScoringFeeParameters) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_scoring_fee_params(self.uniffiClonePointer(),
-                                                                     FfiConverterTypeScoringFeeParameters.lower(params), $0)
-        }
+    open func setScoringDecayParams(params: ScoringDecayParameters) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_scoring_decay_params(self.uniffiClonePointer(),
+                                                                   FfiConverterTypeScoringDecayParameters.lower(params), $0)
+    }
     }
 
-    open func setStorageDirPath(storageDirPath: String) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_builder_set_storage_dir_path(self.uniffiClonePointer(),
-                                                                   FfiConverterString.lower(storageDirPath), $0)
-        }
+    open func setScoringFeeParams(params: ScoringFeeParameters) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_scoring_fee_params(self.uniffiClonePointer(),
+                                                                 FfiConverterTypeScoringFeeParameters.lower(params), $0)
+    }
+    }
+
+    open func setStorageDirPath(storageDirPath: String) { try! rustCall {
+        uniffi_ldk_node_fn_method_builder_set_storage_dir_path(self.uniffiClonePointer(),
+                                                               FfiConverterString.lower(storageDirPath), $0)
+    }
     }
 }
 
@@ -1980,7 +1960,7 @@ open class FeeRate:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -2117,7 +2097,7 @@ open class Lsps1Liquidity:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -2235,7 +2215,7 @@ open class LogWriterImpl:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -2279,26 +2259,25 @@ open class LogWriterImpl:
         try! rustCall { uniffi_ldk_node_fn_free_logwriter(pointer, $0) }
     }
 
-    open func log(record: LogRecord) {
-        try! rustCall {
-            uniffi_ldk_node_fn_method_logwriter_log(self.uniffiClonePointer(),
-                                                    FfiConverterTypeLogRecord.lower(record), $0)
-        }
+    open func log(record: LogRecord) { try! rustCall {
+        uniffi_ldk_node_fn_method_logwriter_log(self.uniffiClonePointer(),
+                                                FfiConverterTypeLogRecord.lower(record), $0)
+    }
     }
 }
 
-/// Magic number for the Rust proxy to call using the same mechanism as every other method,
-/// to free the callback once it's dropped by Rust.
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
 private let IDX_CALLBACK_FREE: Int32 = 0
 // Callback return codes
 private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
 private let UNIFFI_CALLBACK_ERROR: Int32 = 1
 private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
-/// Put the implementation in a struct so we don't pollute the top-level namespace
+// Put the implementation in a struct so we don't pollute the top-level namespace
 private enum UniffiCallbackInterfaceLogWriter {
-    /// Create the VTable using a series of closures.
-    /// Swift automatically converts these into C callback functions.
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
     static var vtable: UniffiVTableCallbackInterfaceLogWriter = .init(
         log: { (
             uniffiHandle: UInt64,
@@ -2403,7 +2382,7 @@ open class NetworkGraph:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -2586,6 +2565,8 @@ public protocol NodeProtocol: AnyObject {
 
     func nodeId() -> PublicKey
 
+    func offlineReceive() -> OfflineReceivePayment
+
     func onchainPayment() -> OnchainPayment
 
     func openAnnouncedChannel(nodeId: PublicKey, address: SocketAddress, channelAmountSats: UInt64, pushToCounterpartyMsat: UInt64?, channelConfig: ChannelConfig?) throws -> UserChannelId
@@ -2636,7 +2617,7 @@ open class Node:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -2680,30 +2661,27 @@ open class Node:
         try! rustCall { uniffi_ldk_node_fn_free_node(pointer, $0) }
     }
 
-    open func addAddressTypeToMonitor(addressType: AddressType, seedBytes: [UInt8]) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_add_address_type_to_monitor(self.uniffiClonePointer(),
-                                                                       FfiConverterTypeAddressType.lower(addressType),
-                                                                       FfiConverterSequenceUInt8.lower(seedBytes), $0)
-        }
+    open func addAddressTypeToMonitor(addressType: AddressType, seedBytes: [UInt8]) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_add_address_type_to_monitor(self.uniffiClonePointer(),
+                                                                   FfiConverterTypeAddressType.lower(addressType),
+                                                                   FfiConverterSequenceUInt8.lower(seedBytes), $0)
+    }
     }
 
-    open func addAddressTypeToMonitorWithMnemonic(addressType: AddressType, mnemonic: Mnemonic, passphrase: String?) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_add_address_type_to_monitor_with_mnemonic(self.uniffiClonePointer(),
-                                                                                     FfiConverterTypeAddressType.lower(addressType),
-                                                                                     FfiConverterTypeMnemonic.lower(mnemonic),
-                                                                                     FfiConverterOptionString.lower(passphrase), $0)
-        }
+    open func addAddressTypeToMonitorWithMnemonic(addressType: AddressType, mnemonic: Mnemonic, passphrase: String?) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_add_address_type_to_monitor_with_mnemonic(self.uniffiClonePointer(),
+                                                                                 FfiConverterTypeAddressType.lower(addressType),
+                                                                                 FfiConverterTypeMnemonic.lower(mnemonic),
+                                                                                 FfiConverterOptionString.lower(passphrase), $0)
+    }
     }
 
-    open func addOnchainWalletAccount(addressType: AddressType, accountIndex: UInt32, xpub: String) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_add_onchain_wallet_account(self.uniffiClonePointer(),
-                                                                      FfiConverterTypeAddressType.lower(addressType),
-                                                                      FfiConverterUInt32.lower(accountIndex),
-                                                                      FfiConverterString.lower(xpub), $0)
-        }
+    open func addOnchainWalletAccount(addressType: AddressType, accountIndex: UInt32, xpub: String) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_add_onchain_wallet_account(self.uniffiClonePointer(),
+                                                                  FfiConverterTypeAddressType.lower(addressType),
+                                                                  FfiConverterUInt32.lower(accountIndex),
+                                                                  FfiConverterString.lower(xpub), $0)
+    }
     }
 
     open func announcementAddresses() -> [SocketAddress]? {
@@ -2724,12 +2702,11 @@ open class Node:
         })
     }
 
-    open func closeChannel(userChannelId: UserChannelId, counterpartyNodeId: PublicKey) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_close_channel(self.uniffiClonePointer(),
-                                                         FfiConverterTypeUserChannelId.lower(userChannelId),
-                                                         FfiConverterTypePublicKey.lower(counterpartyNodeId), $0)
-        }
+    open func closeChannel(userChannelId: UserChannelId, counterpartyNodeId: PublicKey) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_close_channel(self.uniffiClonePointer(),
+                                                     FfiConverterTypeUserChannelId.lower(userChannelId),
+                                                     FfiConverterTypePublicKey.lower(counterpartyNodeId), $0)
+    }
     }
 
     open func config() -> Config {
@@ -2738,13 +2715,12 @@ open class Node:
         })
     }
 
-    open func connect(nodeId: PublicKey, address: SocketAddress, persist: Bool) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_connect(self.uniffiClonePointer(),
-                                                   FfiConverterTypePublicKey.lower(nodeId),
-                                                   FfiConverterTypeSocketAddress.lower(address),
-                                                   FfiConverterBool.lower(persist), $0)
-        }
+    open func connect(nodeId: PublicKey, address: SocketAddress, persist: Bool) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_connect(self.uniffiClonePointer(),
+                                               FfiConverterTypePublicKey.lower(nodeId),
+                                               FfiConverterTypeSocketAddress.lower(address),
+                                               FfiConverterBool.lower(persist), $0)
+    }
     }
 
     open func currentSyncIntervals() -> RuntimeSyncIntervals {
@@ -2753,17 +2729,15 @@ open class Node:
         })
     }
 
-    open func disconnect(nodeId: PublicKey) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_disconnect(self.uniffiClonePointer(),
-                                                      FfiConverterTypePublicKey.lower(nodeId), $0)
-        }
+    open func disconnect(nodeId: PublicKey) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_disconnect(self.uniffiClonePointer(),
+                                                  FfiConverterTypePublicKey.lower(nodeId), $0)
+    }
     }
 
-    open func eventHandled() throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_event_handled(self.uniffiClonePointer(), $0)
-        }
+    open func eventHandled() throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_event_handled(self.uniffiClonePointer(), $0)
+    }
     }
 
     open func exportOnchainWalletAccountXpub(addressType: AddressType, accountIndex: UInt32) throws -> String {
@@ -2780,13 +2754,12 @@ open class Node:
         })
     }
 
-    open func forceCloseChannel(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, reason: String?) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_force_close_channel(self.uniffiClonePointer(),
-                                                               FfiConverterTypeUserChannelId.lower(userChannelId),
-                                                               FfiConverterTypePublicKey.lower(counterpartyNodeId),
-                                                               FfiConverterOptionString.lower(reason), $0)
-        }
+    open func forceCloseChannel(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, reason: String?) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_force_close_channel(self.uniffiClonePointer(),
+                                                           FfiConverterTypeUserChannelId.lower(userChannelId),
+                                                           FfiConverterTypePublicKey.lower(counterpartyNodeId),
+                                                           FfiConverterOptionString.lower(reason), $0)
+    }
     }
 
     open func getAddressBalance(addressStr: String) throws -> UInt64 {
@@ -2906,6 +2879,12 @@ open class Node:
         })
     }
 
+    open func offlineReceive() -> OfflineReceivePayment {
+        return try! FfiConverterTypeOfflineReceivePayment.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_node_offline_receive(self.uniffiClonePointer(), $0)
+        })
+    }
+
     open func onchainPayment() -> OnchainPayment {
         return try! FfiConverterTypeOnchainPayment.lift(try! rustCall {
             uniffi_ldk_node_fn_method_node_onchain_payment(self.uniffiClonePointer(), $0)
@@ -2941,43 +2920,38 @@ open class Node:
         })
     }
 
-    open func removeAddressTypeFromMonitor(addressType: AddressType) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_remove_address_type_from_monitor(self.uniffiClonePointer(),
-                                                                            FfiConverterTypeAddressType.lower(addressType), $0)
-        }
+    open func removeAddressTypeFromMonitor(addressType: AddressType) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_remove_address_type_from_monitor(self.uniffiClonePointer(),
+                                                                        FfiConverterTypeAddressType.lower(addressType), $0)
+    }
     }
 
-    open func removeOnchainWalletAccount(addressType: AddressType, accountIndex: UInt32) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_remove_onchain_wallet_account(self.uniffiClonePointer(),
-                                                                         FfiConverterTypeAddressType.lower(addressType),
-                                                                         FfiConverterUInt32.lower(accountIndex), $0)
-        }
+    open func removeOnchainWalletAccount(addressType: AddressType, accountIndex: UInt32) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_remove_onchain_wallet_account(self.uniffiClonePointer(),
+                                                                     FfiConverterTypeAddressType.lower(addressType),
+                                                                     FfiConverterUInt32.lower(accountIndex), $0)
+    }
     }
 
-    open func removePayment(paymentId: PaymentId) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_remove_payment(self.uniffiClonePointer(),
-                                                          FfiConverterTypePaymentId.lower(paymentId), $0)
-        }
+    open func removePayment(paymentId: PaymentId) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_remove_payment(self.uniffiClonePointer(),
+                                                      FfiConverterTypePaymentId.lower(paymentId), $0)
+    }
     }
 
-    open func setPrimaryAddressType(addressType: AddressType, seedBytes: [UInt8]) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_set_primary_address_type(self.uniffiClonePointer(),
-                                                                    FfiConverterTypeAddressType.lower(addressType),
-                                                                    FfiConverterSequenceUInt8.lower(seedBytes), $0)
-        }
+    open func setPrimaryAddressType(addressType: AddressType, seedBytes: [UInt8]) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_set_primary_address_type(self.uniffiClonePointer(),
+                                                                FfiConverterTypeAddressType.lower(addressType),
+                                                                FfiConverterSequenceUInt8.lower(seedBytes), $0)
+    }
     }
 
-    open func setPrimaryAddressTypeWithMnemonic(addressType: AddressType, mnemonic: Mnemonic, passphrase: String?) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_set_primary_address_type_with_mnemonic(self.uniffiClonePointer(),
-                                                                                  FfiConverterTypeAddressType.lower(addressType),
-                                                                                  FfiConverterTypeMnemonic.lower(mnemonic),
-                                                                                  FfiConverterOptionString.lower(passphrase), $0)
-        }
+    open func setPrimaryAddressTypeWithMnemonic(addressType: AddressType, mnemonic: Mnemonic, passphrase: String?) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_set_primary_address_type_with_mnemonic(self.uniffiClonePointer(),
+                                                                              FfiConverterTypeAddressType.lower(addressType),
+                                                                              FfiConverterTypeMnemonic.lower(mnemonic),
+                                                                              FfiConverterOptionString.lower(passphrase), $0)
+    }
     }
 
     open func signMessage(msg: [UInt8]) -> String {
@@ -2987,23 +2961,21 @@ open class Node:
         })
     }
 
-    open func spliceIn(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, spliceAmountSats: UInt64) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_splice_in(self.uniffiClonePointer(),
-                                                     FfiConverterTypeUserChannelId.lower(userChannelId),
-                                                     FfiConverterTypePublicKey.lower(counterpartyNodeId),
-                                                     FfiConverterUInt64.lower(spliceAmountSats), $0)
-        }
+    open func spliceIn(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, spliceAmountSats: UInt64) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_splice_in(self.uniffiClonePointer(),
+                                                 FfiConverterTypeUserChannelId.lower(userChannelId),
+                                                 FfiConverterTypePublicKey.lower(counterpartyNodeId),
+                                                 FfiConverterUInt64.lower(spliceAmountSats), $0)
+    }
     }
 
-    open func spliceOut(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, address: Address, spliceAmountSats: UInt64) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_splice_out(self.uniffiClonePointer(),
-                                                      FfiConverterTypeUserChannelId.lower(userChannelId),
-                                                      FfiConverterTypePublicKey.lower(counterpartyNodeId),
-                                                      FfiConverterTypeAddress.lower(address),
-                                                      FfiConverterUInt64.lower(spliceAmountSats), $0)
-        }
+    open func spliceOut(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, address: Address, spliceAmountSats: UInt64) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_splice_out(self.uniffiClonePointer(),
+                                                  FfiConverterTypeUserChannelId.lower(userChannelId),
+                                                  FfiConverterTypePublicKey.lower(counterpartyNodeId),
+                                                  FfiConverterTypeAddress.lower(address),
+                                                  FfiConverterUInt64.lower(spliceAmountSats), $0)
+    }
     }
 
     open func spontaneousPayment() -> SpontaneousPayment {
@@ -3012,10 +2984,9 @@ open class Node:
         })
     }
 
-    open func start() throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_start(self.uniffiClonePointer(), $0)
-        }
+    open func start() throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_start(self.uniffiClonePointer(), $0)
+    }
     }
 
     open func status() -> NodeStatus {
@@ -3024,16 +2995,14 @@ open class Node:
         })
     }
 
-    open func stop() throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_stop(self.uniffiClonePointer(), $0)
-        }
+    open func stop() throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_stop(self.uniffiClonePointer(), $0)
+    }
     }
 
-    open func syncWallets() throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_sync_wallets(self.uniffiClonePointer(), $0)
-        }
+    open func syncWallets() throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_sync_wallets(self.uniffiClonePointer(), $0)
+    }
     }
 
     open func unifiedQrPayment() -> UnifiedQrPayment {
@@ -3042,20 +3011,18 @@ open class Node:
         })
     }
 
-    open func updateChannelConfig(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, channelConfig: ChannelConfig) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_update_channel_config(self.uniffiClonePointer(),
-                                                                 FfiConverterTypeUserChannelId.lower(userChannelId),
-                                                                 FfiConverterTypePublicKey.lower(counterpartyNodeId),
-                                                                 FfiConverterTypeChannelConfig.lower(channelConfig), $0)
-        }
+    open func updateChannelConfig(userChannelId: UserChannelId, counterpartyNodeId: PublicKey, channelConfig: ChannelConfig) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_update_channel_config(self.uniffiClonePointer(),
+                                                             FfiConverterTypeUserChannelId.lower(userChannelId),
+                                                             FfiConverterTypePublicKey.lower(counterpartyNodeId),
+                                                             FfiConverterTypeChannelConfig.lower(channelConfig), $0)
+    }
     }
 
-    open func updateSyncIntervals(intervals: RuntimeSyncIntervals) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_node_update_sync_intervals(self.uniffiClonePointer(),
-                                                                 FfiConverterTypeRuntimeSyncIntervals.lower(intervals), $0)
-        }
+    open func updateSyncIntervals(intervals: RuntimeSyncIntervals) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_node_update_sync_intervals(self.uniffiClonePointer(),
+                                                             FfiConverterTypeRuntimeSyncIntervals.lower(intervals), $0)
+    }
     }
 
     open func verifySignature(msg: [UInt8], sig: String, pkey: PublicKey) -> Bool {
@@ -3155,7 +3122,7 @@ open class Offer:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -3354,6 +3321,142 @@ public func FfiConverterTypeOffer_lower(_ value: Offer) -> UnsafeMutableRawPoint
     return FfiConverterTypeOffer.lower(value)
 }
 
+public protocol OfflineReceivePaymentProtocol: AnyObject {
+    func canReceive(amountMsat: UInt64) throws -> Bool
+
+    func cancel(requestId: String) throws
+
+    func prepare(requestId: String, amountMsat: UInt64, description: String) throws -> OfflineReceiveStatus
+
+    func status(requestId: String) throws -> OfflineReceiveStatus
+}
+
+open class OfflineReceivePayment:
+    OfflineReceivePaymentProtocol
+{
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    public required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public init(noPointer _: NoPointer) {
+        pointer = nil
+    }
+
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_ldk_node_fn_clone_offlinereceivepayment(self.pointer, $0) }
+    }
+
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_ldk_node_fn_free_offlinereceivepayment(pointer, $0) }
+    }
+
+    open func canReceive(amountMsat: UInt64) throws -> Bool {
+        return try FfiConverterBool.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_offlinereceivepayment_can_receive(self.uniffiClonePointer(),
+                                                                        FfiConverterUInt64.lower(amountMsat), $0)
+        })
+    }
+
+    open func cancel(requestId: String) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_offlinereceivepayment_cancel(self.uniffiClonePointer(),
+                                                               FfiConverterString.lower(requestId), $0)
+    }
+    }
+
+    open func prepare(requestId: String, amountMsat: UInt64, description: String) throws -> OfflineReceiveStatus {
+        return try FfiConverterTypeOfflineReceiveStatus.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_offlinereceivepayment_prepare(self.uniffiClonePointer(),
+                                                                    FfiConverterString.lower(requestId),
+                                                                    FfiConverterUInt64.lower(amountMsat),
+                                                                    FfiConverterString.lower(description), $0)
+        })
+    }
+
+    open func status(requestId: String) throws -> OfflineReceiveStatus {
+        return try FfiConverterTypeOfflineReceiveStatus.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_offlinereceivepayment_status(self.uniffiClonePointer(),
+                                                                   FfiConverterString.lower(requestId), $0)
+        })
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfflineReceivePayment: FfiConverter {
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = OfflineReceivePayment
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> OfflineReceivePayment {
+        return OfflineReceivePayment(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: OfflineReceivePayment) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfflineReceivePayment {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if ptr == nil {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: OfflineReceivePayment, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceivePayment_lift(_ pointer: UnsafeMutableRawPointer) throws -> OfflineReceivePayment {
+    return try FfiConverterTypeOfflineReceivePayment.lift(pointer)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceivePayment_lower(_ value: OfflineReceivePayment) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeOfflineReceivePayment.lower(value)
+}
+
 public protocol OnchainPaymentProtocol: AnyObject {
     func accelerateByCpfp(txid: Txid, feeRate: FeeRate?, destinationAddress: Address?) throws -> Txid
 
@@ -3403,7 +3506,7 @@ open class OnchainPayment:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -3579,21 +3682,19 @@ open class OnchainPayment:
         })
     }
 
-    open func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(self.uniffiClonePointer(),
-                                                                                 FfiConverterTypeAddressType.lower(addressType),
-                                                                                 FfiConverterUInt32.lower(index), $0)
-        }
+    open func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(self.uniffiClonePointer(),
+                                                                             FfiConverterTypeAddressType.lower(addressType),
+                                                                             FfiConverterUInt32.lower(index), $0)
+    }
     }
 
-    open func revealReceiveAddressesToAccount(addressType: AddressType, accountIndex: UInt32, index: UInt32) throws {
-        try rustCallWithError(FfiConverterTypeNodeError.lift) {
-            uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to_account(self.uniffiClonePointer(),
-                                                                                         FfiConverterTypeAddressType.lower(addressType),
-                                                                                         FfiConverterUInt32.lower(accountIndex),
-                                                                                         FfiConverterUInt32.lower(index), $0)
-        }
+    open func revealReceiveAddressesToAccount(addressType: AddressType, accountIndex: UInt32, index: UInt32) throws { try rustCallWithError(FfiConverterTypeNodeError.lift) {
+        uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to_account(self.uniffiClonePointer(),
+                                                                                     FfiConverterTypeAddressType.lower(addressType),
+                                                                                     FfiConverterUInt32.lower(accountIndex),
+                                                                                     FfiConverterUInt32.lower(index), $0)
+    }
     }
 
     open func selectUtxosWithAlgorithm(targetAmountSats: UInt64, feeRate: FeeRate?, algorithm: CoinSelectionAlgorithm, utxos: [SpendableUtxo]?) throws -> [SpendableUtxo] {
@@ -3703,7 +3804,7 @@ open class Refund:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -3905,7 +4006,7 @@ open class SpontaneousPayment:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -4056,7 +4157,7 @@ open class UnifiedQrPayment:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -4174,7 +4275,7 @@ open class VssHeaderProvider:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -4288,8 +4389,8 @@ public struct AddressInfo {
     public var address: Address
     public var keychain: KeychainKind
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(index: UInt32, address: Address, keychain: KeychainKind) {
         self.index = index
         self.address = address
@@ -4356,8 +4457,8 @@ public struct AddressTypeBalance {
     public var totalSats: UInt64
     public var spendableSats: UInt64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(totalSats: UInt64, spendableSats: UInt64) {
         self.totalSats = totalSats
         self.spendableSats = spendableSats
@@ -4417,8 +4518,8 @@ public struct AnchorChannelsConfig {
     public var trustedPeersNoReserve: [PublicKey]
     public var perChannelReserveSats: UInt64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(trustedPeersNoReserve: [PublicKey], perChannelReserveSats: UInt64) {
         self.trustedPeersNoReserve = trustedPeersNoReserve
         self.perChannelReserveSats = perChannelReserveSats
@@ -4479,8 +4580,8 @@ public struct BackgroundSyncConfig {
     public var lightningWalletSyncIntervalSecs: UInt64
     public var feeRateCacheUpdateIntervalSecs: UInt64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(onchainWalletSyncIntervalSecs: UInt64, lightningWalletSyncIntervalSecs: UInt64, feeRateCacheUpdateIntervalSecs: UInt64) {
         self.onchainWalletSyncIntervalSecs = onchainWalletSyncIntervalSecs
         self.lightningWalletSyncIntervalSecs = lightningWalletSyncIntervalSecs
@@ -4551,8 +4652,8 @@ public struct BalanceDetails {
     public var lightningBalances: [LightningBalance]
     public var pendingBalancesFromChannelClosures: [PendingSweepBalance]
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(totalOnchainBalanceSats: UInt64, spendableOnchainBalanceSats: UInt64, totalAnchorChannelsReserveSats: UInt64, totalLightningBalanceSats: UInt64, lightningBalances: [LightningBalance], pendingBalancesFromChannelClosures: [PendingSweepBalance]) {
         self.totalOnchainBalanceSats = totalOnchainBalanceSats
         self.spendableOnchainBalanceSats = spendableOnchainBalanceSats
@@ -4640,8 +4741,8 @@ public struct BestBlock {
     public var blockHash: BlockHash
     public var height: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(blockHash: BlockHash, height: UInt32) {
         self.blockHash = blockHash
         self.height = height
@@ -4705,8 +4806,8 @@ public struct ChannelConfig {
     public var forceCloseAvoidanceMaxFeeSatoshis: UInt64
     public var acceptUnderpayingHtlcs: Bool
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(forwardingFeeProportionalMillionths: UInt32, forwardingFeeBaseMsat: UInt32, cltvExpiryDelta: UInt16, maxDustHtlcExposure: MaxDustHtlcExposure, forceCloseAvoidanceMaxFeeSatoshis: UInt64, acceptUnderpayingHtlcs: Bool) {
         self.forwardingFeeProportionalMillionths = forwardingFeeProportionalMillionths
         self.forwardingFeeBaseMsat = forwardingFeeBaseMsat
@@ -4794,8 +4895,8 @@ public struct ChannelDataMigration {
     public var channelManager: [UInt8]?
     public var channelMonitors: [[UInt8]]
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(channelManager: [UInt8]?, channelMonitors: [[UInt8]]) {
         self.channelManager = channelManager
         self.channelMonitors = channelMonitors
@@ -4885,8 +4986,8 @@ public struct ChannelDetails {
     public var config: ChannelConfig
     public var claimableOnCloseSats: UInt64?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(channelId: ChannelId, counterpartyNodeId: PublicKey, fundingTxo: OutPoint?, shortChannelId: UInt64?, outboundScidAlias: UInt64?, inboundScidAlias: UInt64?, channelValueSats: UInt64, unspendablePunishmentReserve: UInt64?, userChannelId: UserChannelId, feerateSatPer1000Weight: UInt32, outboundCapacityMsat: UInt64, inboundCapacityMsat: UInt64, confirmationsRequired: UInt32?, confirmations: UInt32?, isOutbound: Bool, isChannelReady: Bool, isUsable: Bool, isAnnounced: Bool, cltvExpiryDelta: UInt16?, counterpartyUnspendablePunishmentReserve: UInt64, counterpartyOutboundHtlcMinimumMsat: UInt64?, counterpartyOutboundHtlcMaximumMsat: UInt64?, counterpartyForwardingInfoFeeBaseMsat: UInt32?, counterpartyForwardingInfoFeeProportionalMillionths: UInt32?, counterpartyForwardingInfoCltvExpiryDelta: UInt16?, nextOutboundHtlcLimitMsat: UInt64, nextOutboundHtlcMinimumMsat: UInt64, forceCloseSpendDelay: UInt16?, inboundHtlcMinimumMsat: UInt64, inboundHtlcMaximumMsat: UInt64?, config: ChannelConfig, claimableOnCloseSats: UInt64?) {
         self.channelId = channelId
         self.counterpartyNodeId = counterpartyNodeId
@@ -5159,8 +5260,8 @@ public struct ChannelInfo {
     public var twoToOne: ChannelUpdateInfo?
     public var capacitySats: UInt64?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(nodeOne: NodeId, oneToTwo: ChannelUpdateInfo?, nodeTwo: NodeId, twoToOne: ChannelUpdateInfo?, capacitySats: UInt64?) {
         self.nodeOne = nodeOne
         self.oneToTwo = oneToTwo
@@ -5245,8 +5346,8 @@ public struct ChannelUpdateInfo {
     public var htlcMaximumMsat: UInt64
     public var fees: RoutingFees
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(lastUpdate: UInt32, enabled: Bool, cltvExpiryDelta: UInt16, htlcMinimumMsat: UInt64, htlcMaximumMsat: UInt64, fees: RoutingFees) {
         self.lastUpdate = lastUpdate
         self.enabled = enabled
@@ -5347,8 +5448,8 @@ public struct Config {
     public var addressTypesToMonitor: [AddressType]
     public var onchainWalletAccounts: [OnchainWalletAccountConfig]
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(storageDirPath: String, network: Network, listeningAddresses: [SocketAddress]?, announcementAddresses: [SocketAddress]?, nodeAlias: NodeAlias?, trustedPeers0conf: [PublicKey], probingLiquidityLimitMultiplier: UInt64, anchorChannelsConfig: AnchorChannelsConfig?, routeParameters: RouteParametersConfig?, scoringFeeParams: ScoringFeeParameters?, scoringDecayParams: ScoringDecayParameters?, includeUntrustedPendingInSpendable: Bool, addressType: AddressType, addressTypesToMonitor: [AddressType], onchainWalletAccounts: [OnchainWalletAccountConfig]) {
         self.storageDirPath = storageDirPath
         self.network = network
@@ -5499,8 +5600,8 @@ public struct CustomTlvRecord {
     public var typeNum: UInt64
     public var value: [UInt8]
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(typeNum: UInt64, value: [UInt8]) {
         self.typeNum = typeNum
         self.value = value
@@ -5562,8 +5663,8 @@ public struct ElectrumSyncConfig {
     public var additionalWalletFullScanBatchSize: UInt32
     public var additionalWalletFullScanStopGap: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(backgroundSyncConfig: BackgroundSyncConfig?, connectionTimeoutSecs: UInt64, additionalWalletFullScanBatchSize: UInt32, additionalWalletFullScanStopGap: UInt32) {
         self.backgroundSyncConfig = backgroundSyncConfig
         self.connectionTimeoutSecs = connectionTimeoutSecs
@@ -5636,8 +5737,8 @@ public func FfiConverterTypeElectrumSyncConfig_lower(_ value: ElectrumSyncConfig
 public struct EsploraSyncConfig {
     public var backgroundSyncConfig: BackgroundSyncConfig?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(backgroundSyncConfig: BackgroundSyncConfig?) {
         self.backgroundSyncConfig = backgroundSyncConfig
     }
@@ -5690,8 +5791,8 @@ public struct LspFeeLimits {
     public var maxTotalOpeningFeeMsat: UInt64?
     public var maxProportionalOpeningFeePpmMsat: UInt64?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(maxTotalOpeningFeeMsat: UInt64?, maxProportionalOpeningFeePpmMsat: UInt64?) {
         self.maxTotalOpeningFeeMsat = maxTotalOpeningFeeMsat
         self.maxProportionalOpeningFeePpmMsat = maxProportionalOpeningFeePpmMsat
@@ -5754,8 +5855,8 @@ public struct Lsps1Bolt11PaymentInfo {
     public var orderTotalSat: UInt64
     public var invoice: Bolt11Invoice
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(state: Lsps1PaymentState, expiresAt: LspsDateTime, feeTotalSat: UInt64, orderTotalSat: UInt64, invoice: Bolt11Invoice) {
         self.state = state
         self.expiresAt = expiresAt
@@ -5808,8 +5909,8 @@ public struct Lsps1ChannelInfo {
     public var fundingOutpoint: OutPoint
     public var expiresAt: LspsDateTime
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(fundedAt: LspsDateTime, fundingOutpoint: OutPoint, expiresAt: LspsDateTime) {
         self.fundedAt = fundedAt
         self.fundingOutpoint = fundingOutpoint
@@ -5882,8 +5983,8 @@ public struct Lsps1OnchainPaymentInfo {
     public var minFeeFor0conf: FeeRate
     public var refundOnchainAddress: Address?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(state: Lsps1PaymentState, expiresAt: LspsDateTime, feeTotalSat: UInt64, orderTotalSat: UInt64, address: Address, minOnchainPaymentConfirmations: UInt16?, minFeeFor0conf: FeeRate, refundOnchainAddress: Address?) {
         self.state = state
         self.expiresAt = expiresAt
@@ -5949,8 +6050,8 @@ public struct Lsps1OrderParams {
     public var token: String?
     public var announceChannel: Bool
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(lspBalanceSat: UInt64, clientBalanceSat: UInt64, requiredChannelConfirmations: UInt16, fundingConfirmsWithinBlocks: UInt16, channelExpiryBlocks: UInt32, token: String?, announceChannel: Bool) {
         self.lspBalanceSat = lspBalanceSat
         self.clientBalanceSat = clientBalanceSat
@@ -6047,8 +6148,8 @@ public struct Lsps1OrderStatus {
     public var paymentOptions: Lsps1PaymentInfo
     public var channelState: Lsps1ChannelInfo?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(orderId: Lsps1OrderId, orderParams: Lsps1OrderParams, paymentOptions: Lsps1PaymentInfo, channelState: Lsps1ChannelInfo?) {
         self.orderId = orderId
         self.orderParams = orderParams
@@ -6097,8 +6198,8 @@ public struct Lsps1PaymentInfo {
     public var bolt11: Lsps1Bolt11PaymentInfo?
     public var onchain: Lsps1OnchainPaymentInfo?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(bolt11: Lsps1Bolt11PaymentInfo?, onchain: Lsps1OnchainPaymentInfo?) {
         self.bolt11 = bolt11
         self.onchain = onchain
@@ -6149,8 +6250,8 @@ public struct Lsps2ServiceConfig {
     public var maxPaymentSizeMsat: UInt64
     public var clientTrustsLsp: Bool
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(requireToken: String?, advertiseService: Bool, channelOpeningFeePpm: UInt32, channelOverProvisioningPpm: UInt32, minChannelOpeningFeeMsat: UInt64, minChannelLifetime: UInt32, maxClientToSelfDelay: UInt32, minPaymentSizeMsat: UInt64, maxPaymentSizeMsat: UInt64, clientTrustsLsp: Bool) {
         self.requireToken = requireToken
         self.advertiseService = advertiseService
@@ -6268,8 +6369,8 @@ public struct LogRecord {
     public var modulePath: String
     public var line: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(level: LogLevel, args: String, modulePath: String, line: UInt32) {
         self.level = level
         self.args = args
@@ -6344,8 +6445,8 @@ public struct NodeAnnouncementInfo {
     public var alias: String
     public var addresses: [SocketAddress]
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(lastUpdate: UInt32, alias: String, addresses: [SocketAddress]) {
         self.lastUpdate = lastUpdate
         self.alias = alias
@@ -6412,8 +6513,8 @@ public struct NodeInfo {
     public var channels: [UInt64]
     public var announcementInfo: NodeAnnouncementInfo?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(channels: [UInt64], announcementInfo: NodeAnnouncementInfo?) {
         self.channels = channels
         self.announcementInfo = announcementInfo
@@ -6480,8 +6581,8 @@ public struct NodeStatus {
     public var latestNodeAnnouncementBroadcastTimestamp: UInt64?
     public var latestChannelMonitorArchivalHeight: UInt32?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(isRunning: Bool, currentBestBlock: BestBlock, latestLightningWalletSyncTimestamp: UInt64?, latestOnchainWalletSyncTimestamp: UInt64?, latestFeeRateCacheUpdateTimestamp: UInt64?, latestRgsSnapshotTimestamp: UInt64?, latestPathfindingScoresSyncTimestamp: UInt64?, latestNodeAnnouncementBroadcastTimestamp: UInt64?, latestChannelMonitorArchivalHeight: UInt32?) {
         self.isRunning = isRunning
         self.currentBestBlock = currentBestBlock
@@ -6586,12 +6687,214 @@ public func FfiConverterTypeNodeStatus_lower(_ value: NodeStatus) -> RustBuffer 
     return FfiConverterTypeNodeStatus.lower(value)
 }
 
+public struct OfflineReceiveConfig {
+    public var settlementNodeId: PublicKey
+    public var witnesses: [OfflineReceiveWitnessConfig]
+    public var invoiceExpirySeconds: UInt32
+    public var invoiceSafetyMarginSeconds: UInt32
+    public var settlementDeadlineBlocks: UInt32
+    public var deadlineSafetyMarginBlocks: UInt32
+    public var claimMarginBlocks: UInt32
+    public var voucherExpiryBlocks: UInt32
+    public var feeBaseMsat: UInt32
+    public var feeProportionalMillionths: UInt32
+    public var pollIntervalSecs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(settlementNodeId: PublicKey, witnesses: [OfflineReceiveWitnessConfig], invoiceExpirySeconds: UInt32, invoiceSafetyMarginSeconds: UInt32, settlementDeadlineBlocks: UInt32, deadlineSafetyMarginBlocks: UInt32, claimMarginBlocks: UInt32, voucherExpiryBlocks: UInt32, feeBaseMsat: UInt32, feeProportionalMillionths: UInt32, pollIntervalSecs: UInt64) {
+        self.settlementNodeId = settlementNodeId
+        self.witnesses = witnesses
+        self.invoiceExpirySeconds = invoiceExpirySeconds
+        self.invoiceSafetyMarginSeconds = invoiceSafetyMarginSeconds
+        self.settlementDeadlineBlocks = settlementDeadlineBlocks
+        self.deadlineSafetyMarginBlocks = deadlineSafetyMarginBlocks
+        self.claimMarginBlocks = claimMarginBlocks
+        self.voucherExpiryBlocks = voucherExpiryBlocks
+        self.feeBaseMsat = feeBaseMsat
+        self.feeProportionalMillionths = feeProportionalMillionths
+        self.pollIntervalSecs = pollIntervalSecs
+    }
+}
+
+extension OfflineReceiveConfig: Equatable, Hashable {
+    public static func == (lhs: OfflineReceiveConfig, rhs: OfflineReceiveConfig) -> Bool {
+        if lhs.settlementNodeId != rhs.settlementNodeId {
+            return false
+        }
+        if lhs.witnesses != rhs.witnesses {
+            return false
+        }
+        if lhs.invoiceExpirySeconds != rhs.invoiceExpirySeconds {
+            return false
+        }
+        if lhs.invoiceSafetyMarginSeconds != rhs.invoiceSafetyMarginSeconds {
+            return false
+        }
+        if lhs.settlementDeadlineBlocks != rhs.settlementDeadlineBlocks {
+            return false
+        }
+        if lhs.deadlineSafetyMarginBlocks != rhs.deadlineSafetyMarginBlocks {
+            return false
+        }
+        if lhs.claimMarginBlocks != rhs.claimMarginBlocks {
+            return false
+        }
+        if lhs.voucherExpiryBlocks != rhs.voucherExpiryBlocks {
+            return false
+        }
+        if lhs.feeBaseMsat != rhs.feeBaseMsat {
+            return false
+        }
+        if lhs.feeProportionalMillionths != rhs.feeProportionalMillionths {
+            return false
+        }
+        if lhs.pollIntervalSecs != rhs.pollIntervalSecs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(settlementNodeId)
+        hasher.combine(witnesses)
+        hasher.combine(invoiceExpirySeconds)
+        hasher.combine(invoiceSafetyMarginSeconds)
+        hasher.combine(settlementDeadlineBlocks)
+        hasher.combine(deadlineSafetyMarginBlocks)
+        hasher.combine(claimMarginBlocks)
+        hasher.combine(voucherExpiryBlocks)
+        hasher.combine(feeBaseMsat)
+        hasher.combine(feeProportionalMillionths)
+        hasher.combine(pollIntervalSecs)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfflineReceiveConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfflineReceiveConfig {
+        return
+            try OfflineReceiveConfig(
+                settlementNodeId: FfiConverterTypePublicKey.read(from: &buf),
+                witnesses: FfiConverterSequenceTypeOfflineReceiveWitnessConfig.read(from: &buf),
+                invoiceExpirySeconds: FfiConverterUInt32.read(from: &buf),
+                invoiceSafetyMarginSeconds: FfiConverterUInt32.read(from: &buf),
+                settlementDeadlineBlocks: FfiConverterUInt32.read(from: &buf),
+                deadlineSafetyMarginBlocks: FfiConverterUInt32.read(from: &buf),
+                claimMarginBlocks: FfiConverterUInt32.read(from: &buf),
+                voucherExpiryBlocks: FfiConverterUInt32.read(from: &buf),
+                feeBaseMsat: FfiConverterUInt32.read(from: &buf),
+                feeProportionalMillionths: FfiConverterUInt32.read(from: &buf),
+                pollIntervalSecs: FfiConverterUInt64.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: OfflineReceiveConfig, into buf: inout [UInt8]) {
+        FfiConverterTypePublicKey.write(value.settlementNodeId, into: &buf)
+        FfiConverterSequenceTypeOfflineReceiveWitnessConfig.write(value.witnesses, into: &buf)
+        FfiConverterUInt32.write(value.invoiceExpirySeconds, into: &buf)
+        FfiConverterUInt32.write(value.invoiceSafetyMarginSeconds, into: &buf)
+        FfiConverterUInt32.write(value.settlementDeadlineBlocks, into: &buf)
+        FfiConverterUInt32.write(value.deadlineSafetyMarginBlocks, into: &buf)
+        FfiConverterUInt32.write(value.claimMarginBlocks, into: &buf)
+        FfiConverterUInt32.write(value.voucherExpiryBlocks, into: &buf)
+        FfiConverterUInt32.write(value.feeBaseMsat, into: &buf)
+        FfiConverterUInt32.write(value.feeProportionalMillionths, into: &buf)
+        FfiConverterUInt64.write(value.pollIntervalSecs, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceiveConfig_lift(_ buf: RustBuffer) throws -> OfflineReceiveConfig {
+    return try FfiConverterTypeOfflineReceiveConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceiveConfig_lower(_ value: OfflineReceiveConfig) -> RustBuffer {
+    return FfiConverterTypeOfflineReceiveConfig.lower(value)
+}
+
+public struct OfflineReceiveWitnessConfig {
+    public var nodeId: PublicKey
+    public var retentionBlocks: UInt32
+    public var minimumReceipts: UInt8
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(nodeId: PublicKey, retentionBlocks: UInt32, minimumReceipts: UInt8) {
+        self.nodeId = nodeId
+        self.retentionBlocks = retentionBlocks
+        self.minimumReceipts = minimumReceipts
+    }
+}
+
+extension OfflineReceiveWitnessConfig: Equatable, Hashable {
+    public static func == (lhs: OfflineReceiveWitnessConfig, rhs: OfflineReceiveWitnessConfig) -> Bool {
+        if lhs.nodeId != rhs.nodeId {
+            return false
+        }
+        if lhs.retentionBlocks != rhs.retentionBlocks {
+            return false
+        }
+        if lhs.minimumReceipts != rhs.minimumReceipts {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(nodeId)
+        hasher.combine(retentionBlocks)
+        hasher.combine(minimumReceipts)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfflineReceiveWitnessConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfflineReceiveWitnessConfig {
+        return
+            try OfflineReceiveWitnessConfig(
+                nodeId: FfiConverterTypePublicKey.read(from: &buf),
+                retentionBlocks: FfiConverterUInt32.read(from: &buf),
+                minimumReceipts: FfiConverterUInt8.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: OfflineReceiveWitnessConfig, into buf: inout [UInt8]) {
+        FfiConverterTypePublicKey.write(value.nodeId, into: &buf)
+        FfiConverterUInt32.write(value.retentionBlocks, into: &buf)
+        FfiConverterUInt8.write(value.minimumReceipts, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceiveWitnessConfig_lift(_ buf: RustBuffer) throws -> OfflineReceiveWitnessConfig {
+    return try FfiConverterTypeOfflineReceiveWitnessConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceiveWitnessConfig_lower(_ value: OfflineReceiveWitnessConfig) -> RustBuffer {
+    return FfiConverterTypeOfflineReceiveWitnessConfig.lower(value)
+}
+
 public struct OnchainWalletAccount {
     public var addressType: AddressType
     public var accountIndex: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(addressType: AddressType, accountIndex: UInt32) {
         self.addressType = addressType
         self.accountIndex = accountIndex
@@ -6652,8 +6955,8 @@ public struct OnchainWalletAccountConfig {
     public var accountIndex: UInt32
     public var xpub: String
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(addressType: AddressType, accountIndex: UInt32, xpub: String) {
         self.addressType = addressType
         self.accountIndex = accountIndex
@@ -6720,8 +7023,8 @@ public struct OutPoint {
     public var txid: Txid
     public var vout: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(txid: Txid, vout: UInt32) {
         self.txid = txid
         self.vout = vout
@@ -6786,8 +7089,8 @@ public struct PaymentDetails {
     public var status: PaymentStatus
     public var latestUpdateTimestamp: UInt64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(id: PaymentId, kind: PaymentKind, amountMsat: UInt64?, feePaidMsat: UInt64?, direction: PaymentDirection, status: PaymentStatus, latestUpdateTimestamp: UInt64) {
         self.id = id
         self.kind = kind
@@ -6884,8 +7187,8 @@ public struct PeerDetails {
     public var isPersisted: Bool
     public var isConnected: Bool
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(nodeId: PublicKey, address: SocketAddress, isPersisted: Bool, isConnected: Bool) {
         self.nodeId = nodeId
         self.address = address
@@ -6959,8 +7262,8 @@ public struct ProbeHandle {
     public var paymentHash: PaymentHash
     public var paymentId: PaymentId
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(paymentHash: PaymentHash, paymentId: PaymentId) {
         self.paymentHash = paymentHash
         self.paymentId = paymentId
@@ -7024,8 +7327,8 @@ public struct RouteHintHop {
     public var htlcMaximumMsat: UInt64?
     public var fees: RoutingFees
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(srcNodeId: PublicKey, shortChannelId: UInt64, cltvExpiryDelta: UInt16, htlcMinimumMsat: UInt64?, htlcMaximumMsat: UInt64?, fees: RoutingFees) {
         self.srcNodeId = srcNodeId
         self.shortChannelId = shortChannelId
@@ -7115,8 +7418,8 @@ public struct RouteParametersConfig {
     public var maxPathCount: UInt8
     public var maxChannelSaturationPowerOfHalf: UInt8
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(maxTotalRoutingFeeMsat: UInt64?, maxTotalCltvExpiryDelta: UInt32, maxPathCount: UInt8, maxChannelSaturationPowerOfHalf: UInt8) {
         self.maxTotalRoutingFeeMsat = maxTotalRoutingFeeMsat
         self.maxTotalCltvExpiryDelta = maxTotalCltvExpiryDelta
@@ -7190,8 +7493,8 @@ public struct RoutingFees {
     public var baseMsat: UInt32
     public var proportionalMillionths: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(baseMsat: UInt32, proportionalMillionths: UInt32) {
         self.baseMsat = baseMsat
         self.proportionalMillionths = proportionalMillionths
@@ -7252,8 +7555,8 @@ public struct RuntimeSyncIntervals {
     public var lightningWalletSyncIntervalSecs: UInt64
     public var feeRateCacheUpdateIntervalSecs: UInt64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(onchainWalletSyncIntervalSecs: UInt64, lightningWalletSyncIntervalSecs: UInt64, feeRateCacheUpdateIntervalSecs: UInt64) {
         self.onchainWalletSyncIntervalSecs = onchainWalletSyncIntervalSecs
         self.lightningWalletSyncIntervalSecs = lightningWalletSyncIntervalSecs
@@ -7320,8 +7623,8 @@ public struct ScoringDecayParameters {
     public var historicalNoUpdatesHalfLifeSecs: UInt64
     public var liquidityOffsetHalfLifeSecs: UInt64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(historicalNoUpdatesHalfLifeSecs: UInt64, liquidityOffsetHalfLifeSecs: UInt64) {
         self.historicalNoUpdatesHalfLifeSecs = historicalNoUpdatesHalfLifeSecs
         self.liquidityOffsetHalfLifeSecs = liquidityOffsetHalfLifeSecs
@@ -7389,8 +7692,8 @@ public struct ScoringFeeParameters {
     public var linearSuccessProbability: Bool
     public var probingDiversityPenaltyMsat: UInt64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(basePenaltyMsat: UInt64, basePenaltyAmountMultiplierMsat: UInt64, liquidityPenaltyMultiplierMsat: UInt64, liquidityPenaltyAmountMultiplierMsat: UInt64, historicalLiquidityPenaltyMultiplierMsat: UInt64, historicalLiquidityPenaltyAmountMultiplierMsat: UInt64, antiProbingPenaltyMsat: UInt64, consideredImpossiblePenaltyMsat: UInt64, linearSuccessProbability: Bool, probingDiversityPenaltyMsat: UInt64) {
         self.basePenaltyMsat = basePenaltyMsat
         self.basePenaltyAmountMultiplierMsat = basePenaltyAmountMultiplierMsat
@@ -7506,8 +7809,8 @@ public struct SpendableUtxo {
     public var outpoint: OutPoint
     public var valueSats: UInt64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(outpoint: OutPoint, valueSats: UInt64) {
         self.outpoint = outpoint
         self.valueSats = valueSats
@@ -7568,8 +7871,8 @@ public struct TransactionDetails {
     public var inputs: [TxInput]
     public var outputs: [TxOutput]
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(amountSats: Int64, inputs: [TxInput], outputs: [TxOutput]) {
         self.amountSats = amountSats
         self.inputs = inputs
@@ -7639,8 +7942,8 @@ public struct TxInput {
     public var witness: [String]
     public var sequence: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(txid: Txid, vout: UInt32, scriptsig: String, witness: [String], sequence: UInt32) {
         self.txid = txid
         self.vout = vout
@@ -7724,8 +8027,8 @@ public struct TxOutput {
     public var value: Int64
     public var n: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(scriptpubkey: String, scriptpubkeyType: String?, scriptpubkeyAddress: String?, value: Int64, n: UInt32) {
         self.scriptpubkey = scriptpubkey
         self.scriptpubkeyType = scriptpubkeyType
@@ -7986,8 +8289,10 @@ extension BalanceSource: Equatable, Hashable {}
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum Bolt11InvoiceDescription {
-    case hash(hash: String)
-    case direct(description: String)
+    case hash(hash: String
+    )
+    case direct(description: String
+    )
 }
 
 #if swift(>=5.8)
@@ -7999,9 +8304,11 @@ public struct FfiConverterTypeBolt11InvoiceDescription: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Bolt11InvoiceDescription {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        case 1: return try .hash(hash: FfiConverterString.read(from: &buf))
+        case 1: return try .hash(hash: FfiConverterString.read(from: &buf)
+            )
 
-        case 2: return try .direct(description: FfiConverterString.read(from: &buf))
+        case 2: return try .direct(description: FfiConverterString.read(from: &buf)
+            )
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -8070,6 +8377,8 @@ public enum BuildError {
     case NetworkMismatch(message: String)
 
     case AsyncPaymentsConfigMismatch(message: String)
+
+    case InvalidOfflineReceiveConfig(message: String)
 }
 
 #if swift(>=5.8)
@@ -8149,6 +8458,10 @@ public struct FfiConverterTypeBuildError: FfiConverterRustBuffer {
                 message: FfiConverterString.read(from: &buf)
             )
 
+        case 18: return try .InvalidOfflineReceiveConfig(
+                message: FfiConverterString.read(from: &buf)
+            )
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -8189,6 +8502,8 @@ public struct FfiConverterTypeBuildError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(16))
         case .AsyncPaymentsConfigMismatch(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(17))
+        case .InvalidOfflineReceiveConfig(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(18))
         }
     }
 }
@@ -8205,20 +8520,23 @@ extension BuildError: Foundation.LocalizedError {
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum ClosureReason {
-    case counterpartyForceClosed(peerMsg: UntrustedString)
+    case counterpartyForceClosed(peerMsg: UntrustedString
+    )
     case holderForceClosed(broadcastedLatestTxn: Bool?, message: String)
     case legacyCooperativeClosure
     case counterpartyInitiatedCooperativeClosure
     case locallyInitiatedCooperativeClosure
     case commitmentTxConfirmed
     case fundingTimedOut
-    case processingError(err: String)
+    case processingError(err: String
+    )
     case disconnectedPeer
     case outdatedChannelManager
     case counterpartyCoopClosedUnfundedChannel
     case locallyCoopClosedUnfundedChannel
     case fundingBatchClosure
-    case htlCsTimedOut(paymentHash: PaymentHash?)
+    case htlCsTimedOut(paymentHash: PaymentHash?
+    )
     case peerFeerateTooLow(peerFeerateSatPerKw: UInt32, requiredFeerateSatPerKw: UInt32)
 }
 
@@ -8231,7 +8549,8 @@ public struct FfiConverterTypeClosureReason: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClosureReason {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        case 1: return try .counterpartyForceClosed(peerMsg: FfiConverterTypeUntrustedString.read(from: &buf))
+        case 1: return try .counterpartyForceClosed(peerMsg: FfiConverterTypeUntrustedString.read(from: &buf)
+            )
 
         case 2: return try .holderForceClosed(broadcastedLatestTxn: FfiConverterOptionBool.read(from: &buf), message: FfiConverterString.read(from: &buf))
 
@@ -8245,7 +8564,8 @@ public struct FfiConverterTypeClosureReason: FfiConverterRustBuffer {
 
         case 7: return .fundingTimedOut
 
-        case 8: return try .processingError(err: FfiConverterString.read(from: &buf))
+        case 8: return try .processingError(err: FfiConverterString.read(from: &buf)
+            )
 
         case 9: return .disconnectedPeer
 
@@ -8257,7 +8577,8 @@ public struct FfiConverterTypeClosureReason: FfiConverterRustBuffer {
 
         case 13: return .fundingBatchClosure
 
-        case 14: return try .htlCsTimedOut(paymentHash: FfiConverterOptionTypePaymentHash.read(from: &buf))
+        case 14: return try .htlCsTimedOut(paymentHash: FfiConverterOptionTypePaymentHash.read(from: &buf)
+            )
 
         case 15: return try .peerFeerateTooLow(peerFeerateSatPerKw: FfiConverterUInt32.read(from: &buf), requiredFeerateSatPerKw: FfiConverterUInt32.read(from: &buf))
 
@@ -8546,8 +8867,10 @@ public enum Event {
     case onchainTransactionConfirmed(txid: Txid, blockHash: BlockHash, blockHeight: UInt32, confirmationTime: UInt64, details: TransactionDetails)
     case onchainTransactionReceived(txid: Txid, details: TransactionDetails)
     case onchainTransactionReplaced(txid: Txid, conflicts: [Txid])
-    case onchainTransactionReorged(txid: Txid)
-    case onchainTransactionEvicted(txid: Txid)
+    case onchainTransactionReorged(txid: Txid
+    )
+    case onchainTransactionEvicted(txid: Txid
+    )
     case syncProgress(syncType: SyncType, progressPercent: UInt8, currentBlockHeight: UInt32, targetBlockHeight: UInt32)
     case syncCompleted(syncType: SyncType, syncedBlockHeight: UInt32)
     case balanceChanged(oldSpendableOnchainBalanceSats: UInt64, newSpendableOnchainBalanceSats: UInt64, oldTotalOnchainBalanceSats: UInt64, newTotalOnchainBalanceSats: UInt64, oldTotalLightningBalanceSats: UInt64, newTotalLightningBalanceSats: UInt64)
@@ -8592,9 +8915,11 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
 
         case 15: return try .onchainTransactionReplaced(txid: FfiConverterTypeTxid.read(from: &buf), conflicts: FfiConverterSequenceTypeTxid.read(from: &buf))
 
-        case 16: return try .onchainTransactionReorged(txid: FfiConverterTypeTxid.read(from: &buf))
+        case 16: return try .onchainTransactionReorged(txid: FfiConverterTypeTxid.read(from: &buf)
+            )
 
-        case 17: return try .onchainTransactionEvicted(txid: FfiConverterTypeTxid.read(from: &buf))
+        case 17: return try .onchainTransactionEvicted(txid: FfiConverterTypeTxid.read(from: &buf)
+            )
 
         case 18: return try .syncProgress(syncType: FfiConverterTypeSyncType.read(from: &buf), progressPercent: FfiConverterUInt8.read(from: &buf), currentBlockHeight: FfiConverterUInt32.read(from: &buf), targetBlockHeight: FfiConverterUInt32.read(from: &buf))
 
@@ -9063,8 +9388,10 @@ extension LogLevel: Equatable, Hashable {}
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum MaxDustHtlcExposure {
-    case fixedLimit(limitMsat: UInt64)
-    case feeRateMultiplier(multiplier: UInt64)
+    case fixedLimit(limitMsat: UInt64
+    )
+    case feeRateMultiplier(multiplier: UInt64
+    )
 }
 
 #if swift(>=5.8)
@@ -9076,9 +9403,11 @@ public struct FfiConverterTypeMaxDustHTLCExposure: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MaxDustHtlcExposure {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        case 1: return try .fixedLimit(limitMsat: FfiConverterUInt64.read(from: &buf))
+        case 1: return try .fixedLimit(limitMsat: FfiConverterUInt64.read(from: &buf)
+            )
 
-        case 2: return try .feeRateMultiplier(multiplier: FfiConverterUInt64.read(from: &buf))
+        case 2: return try .feeRateMultiplier(multiplier: FfiConverterUInt64.read(from: &buf)
+            )
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -9313,6 +9642,16 @@ public enum NodeError {
     case OnchainWalletAccountNotRegistered(message: String)
 
     case InvalidSeedBytes(message: String)
+
+    case OfflineReceiveDisabled(message: String)
+
+    case OfflineReceiveUnavailable(message: String)
+
+    case OfflineReceiveIneligible(message: String)
+
+    case OfflineReceiveRequestNotFound(message: String)
+
+    case OfflineReceiveRequestConflict(message: String)
 }
 
 #if swift(>=5.8)
@@ -9596,6 +9935,26 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
                 message: FfiConverterString.read(from: &buf)
             )
 
+        case 69: return try .OfflineReceiveDisabled(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 70: return try .OfflineReceiveUnavailable(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 71: return try .OfflineReceiveIneligible(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 72: return try .OfflineReceiveRequestNotFound(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 73: return try .OfflineReceiveRequestConflict(
+                message: FfiConverterString.read(from: &buf)
+            )
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -9738,6 +10097,16 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(67))
         case .InvalidSeedBytes(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(68))
+        case .OfflineReceiveDisabled(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(69))
+        case .OfflineReceiveUnavailable(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(70))
+        case .OfflineReceiveIneligible(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(71))
+        case .OfflineReceiveRequestNotFound(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(72))
+        case .OfflineReceiveRequestConflict(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(73))
         }
     }
 }
@@ -9754,7 +10123,8 @@ extension NodeError: Foundation.LocalizedError {
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum OfferAmount {
-    case bitcoin(amountMsats: UInt64)
+    case bitcoin(amountMsats: UInt64
+    )
     case currency(iso4217Code: String, amount: UInt64)
 }
 
@@ -9767,7 +10137,8 @@ public struct FfiConverterTypeOfferAmount: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfferAmount {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        case 1: return try .bitcoin(amountMsats: FfiConverterUInt64.read(from: &buf))
+        case 1: return try .bitcoin(amountMsats: FfiConverterUInt64.read(from: &buf)
+            )
 
         case 2: return try .currency(iso4217Code: FfiConverterString.read(from: &buf), amount: FfiConverterUInt64.read(from: &buf))
 
@@ -9804,6 +10175,149 @@ public func FfiConverterTypeOfferAmount_lower(_ value: OfferAmount) -> RustBuffe
 }
 
 extension OfferAmount: Equatable, Hashable {}
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum OfflineReceiveOutcome {
+    case fulfilled
+    case failed
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfflineReceiveOutcome: FfiConverterRustBuffer {
+    typealias SwiftType = OfflineReceiveOutcome
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfflineReceiveOutcome {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        case 1: return .fulfilled
+
+        case 2: return .failed
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: OfflineReceiveOutcome, into buf: inout [UInt8]) {
+        switch value {
+        case .fulfilled:
+            writeInt(&buf, Int32(1))
+
+        case .failed:
+            writeInt(&buf, Int32(2))
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceiveOutcome_lift(_ buf: RustBuffer) throws -> OfflineReceiveOutcome {
+    return try FfiConverterTypeOfflineReceiveOutcome.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceiveOutcome_lower(_ value: OfflineReceiveOutcome) -> RustBuffer {
+    return FfiConverterTypeOfflineReceiveOutcome.lower(value)
+}
+
+extension OfflineReceiveOutcome: Equatable, Hashable {}
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum OfflineReceiveStatus {
+    case preparing
+    case awaitingActivation
+    case awaitingWitnesses
+    case ready(bolt11: String
+    )
+    case expired
+    case settled(outcome: OfflineReceiveOutcome
+    )
+    case failed(reason: String
+    )
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfflineReceiveStatus: FfiConverterRustBuffer {
+    typealias SwiftType = OfflineReceiveStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfflineReceiveStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        case 1: return .preparing
+
+        case 2: return .awaitingActivation
+
+        case 3: return .awaitingWitnesses
+
+        case 4: return try .ready(bolt11: FfiConverterString.read(from: &buf)
+            )
+
+        case 5: return .expired
+
+        case 6: return try .settled(outcome: FfiConverterTypeOfflineReceiveOutcome.read(from: &buf)
+            )
+
+        case 7: return try .failed(reason: FfiConverterString.read(from: &buf)
+            )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: OfflineReceiveStatus, into buf: inout [UInt8]) {
+        switch value {
+        case .preparing:
+            writeInt(&buf, Int32(1))
+
+        case .awaitingActivation:
+            writeInt(&buf, Int32(2))
+
+        case .awaitingWitnesses:
+            writeInt(&buf, Int32(3))
+
+        case let .ready(bolt11):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(bolt11, into: &buf)
+
+        case .expired:
+            writeInt(&buf, Int32(5))
+
+        case let .settled(outcome):
+            writeInt(&buf, Int32(6))
+            FfiConverterTypeOfflineReceiveOutcome.write(outcome, into: &buf)
+
+        case let .failed(reason):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(reason, into: &buf)
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceiveStatus_lift(_ buf: RustBuffer) throws -> OfflineReceiveStatus {
+    return try FfiConverterTypeOfflineReceiveStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfflineReceiveStatus_lower(_ value: OfflineReceiveStatus) -> RustBuffer {
+    return FfiConverterTypeOfflineReceiveStatus.lower(value)
+}
+
+extension OfflineReceiveStatus: Equatable, Hashable {}
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
@@ -10191,9 +10705,12 @@ extension PendingSweepBalance: Equatable, Hashable {}
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum QrPaymentResult {
-    case onchain(txid: Txid)
-    case bolt11(paymentId: PaymentId)
-    case bolt12(paymentId: PaymentId)
+    case onchain(txid: Txid
+    )
+    case bolt11(paymentId: PaymentId
+    )
+    case bolt12(paymentId: PaymentId
+    )
 }
 
 #if swift(>=5.8)
@@ -10205,11 +10722,14 @@ public struct FfiConverterTypeQrPaymentResult: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> QrPaymentResult {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        case 1: return try .onchain(txid: FfiConverterTypeTxid.read(from: &buf))
+        case 1: return try .onchain(txid: FfiConverterTypeTxid.read(from: &buf)
+            )
 
-        case 2: return try .bolt11(paymentId: FfiConverterTypePaymentId.read(from: &buf))
+        case 2: return try .bolt11(paymentId: FfiConverterTypePaymentId.read(from: &buf)
+            )
 
-        case 3: return try .bolt12(paymentId: FfiConverterTypePaymentId.read(from: &buf))
+        case 3: return try .bolt12(paymentId: FfiConverterTypePaymentId.read(from: &buf)
+            )
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -11694,6 +12214,31 @@ private struct FfiConverterSequenceTypeCustomTlvRecord: FfiConverterRustBuffer {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterSequenceTypeOfflineReceiveWitnessConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [OfflineReceiveWitnessConfig]
+
+    static func write(_ value: [OfflineReceiveWitnessConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOfflineReceiveWitnessConfig.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OfflineReceiveWitnessConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OfflineReceiveWitnessConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeOfflineReceiveWitnessConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceTypeOnchainWalletAccount: FfiConverterRustBuffer {
     typealias SwiftType = [OnchainWalletAccount]
 
@@ -12992,8 +13537,8 @@ private func uniffiRustCallAsync<F, T>(
     ))
 }
 
-/// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
-/// lift the return value or error and resume the suspended function.
+// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
+// lift the return value or error and resume the suspended function.
 private func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
     if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
         continuation.resume(returning: pollResult)
@@ -13004,13 +13549,15 @@ private func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) 
 
 public func batterySavingSyncIntervals() -> RuntimeSyncIntervals {
     return try! FfiConverterTypeRuntimeSyncIntervals.lift(try! rustCall {
-        uniffi_ldk_node_fn_func_battery_saving_sync_intervals($0)
+        uniffi_ldk_node_fn_func_battery_saving_sync_intervals($0
+        )
     })
 }
 
 public func defaultConfig() -> Config {
     return try! FfiConverterTypeConfig.lift(try! rustCall {
-        uniffi_ldk_node_fn_func_default_config($0)
+        uniffi_ldk_node_fn_func_default_config($0
+        )
     })
 }
 
@@ -13037,8 +13584,8 @@ private enum InitializationResult {
     case apiChecksumMismatch
 }
 
-/// Use a global variable to perform the versioning checks. Swift ensures that
-/// the code inside is only computed once.
+// Use a global variable to perform the versioning checks. Swift ensures that
+// the code inside is only computed once.
 private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
@@ -13323,6 +13870,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_builder_set_node_alias() != 18342 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_builder_set_offline_receive_config() != 21507 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source() != 63501 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13461,6 +14011,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_node_node_id() != 51489 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_node_offline_receive() != 26817 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_node_onchain_payment() != 6092 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13561,6 +14114,18 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_offer_supports_chain() != 2135 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_offlinereceivepayment_can_receive() != 24415 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_offlinereceivepayment_cancel() != 58318 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_offlinereceivepayment_prepare() != 20798 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_offlinereceivepayment_status() != 43684 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954 {

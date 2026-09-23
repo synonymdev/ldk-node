@@ -37,6 +37,7 @@ const MAX_TRANSPORT_MESSAGES_PER_PASS: usize = 64;
 /// The single voucher slot of a one-amount Variant D request.
 const SLOT: u16 = 1;
 
+#[derive(Debug, PartialEq, Eq)]
 enum Verdict {
 	Wait,
 	Fail(String),
@@ -59,6 +60,16 @@ fn verdict_request(error: &RequestStoreError) -> Verdict {
 		| RequestStoreError::Uncertain
 		| RequestStoreError::Payment(crate::data_store::ffor::FFORPaymentError::Storage) => Verdict::Wait,
 		other => Verdict::Fail(format!("request store: {other:?}")),
+	}
+}
+
+/// Native reports a missing counterparty `channel_update` (no forwarding terms for the route
+/// hint) and stale or not yet retained route evidence with the same `InvalidInvoice` as a
+/// genuinely unusable invoice. Both are retried with fresh evidence; the deadline bounds the wait.
+fn verdict_issuance(error: &RequestStoreError) -> Verdict {
+	match error {
+		RequestStoreError::Native(FFORReceiverError::InvalidInvoice) => Verdict::Wait,
+		other => verdict_request(other),
 	}
 }
 
@@ -424,7 +435,14 @@ impl FforReceiverRuntime {
 		match state.requests.issue_invoice(&client_id, self.invoice_policy(), &route) {
 			Ok(InvoiceProgress::Retained) => {},
 			Ok(InvoiceProgress::AwaitingPersistence) => return Err(Verdict::Wait),
-			Err(error) => return Err(verdict_request(&error)),
+			Err(RequestStoreError::Native(FFORReceiverError::InvalidInvoice)) => {
+				log_debug!(
+					self.logger,
+					"Native invoice binding deferred: counterparty channel_update or route evidence not usable yet"
+				);
+				return Err(Verdict::Wait);
+			},
+			Err(error) => return Err(verdict_issuance(&error)),
 		}
 		let handle = match state.requests.confirmed_invoice(&client_id) {
 			Ok(Some(handle)) => handle,
@@ -646,5 +664,27 @@ impl FforReceiverRuntime {
 	) -> Result<Option<(OutcomeIntent, Event)>, RuntimeError> {
 		let preimage = self.known_preimage(state, intent);
 		credit_intent(&state.ledger, &self.payments, &self.event_queue, intent, preimage)
+	}
+}
+
+#[cfg(test)]
+mod verdict_tests {
+	use lightning::ln::ffor::FFORReceiverError;
+
+	use super::{verdict_issuance, Verdict};
+	use crate::ffor::request_store::RequestStoreError;
+
+	#[test]
+	fn invoice_binding_without_counterparty_terms_waits_until_the_deadline() {
+		assert_eq!(
+			verdict_issuance(&RequestStoreError::Native(FFORReceiverError::InvalidInvoice)),
+			Verdict::Wait
+		);
+		assert!(matches!(
+			verdict_issuance(&RequestStoreError::Native(FFORReceiverError::AlreadyRegistered)),
+			Verdict::Fail(_)
+		));
+		assert_eq!(verdict_issuance(&RequestStoreError::Storage), Verdict::Wait);
+		assert!(matches!(verdict_issuance(&RequestStoreError::Conflict), Verdict::Fail(_)));
 	}
 }

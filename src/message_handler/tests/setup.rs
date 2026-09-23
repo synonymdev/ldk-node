@@ -209,7 +209,9 @@ fn ffor_setup_preserves_witness_unsupported_lifecycle_and_lsps_mailboxes() {
 	handler.handle_custom_message(NodeCustomMessage::Liquidity(message.clone()), peer).unwrap();
 	assert_eq!(*lsps.received.lock().unwrap(), vec![(peer, message)]);
 	assert_eq!(handler.provided_node_features(), lsps.provided_node_features());
-	assert_eq!(handler.provided_init_features(peer), lsps.provided_init_features(peer));
+	let mut expected_features = lsps.provided_init_features(peer);
+	expected_features.set_optional_custom_bit(OPTION_FF_RECEIVE_OPTIONAL_BIT).unwrap();
+	assert_eq!(handler.provided_init_features(peer), expected_features);
 }
 
 fn parse_frame(wire: &[u8]) -> FforFrame {

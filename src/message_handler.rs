@@ -30,6 +30,11 @@ use crate::types::LiquidityManager;
 use ffor::setup::FforSetupAdapter;
 use ffor::{FforFrame, FforReceiverTransport};
 
+/// The optional `option_ff_receive` init feature bit (bLIP 2 custom range, 560 required and 561
+/// optional). A settlement peer admits FFOR wire types 55001.. only from a peer that advertises
+/// it, so it is set exactly when the private FFOR transport is installed.
+pub(crate) const OPTION_FF_RECEIVE_OPTIONAL_BIT: usize = 561;
+
 /// Independent LSPS and connection-scoped FFOR messages retain their own queue ordering.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NodeCustomMessage {
@@ -94,7 +99,8 @@ where
 		self
 	}
 
-	// Explicit opt-in only through the builder; there is no feature bit.
+	// Explicit opt-in only through the builder; installing the transport is what advertises
+	// the optional `option_ff_receive` init feature bit.
 	pub(crate) fn with_ffor_setup(mut self, setup: Arc<FforSetupAdapter>) -> Self {
 		self.ffor = Some(Arc::clone(setup.transport()));
 		self.ffor_setup = Some(setup);
@@ -183,9 +189,16 @@ where
 	}
 
 	fn provided_init_features(&self, peer: PublicKey) -> InitFeatures {
-		self.liquidity
+		let mut features = self
+			.liquidity
 			.as_ref()
-			.map_or_else(InitFeatures::empty, |liquidity| liquidity.provided_init_features(peer))
+			.map_or_else(InitFeatures::empty, |liquidity| liquidity.provided_init_features(peer));
+		if self.ffor.is_some() {
+			// Bit 561 lies in the custom range above every known feature, so this cannot fail;
+			// the unit test pins that invariant.
+			let _ = features.set_optional_custom_bit(OPTION_FF_RECEIVE_OPTIONAL_BIT);
+		}
+		features
 	}
 
 	fn peer_connected(&self, peer: PublicKey, init: &Init, inbound: bool) -> Result<(), ()> {

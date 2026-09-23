@@ -94,7 +94,8 @@ fn build(storage: Arc<TestStore>, offline_receive: Option<OfflineReceiveConfig>)
 }
 
 /// Fixture terms: tip 10, settlement deadline 145, voucher expiry 165, claim margin 20. The
-/// witness retention follows the exported manifest so an existing native registration rejoins.
+/// witness retention follows the exported manifest so an existing native registration rejoins;
+/// 320 is an arbitrary window above the configured minimum for requests that never rejoin.
 fn offline_config(retention_until: u32, minimum_receipts: u8) -> OfflineReceiveConfig {
 	let voucher_expiry: u32 = ifield("voucher_expiry").parse().unwrap();
 	let deadline: u32 = ifield("settlement_deadline").parse().unwrap();
@@ -135,7 +136,7 @@ impl Harness {
 	fn empty() -> Self {
 		let storage = TestStore::new();
 		install_native(&storage, EMPTY_MANAGER, EMPTY_MONITOR);
-		Self::from_storage(storage, offline_config(300, 0))
+		Self::from_storage(storage, offline_config(320, 0))
 	}
 
 	fn from_storage(storage: Arc<TestStore>, config: OfflineReceiveConfig) -> Self {
@@ -279,7 +280,7 @@ fn ffor_runtime_is_absent_without_config_and_refuses_invalid_config() {
 	assert_eq!(handler.cancel(CLIENT.to_owned()), Err(Error::OfflineReceiveDisabled));
 	drop(node);
 
-	let mut invalid = offline_config(300, 0);
+	let mut invalid = offline_config(320, 0);
 	invalid.witnesses.clear();
 	let mut builder =
 		NodeBuilder::from_config(Config { network: Network::Testnet, ..Config::default() });
@@ -292,13 +293,13 @@ fn ffor_runtime_is_absent_without_config_and_refuses_invalid_config() {
 		Err(BuildError::InvalidOfflineReceiveConfig)
 	));
 
-	let mut config = offline_config(300, 0);
+	let mut config = offline_config(320, 0);
 	config.witnesses[0].node_id = settlement();
 	assert!(config.validate().is_err());
-	let mut config = offline_config(300, 0);
+	let mut config = offline_config(320, 0);
 	config.voucher_expiry_blocks = config.settlement_deadline_blocks;
 	assert!(config.validate().is_err());
-	assert!(offline_config(300, 0).validate().is_ok());
+	assert!(offline_config(320, 0).validate().is_ok());
 }
 
 #[test]
@@ -379,7 +380,7 @@ fn ffor_runtime_cancel_and_deadline_before_binding_are_durable_and_release_nothi
 	assert_eq!(h.status(), OfflineReceiveStatus::Failed { reason: "cancelled".to_owned() });
 	let storage = Arc::clone(&h.storage);
 	drop(h);
-	let restored = Harness::from_storage(storage, offline_config(300, 0));
+	let restored = Harness::from_storage(storage, offline_config(320, 0));
 	assert_eq!(restored.status(), OfflineReceiveStatus::Failed { reason: "cancelled".to_owned() });
 	assert_eq!(
 		restored.runtime.prepare(CLIENT.to_owned(), AMOUNT, "a".to_owned()),

@@ -270,7 +270,9 @@ fn ffor_composes_lsps_read_outbox_features_and_callbacks() {
 	let peer = key(1);
 	handler.peer_connected(peer, &init(), true).unwrap();
 	assert_eq!(*lsps.connected.lock().unwrap(), vec![(peer, init(), true)]);
-	assert_eq!(handler.provided_init_features(peer), lsps.provided_init_features(peer));
+	let mut expected_features = lsps.provided_init_features(peer);
+	expected_features.set_optional_custom_bit(OPTION_FF_RECEIVE_OPTIONAL_BIT).unwrap();
+	assert_eq!(handler.provided_init_features(peer), expected_features);
 	assert_eq!(handler.provided_node_features(), lsps.provided_node_features());
 
 	let raw = RawLSPSMessage { payload: "{\"jsonrpc\":\"2.0\",\"id\":\"42\"}".into() };
@@ -332,7 +334,41 @@ fn ffor_outbound_merges_with_lsps_without_consuming_inbound_or_reordering() {
 	assert!(handler.get_and_clear_pending_msg().is_empty());
 	assert_eq!(receiver.pop().unwrap().frame().wire(), ack_wire(peer));
 	assert_eq!(handler.provided_node_features(), lsps.provided_node_features());
-	assert_eq!(handler.provided_init_features(peer), lsps.provided_init_features(peer));
+	let mut expected_features = lsps.provided_init_features(peer);
+	expected_features.set_optional_custom_bit(OPTION_FF_RECEIVE_OPTIONAL_BIT).unwrap();
+	assert_eq!(handler.provided_init_features(peer), expected_features);
+}
+
+#[test]
+fn ffor_transport_advertises_only_the_optional_ff_receive_init_bit() {
+	let peer = key(1);
+	let without_lsps = NodeCustomMessageHandler::<Arc<LspsHandler>>::new_ignoring()
+		.with_ffor_receiver(Arc::new(FforReceiverTransport::default()));
+	let features = without_lsps.provided_init_features(peer);
+	let mut expected = InitFeatures::empty();
+	expected.set_optional_custom_bit(OPTION_FF_RECEIVE_OPTIONAL_BIT).unwrap();
+	assert_eq!(features, expected);
+	// Optional, never required: an ordinary peer must not be forced to understand it.
+	assert!(!features.requires_unknown_bits());
+	assert!(features.supports_unknown_bits());
+	assert_eq!(OPTION_FF_RECEIVE_OPTIONAL_BIT % 2, 1);
+	assert_eq!(features.le_flags().len(), OPTION_FF_RECEIVE_OPTIONAL_BIT / 8 + 1);
+	assert_eq!(
+		features.le_flags()[OPTION_FF_RECEIVE_OPTIONAL_BIT / 8],
+		1 << (OPTION_FF_RECEIVE_OPTIONAL_BIT % 8)
+	);
+	// Node features are untouched: the bit is an init advertisement only.
+	assert_eq!(without_lsps.provided_node_features(), NodeFeatures::empty());
+
+	let lsps = Arc::new(LspsHandler::default());
+	let with_lsps = NodeCustomMessageHandler::new_liquidity_handler(Arc::clone(&lsps))
+		.with_ffor_receiver(Arc::new(FforReceiverTransport::default()));
+	let combined = with_lsps.provided_init_features(peer);
+	assert_eq!(combined.le_flags()[0], lsps.provided_init_features(peer).le_flags()[0]);
+	assert_eq!(
+		combined.le_flags()[OPTION_FF_RECEIVE_OPTIONAL_BIT / 8],
+		1 << (OPTION_FF_RECEIVE_OPTIONAL_BIT % 8)
+	);
 }
 
 #[test]

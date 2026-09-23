@@ -348,6 +348,8 @@ interface BuilderInterface {
     @Throws(BuildException::class)
     fun `setNodeAlias`(`nodeAlias`: kotlin.String)
 
+    fun `setOfflineReceiveConfig`(`config`: OfflineReceiveConfig)
+
     fun `setPathfindingScoresSource`(`url`: kotlin.String)
 
     fun `setScoringDecayParams`(`params`: ScoringDecayParameters)
@@ -495,6 +497,8 @@ interface NodeInterface {
 
     fun `nodeId`(): PublicKey
 
+    fun `offlineReceive`(): OfflineReceivePayment
+
     fun `onchainPayment`(): OnchainPayment
 
     @Throws(NodeException::class)
@@ -584,6 +588,26 @@ interface OfferInterface {
     fun `offerDescription`(): kotlin.String?
 
     fun `supportsChain`(`chain`: Network): kotlin.Boolean
+
+    companion object
+}
+
+
+
+
+interface OfflineReceivePaymentInterface {
+
+    @Throws(NodeException::class)
+    fun `canReceive`(`amountMsat`: kotlin.ULong): kotlin.Boolean
+
+    @Throws(NodeException::class)
+    fun `cancel`(`requestId`: kotlin.String)
+
+    @Throws(NodeException::class)
+    fun `prepare`(`requestId`: kotlin.String, `amountMsat`: kotlin.ULong, `description`: kotlin.String): OfflineReceiveStatus
+
+    @Throws(NodeException::class)
+    fun `status`(`requestId`: kotlin.String): OfflineReceiveStatus
 
     companion object
 }
@@ -1140,6 +1164,36 @@ data class NodeStatus (
 
 
 @kotlinx.serialization.Serializable
+data class OfflineReceiveConfig (
+    val `settlementNodeId`: PublicKey,
+    val `witnesses`: List<OfflineReceiveWitnessConfig>,
+    val `invoiceExpirySeconds`: kotlin.UInt,
+    val `invoiceSafetyMarginSeconds`: kotlin.UInt,
+    val `settlementDeadlineBlocks`: kotlin.UInt,
+    val `deadlineSafetyMarginBlocks`: kotlin.UInt,
+    val `claimMarginBlocks`: kotlin.UInt,
+    val `voucherExpiryBlocks`: kotlin.UInt,
+    val `feeBaseMsat`: kotlin.UInt,
+    val `feeProportionalMillionths`: kotlin.UInt,
+    val `pollIntervalSecs`: kotlin.ULong
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class OfflineReceiveWitnessConfig (
+    val `nodeId`: PublicKey,
+    val `retentionBlocks`: kotlin.UInt,
+    val `minimumReceipts`: kotlin.UByte
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
 data class OnchainWalletAccount (
     val `addressType`: AddressType,
     val `accountIndex`: kotlin.UInt
@@ -1432,6 +1486,8 @@ sealed class BuildException(message: String): kotlin.Exception(message) {
     class NetworkMismatch(message: String) : BuildException(message)
 
     class AsyncPaymentsConfigMismatch(message: String) : BuildException(message)
+
+    class InvalidOfflineReceiveConfig(message: String) : BuildException(message)
 
 }
 
@@ -2025,6 +2081,16 @@ sealed class NodeException(message: String): kotlin.Exception(message) {
 
     class InvalidSeedBytes(message: String) : NodeException(message)
 
+    class OfflineReceiveDisabled(message: String) : NodeException(message)
+
+    class OfflineReceiveUnavailable(message: String) : NodeException(message)
+
+    class OfflineReceiveIneligible(message: String) : NodeException(message)
+
+    class OfflineReceiveRequestNotFound(message: String) : NodeException(message)
+
+    class OfflineReceiveRequestConflict(message: String) : NodeException(message)
+
 }
 
 
@@ -2042,6 +2108,61 @@ sealed class OfferAmount {
         val `iso4217Code`: kotlin.String,
         val `amount`: kotlin.ULong,
     ) : OfferAmount() {
+    }
+
+}
+
+
+
+
+
+
+
+@kotlinx.serialization.Serializable
+enum class OfflineReceiveOutcome {
+
+    FULFILLED,
+    FAILED;
+    companion object
+}
+
+
+
+
+
+
+@kotlinx.serialization.Serializable
+sealed class OfflineReceiveStatus {
+
+    @kotlinx.serialization.Serializable
+    data object Preparing : OfflineReceiveStatus()
+
+
+    @kotlinx.serialization.Serializable
+    data object AwaitingActivation : OfflineReceiveStatus()
+
+
+    @kotlinx.serialization.Serializable
+    data object AwaitingWitnesses : OfflineReceiveStatus()
+
+    @kotlinx.serialization.Serializable
+    data class Ready(
+        val `bolt11`: kotlin.String,
+    ) : OfflineReceiveStatus() {
+    }
+
+    @kotlinx.serialization.Serializable
+    data object Expired : OfflineReceiveStatus()
+
+    @kotlinx.serialization.Serializable
+    data class Settled(
+        val `outcome`: OfflineReceiveOutcome,
+    ) : OfflineReceiveStatus() {
+    }
+    @kotlinx.serialization.Serializable
+    data class Failed(
+        val `reason`: kotlin.String,
+    ) : OfflineReceiveStatus() {
     }
 
 }
@@ -2263,6 +2384,8 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
 
 
 
