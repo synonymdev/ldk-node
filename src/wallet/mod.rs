@@ -2331,6 +2331,12 @@ impl NodeSigner for WalletKeysManager {
 		self.inner.sign_gossip_message(msg)
 	}
 
+	fn sign_ffor_message(
+		&self, request: &lightning::sign::ffor::FFORSigningRequest<'_>,
+	) -> Result<Signature, ()> {
+		self.inner.sign_ffor_message(request)
+	}
+
 	fn sign_bolt12_invoice(
 		&self, invoice: &lightning::offers::invoice::UnsignedBolt12Invoice,
 	) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
@@ -2424,16 +2430,64 @@ impl ChangeDestinationSource for WalletKeysManager {
 
 #[cfg(test)]
 mod tests {
+	use std::str::FromStr;
+	use std::sync::Arc;
+
 	use bdk_wallet_aggregate::UtxoPsbtInfo;
 	use bitcoin::{psbt, OutPoint, TxIn, Weight};
+	use lightning::sign::ffor::FFORSigningRequest;
+	use lightning::sign::NodeSigner;
+	use lightning_ffor::wire::{Header, Init, Message, Payload};
 
 	use super::{
 		additional_input_weight, checked_payment_target, checked_sum, map_wallet_account_error,
 		validate_derivation_index, validate_derivation_range, BIP32_MAX_NORMAL_INDEX,
 		MAX_ADDRESS_INFO_BATCH_COUNT,
 	};
-	use crate::config::{AddressType, OnchainWalletAccount};
+	use crate::builder::NodeBuilder;
+	use crate::config::{AddressType, Config, OnchainWalletAccount};
+	use crate::io::test_utils::InMemoryStore;
 	use crate::Error;
+
+	#[test]
+	fn ffor_signing_uses_the_built_nodes_actual_identity_and_protocol_domain() {
+		let config = Config {
+			network: bitcoin::Network::Regtest,
+			storage_dir_path: std::env::temp_dir()
+				.join(format!("ffor-wallet-signer-{}", std::process::id()))
+				.to_string_lossy()
+				.into_owned(),
+			..Config::default()
+		};
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_entropy_seed_bytes([42; 64]);
+		builder.set_log_facade_logger();
+		let node = builder.build_with_store(Arc::new(InMemoryStore::new())).unwrap();
+		let mut message = Message {
+			header: Header { channel_id: [3; 32], epoch_id: [4; 32] },
+			payload: Payload::Init(Init {
+				budget_msat: 2_000_000,
+				min_payment_msat: 2_000_000,
+				settlement_deadline: 300,
+				voucher_expiry: 350,
+				fee_base_msat: 0,
+				fee_proportional_millionths: 0,
+				amounts_msat: vec![2_000_000],
+				witness_peers: None,
+				hash_chain: false,
+			}),
+			extensions: Vec::new(),
+			signature: [0; 64],
+		};
+		let unsigned = message.unsigned_wire().unwrap();
+		let request = FFORSigningRequest::new(&unsigned).unwrap();
+		message.signature =
+			node.keys_manager.sign_ffor_message(&request).unwrap().serialize_compact();
+		let mut decoded = Message::decode(&message.encode().unwrap()).unwrap();
+		decoded.verify_signature(&node.node_id()).unwrap();
+		decoded.header.epoch_id[0] ^= 1;
+		assert!(decoded.verify_signature(&node.node_id()).is_err());
+	}
 
 	#[test]
 	fn derivation_index_validation_rejects_hardened_range() {
@@ -2516,7 +2570,7 @@ mod tests {
 			.assume_checked();
 		let fee_rate = bitcoin::FeeRate::from_sat_per_kwu(250);
 		assert_eq!(
-			checked_payment_target(u64::MAX, recipient.script_pubkey(), None, fee_rate),
+			checked_payment_target(u64::MAX, &recipient.script_pubkey(), None, fee_rate),
 			Err(Error::InsufficientFunds)
 		);
 		let utxo = UtxoPsbtInfo {
@@ -2526,7 +2580,7 @@ mod tests {
 			is_primary: true,
 		};
 		assert_eq!(
-			checked_payment_target(u64::MAX, recipient.script_pubkey(), Some(&[utxo]), fee_rate),
+			checked_payment_target(u64::MAX, &recipient.script_pubkey(), Some(&[utxo]), fee_rate),
 			Err(Error::InsufficientFunds)
 		);
 	}

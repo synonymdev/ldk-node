@@ -87,6 +87,7 @@ mod error;
 mod event;
 mod fee_estimator;
 mod ffi;
+mod ffor;
 mod gossip;
 pub mod graph;
 mod hex_utils;
@@ -126,6 +127,8 @@ use config::{
 	ChannelConfig, Config, NODE_ANN_BCAST_INTERVAL, PEER_RECONNECTION_INTERVAL, RGS_SYNC_INTERVAL,
 };
 pub use config::{AddressType, OnchainWalletAccount, OnchainWalletAccountConfig};
+#[cfg(feature = "uniffi")]
+use config::{OfflineReceiveConfig, OfflineReceiveWitnessConfig};
 use connection::ConnectionManager;
 pub use error::Error as NodeError;
 use error::Error;
@@ -157,9 +160,11 @@ use payment::asynchronous::om_mailbox::OnionMessageMailbox;
 use payment::asynchronous::static_invoice_store::StaticInvoiceStore;
 pub use payment::{AddressInfo, KeychainKind};
 use payment::{
-	Bolt11Payment, Bolt12Payment, OnchainPayment, PaymentDetails, SpontaneousPayment,
-	UnifiedQrPayment,
+	Bolt11Payment, Bolt12Payment, OfflineReceivePayment, OnchainPayment, PaymentDetails,
+	SpontaneousPayment, UnifiedQrPayment,
 };
+#[cfg(feature = "uniffi")]
+use payment::{OfflineReceiveOutcome, OfflineReceiveStatus};
 use peer_store::{persist_missing_channel_peers_excluding, PeerInfo, PeerStore};
 pub use probe_handle::ProbeHandle;
 use rand::Rng;
@@ -219,6 +224,7 @@ pub struct Node {
 	background_processor_generation: Arc<AtomicU64>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
 	om_mailbox: Option<Arc<OnionMessageMailbox>>,
+	offline_receive: Option<Arc<ffor::runtime::FforReceiverRuntime>>,
 	async_payments_role: Option<AsyncPaymentsRole>,
 	runtime_sync_intervals: Arc<RwLock<RuntimeSyncIntervals>>,
 	/// Shared RGS timestamp used by LocalGraphStore to persist the timestamp alongside the graph.
@@ -778,6 +784,15 @@ impl Node {
 			});
 		}
 
+		if let Some(offline_receive) = self.offline_receive.as_ref() {
+			// Recovery failure is logged and retried by the worker; the API reports it as
+			// unavailable until it completes.
+			if let Err(e) = offline_receive.recover() {
+				log_error!(self.logger, "Offline receive recovery deferred: {:?}", e);
+			}
+			offline_receive.spawn_worker(&self.runtime, self.stop_sender.subscribe());
+		}
+
 		log_info!(self.logger, "Startup complete.");
 		*self.is_running.write().unwrap() = true;
 		if self.background_processor_failed.load(Ordering::Acquire) {
@@ -1048,6 +1063,27 @@ impl Node {
 			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 			Arc::clone(&self._router),
+		))
+	}
+
+	/// Returns a handler for experimental offline-receive requests.
+	///
+	/// Every method fails with [`Error::OfflineReceiveDisabled`] unless the builder's
+	/// `set_offline_receive_config` was called.
+	#[cfg(not(feature = "uniffi"))]
+	pub fn offline_receive(&self) -> OfflineReceivePayment {
+		OfflineReceivePayment::new(self.offline_receive.clone(), Arc::clone(&self.is_running))
+	}
+
+	/// Returns a handler for experimental offline-receive requests.
+	///
+	/// Every method fails with [`Error::OfflineReceiveDisabled`] unless the builder's
+	/// `set_offline_receive_config` was called.
+	#[cfg(feature = "uniffi")]
+	pub fn offline_receive(&self) -> Arc<OfflineReceivePayment> {
+		Arc::new(OfflineReceivePayment::new(
+			self.offline_receive.clone(),
+			Arc::clone(&self.is_running),
 		))
 	}
 

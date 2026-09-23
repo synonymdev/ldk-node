@@ -442,6 +442,178 @@ impl Default for Config {
 	}
 }
 
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+pub const DEFAULT_OFFLINE_RECEIVE_INVOICE_EXPIRY_SECS: u32 = 3600;
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+pub const DEFAULT_OFFLINE_RECEIVE_INVOICE_SAFETY_MARGIN_SECS: u32 = 120;
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+pub const DEFAULT_OFFLINE_RECEIVE_SETTLEMENT_DEADLINE_BLOCKS: u32 = 144;
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+pub const DEFAULT_OFFLINE_RECEIVE_DEADLINE_SAFETY_MARGIN_BLOCKS: u32 = 6;
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+pub const DEFAULT_OFFLINE_RECEIVE_CLAIM_MARGIN_BLOCKS: u32 = 20;
+/// The reconcile margin between the settlement deadline and the voucher expiry that the
+/// protocol's section 7.1 recommends and the reference settlement peer enforces as a minimum
+/// (`voucher_expiry >= settlement_deadline + 1008`).
+pub const DEFAULT_OFFLINE_RECEIVE_RECONCILE_MARGIN_BLOCKS: u32 = 1008;
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+///
+/// The settlement deadline plus the reconcile margin; a shorter expiry is refused by the
+/// reference settlement peer at setup.
+pub const DEFAULT_OFFLINE_RECEIVE_VOUCHER_EXPIRY_BLOCKS: u32 =
+	DEFAULT_OFFLINE_RECEIVE_SETTLEMENT_DEADLINE_BLOCKS
+		+ DEFAULT_OFFLINE_RECEIVE_RECONCILE_MARGIN_BLOCKS;
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+///
+/// Blocks past the voucher expiry through which a witness must retain records. The reference
+/// witness refuses any manifest whose `retention_until` is below the voucher expiry plus
+/// [`MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS`].
+pub const DEFAULT_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS: u32 =
+	MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS;
+/// The smallest witness retention window, in blocks past the voucher expiry, that the reference
+/// witness accepts (`retention_until >= voucher_expiry + 144`).
+pub const MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS: u32 = 144;
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+///
+/// Zero requests local witness durability only; the reference witness refuses any positive
+/// guardian receipt count.
+pub const DEFAULT_OFFLINE_RECEIVE_WITNESS_MINIMUM_RECEIPTS: u8 = 0;
+/// Development defaults for [`OfflineReceiveConfig`]. These are not production policy.
+pub const DEFAULT_OFFLINE_RECEIVE_POLL_INTERVAL_SECS: u64 = 5;
+
+/// One witness peer selected for offline-receive evidence retention.
+///
+/// The witness must have a public, announced channel with the settlement peer whose gossip is
+/// present in the node's network graph; the runtime refuses to issue an invoice otherwise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfflineReceiveWitnessConfig {
+	/// The witness peer's node ID.
+	pub node_id: PublicKey,
+	/// Blocks past the voucher expiry through which the witness must retain records. Must be at
+	/// least [`MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS`].
+	pub retention_blocks: u32,
+	/// Requested guardian receipt count; zero requests local witness durability only.
+	pub minimum_receipts: u8,
+}
+
+impl OfflineReceiveWitnessConfig {
+	/// A witness with the development defaults: the minimum retention window and no guardian
+	/// receipts.
+	pub fn new(node_id: PublicKey) -> Self {
+		Self {
+			node_id,
+			retention_blocks: DEFAULT_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS,
+			minimum_receipts: DEFAULT_OFFLINE_RECEIVE_WITNESS_MINIMUM_RECEIPTS,
+		}
+	}
+}
+
+/// Experimental offline-receive (FFOR) runtime configuration.
+///
+/// **These are development defaults, not production policy.** Deadlines, expiries, margins and
+/// fees have not been tuned against any production settlement peer or witness deployment. The
+/// runtime is disabled unless the builder's `set_offline_receive_config` was called; ordinary
+/// invoices are never affected.
+///
+/// ### Defaults (via [`OfflineReceiveConfig::new`])
+///
+/// | Parameter                          | Value  |
+/// |------------------------------------|--------|
+/// | `invoice_expiry_seconds`           | 3600   |
+/// | `invoice_safety_margin_seconds`    | 120    |
+/// | `settlement_deadline_blocks`       | 144    |
+/// | `deadline_safety_margin_blocks`    | 6      |
+/// | `claim_margin_blocks`              | 20     |
+/// | `voucher_expiry_blocks`            | 1152   |
+/// | `fee_base_msat`                    | 0      |
+/// | `fee_proportional_millionths`      | 0      |
+/// | `poll_interval_secs`               | 5      |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfflineReceiveConfig {
+	/// The settlement peer. Every offline receive uses one channel with this peer.
+	pub settlement_node_id: PublicKey,
+	/// One through four distinct witness peers.
+	pub witnesses: Vec<OfflineReceiveWitnessConfig>,
+	/// BOLT 11 invoice expiry in seconds.
+	pub invoice_expiry_seconds: u32,
+	/// Seconds subtracted from the block-derived remaining time when validating invoice expiry.
+	pub invoice_safety_margin_seconds: u32,
+	/// Blocks after the current tip until the last permitted settlement admission height.
+	pub settlement_deadline_blocks: u32,
+	/// Blocks before the settlement deadline at which the runtime cancels or closes a request.
+	pub deadline_safety_margin_blocks: u32,
+	/// Local on-chain claim margin in blocks.
+	pub claim_margin_blocks: u32,
+	/// Blocks after the current tip at which vouchers expire. Must be at least
+	/// `settlement_deadline_blocks + claim_margin_blocks`; the reference settlement peer
+	/// additionally requires `settlement_deadline_blocks +
+	/// DEFAULT_OFFLINE_RECEIVE_RECONCILE_MARGIN_BLOCKS`.
+	pub voucher_expiry_blocks: u32,
+	/// Proposed base forwarding fee in millisatoshis for the settlement peer.
+	pub fee_base_msat: u32,
+	/// Proposed proportional forwarding fee in millionths for the settlement peer.
+	pub fee_proportional_millionths: u32,
+	/// Runtime worker poll interval in seconds.
+	pub poll_interval_secs: u64,
+}
+
+impl OfflineReceiveConfig {
+	/// Build a configuration with development defaults for the given peers.
+	pub fn new(settlement_node_id: PublicKey, witnesses: Vec<OfflineReceiveWitnessConfig>) -> Self {
+		Self {
+			settlement_node_id,
+			witnesses,
+			invoice_expiry_seconds: DEFAULT_OFFLINE_RECEIVE_INVOICE_EXPIRY_SECS,
+			invoice_safety_margin_seconds: DEFAULT_OFFLINE_RECEIVE_INVOICE_SAFETY_MARGIN_SECS,
+			settlement_deadline_blocks: DEFAULT_OFFLINE_RECEIVE_SETTLEMENT_DEADLINE_BLOCKS,
+			deadline_safety_margin_blocks: DEFAULT_OFFLINE_RECEIVE_DEADLINE_SAFETY_MARGIN_BLOCKS,
+			claim_margin_blocks: DEFAULT_OFFLINE_RECEIVE_CLAIM_MARGIN_BLOCKS,
+			voucher_expiry_blocks: DEFAULT_OFFLINE_RECEIVE_VOUCHER_EXPIRY_BLOCKS,
+			fee_base_msat: 0,
+			fee_proportional_millionths: 0,
+			poll_interval_secs: DEFAULT_OFFLINE_RECEIVE_POLL_INTERVAL_SECS,
+		}
+	}
+
+	/// Check structural validity. The builder refuses an invalid configuration.
+	pub(crate) fn validate(&self) -> Result<(), OfflineReceiveConfigError> {
+		if self.witnesses.is_empty() || self.witnesses.len() > 4 {
+			return Err(OfflineReceiveConfigError::WitnessCount);
+		}
+		for (index, witness) in self.witnesses.iter().enumerate() {
+			if witness.node_id == self.settlement_node_id
+				|| self.witnesses[..index].iter().any(|other| other.node_id == witness.node_id)
+			{
+				return Err(OfflineReceiveConfigError::WitnessIdentity);
+			}
+			if witness.retention_blocks < MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS {
+				return Err(OfflineReceiveConfigError::Bounds);
+			}
+		}
+		if self.invoice_expiry_seconds == 0
+			|| self.settlement_deadline_blocks == 0
+			|| self.claim_margin_blocks == 0
+			|| self.deadline_safety_margin_blocks >= self.settlement_deadline_blocks
+			|| self
+				.settlement_deadline_blocks
+				.checked_add(self.claim_margin_blocks)
+				.is_none_or(|minimum| minimum > self.voucher_expiry_blocks)
+			|| self.poll_interval_secs == 0
+		{
+			return Err(OfflineReceiveConfigError::Bounds);
+		}
+		Ok(())
+	}
+}
+
+/// Reasons an [`OfflineReceiveConfig`] is refused by the builder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OfflineReceiveConfigError {
+	WitnessCount,
+	WitnessIdentity,
+	Bounds,
+}
+
 /// Configuration options for [`ProbabilisticScoringFeeParameters`].
 #[derive(Debug, Clone)]
 pub struct ScoringFeeParameters {
@@ -1014,7 +1186,60 @@ pub enum AsyncPaymentsRole {
 mod tests {
 	use std::str::FromStr;
 
-	use super::{may_announce_channel, AnnounceError, Config, NodeAlias, SocketAddress};
+	use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+
+	use super::{
+		may_announce_channel, AnnounceError, Config, NodeAlias, OfflineReceiveConfig,
+		OfflineReceiveConfigError, OfflineReceiveWitnessConfig, SocketAddress,
+		DEFAULT_OFFLINE_RECEIVE_RECONCILE_MARGIN_BLOCKS,
+		DEFAULT_OFFLINE_RECEIVE_WITNESS_MINIMUM_RECEIPTS,
+		DEFAULT_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS,
+		MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS,
+	};
+
+	fn peer(seed: u8) -> PublicKey {
+		PublicKey::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[seed; 32]).unwrap())
+	}
+
+	#[test]
+	fn offline_receive_witness_defaults_satisfy_the_reference_witness() {
+		let witness = OfflineReceiveWitnessConfig::new(peer(2));
+		assert_eq!(witness.minimum_receipts, 0);
+		assert_eq!(witness.minimum_receipts, DEFAULT_OFFLINE_RECEIVE_WITNESS_MINIMUM_RECEIPTS);
+		assert_eq!(witness.retention_blocks, DEFAULT_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS);
+		assert!(witness.retention_blocks >= MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS);
+		assert_eq!(MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS, 144);
+		let config = OfflineReceiveConfig::new(peer(1), vec![witness]);
+		assert_eq!(config.validate(), Ok(()));
+	}
+
+	#[test]
+	fn offline_receive_default_voucher_expiry_satisfies_the_reference_settlement_peer() {
+		let config =
+			OfflineReceiveConfig::new(peer(1), vec![OfflineReceiveWitnessConfig::new(peer(2))]);
+		assert_eq!(DEFAULT_OFFLINE_RECEIVE_RECONCILE_MARGIN_BLOCKS, 1008);
+		assert!(
+			config.voucher_expiry_blocks
+				>= config.settlement_deadline_blocks
+					+ DEFAULT_OFFLINE_RECEIVE_RECONCILE_MARGIN_BLOCKS
+		);
+		assert!(
+			config.voucher_expiry_blocks
+				>= config.settlement_deadline_blocks + config.claim_margin_blocks
+		);
+		assert_eq!(config.validate(), Ok(()));
+	}
+
+	#[test]
+	fn offline_receive_config_refuses_a_retention_window_the_witness_would_refuse() {
+		let mut short = OfflineReceiveWitnessConfig::new(peer(2));
+		short.retention_blocks = MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS - 1;
+		let config = OfflineReceiveConfig::new(peer(1), vec![short]);
+		assert_eq!(config.validate(), Err(OfflineReceiveConfigError::Bounds));
+		let mut exact = OfflineReceiveWitnessConfig::new(peer(2));
+		exact.retention_blocks = MIN_OFFLINE_RECEIVE_WITNESS_RETENTION_BLOCKS;
+		assert_eq!(OfflineReceiveConfig::new(peer(1), vec![exact]).validate(), Ok(()));
+	}
 
 	#[test]
 	fn node_announce_channel() {

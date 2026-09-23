@@ -1554,6 +1554,20 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2129,6 +2143,11 @@ internal interface UniffiLib : Library {
         `nodeAlias`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_ldk_node_fn_method_builder_set_offline_receive_config(
+        `ptr`: Pointer?,
+        `config`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_method_builder_set_pathfinding_scores_source(
         `ptr`: Pointer?,
         `url`: RustBufferByValue,
@@ -2399,6 +2418,10 @@ internal interface UniffiLib : Library {
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_node_offline_receive(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
     fun uniffi_ldk_node_fn_method_node_onchain_payment(
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -2602,6 +2625,36 @@ internal interface UniffiLib : Library {
         `other`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Byte
+    fun uniffi_ldk_node_fn_clone_offlinereceivepayment(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    fun uniffi_ldk_node_fn_free_offlinereceivepayment(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_ldk_node_fn_method_offlinereceivepayment_can_receive(
+        `ptr`: Pointer?,
+        `amountMsat`: Long,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_ldk_node_fn_method_offlinereceivepayment_cancel(
+        `ptr`: Pointer?,
+        `requestId`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_ldk_node_fn_method_offlinereceivepayment_prepare(
+        `ptr`: Pointer?,
+        `requestId`: RustBufferByValue,
+        `amountMsat`: Long,
+        `description`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_offlinereceivepayment_status(
+        `ptr`: Pointer?,
+        `requestId`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_clone_onchainpayment(
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -3306,6 +3359,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_node_alias(
     ): Short
+    fun uniffi_ldk_node_checksum_method_builder_set_offline_receive_config(
+    ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source(
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_scoring_decay_params(
@@ -3398,6 +3453,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_node_node_id(
     ): Short
+    fun uniffi_ldk_node_checksum_method_node_offline_receive(
+    ): Short
     fun uniffi_ldk_node_checksum_method_node_onchain_payment(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_open_announced_channel(
@@ -3465,6 +3522,14 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_offer_offer_description(
     ): Short
     fun uniffi_ldk_node_checksum_method_offer_supports_chain(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_offlinereceivepayment_can_receive(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_offlinereceivepayment_cancel(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_offlinereceivepayment_prepare(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_offlinereceivepayment_status(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp(
     ): Short
@@ -3853,6 +3918,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_builder_set_node_alias() != 18342.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_builder_set_offline_receive_config() != 21507.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_builder_set_pathfinding_scores_source() != 63501.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -3991,6 +4059,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_node_node_id() != 51489.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_node_offline_receive() != 26817.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_node_onchain_payment() != 6092.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -4091,6 +4162,18 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_offer_supports_chain() != 2135.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_offlinereceivepayment_can_receive() != 24415.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_offlinereceivepayment_cancel() != 58318.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_offlinereceivepayment_prepare() != 20798.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_offlinereceivepayment_status() != 43684.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954.toShort()) {
@@ -6287,6 +6370,18 @@ open class Builder: Disposable, BuilderInterface {
         }
     }
 
+    override fun `setOfflineReceiveConfig`(`config`: OfflineReceiveConfig) {
+        callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_set_offline_receive_config(
+                    it,
+                    FfiConverterTypeOfflineReceiveConfig.lower(`config`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
     override fun `setPathfindingScoresSource`(`url`: kotlin.String) {
         callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -7611,6 +7706,17 @@ open class Node: Disposable, NodeInterface {
         })
     }
 
+    override fun `offlineReceive`(): OfflineReceivePayment {
+        return FfiConverterTypeOfflineReceivePayment.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_offline_receive(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }!!
+        })
+    }
+
     override fun `onchainPayment`(): OnchainPayment {
         return FfiConverterTypeOnchainPayment.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
@@ -8238,6 +8344,192 @@ object FfiConverterTypeOffer: FfiConverter<Offer, Pointer> {
     override fun allocationSize(value: Offer) = 8UL
 
     override fun write(value: Offer, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(lower(value).toLong())
+    }
+}
+
+
+
+open class OfflineReceivePayment: Disposable, OfflineReceivePaymentInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(null))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed: kotlinx.atomicfu.AtomicBoolean = kotlinx.atomicfu.atomic(false)
+    private val callCounter: kotlinx.atomicfu.AtomicLong = kotlinx.atomicfu.atomic(1L)
+
+    private val lock = kotlinx.atomicfu.locks.ReentrantLock()
+
+    private fun <T> synchronized(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    override fun close() {
+        synchronized { this.destroy() }
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.value
+            if (c == 0L) {
+                throw IllegalStateException("${this::class::simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this::class::simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiPointerDestroyer(private val pointer: Pointer?) : Disposable {
+        override fun destroy() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_ldk_node_fn_free_offlinereceivepayment(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall { status ->
+            UniffiLib.INSTANCE.uniffi_ldk_node_fn_clone_offlinereceivepayment(pointer!!, status)
+        }!!
+    }
+
+
+    @Throws(NodeException::class)
+    override fun `canReceive`(`amountMsat`: kotlin.ULong): kotlin.Boolean {
+        return FfiConverterBoolean.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_offlinereceivepayment_can_receive(
+                    it,
+                    FfiConverterULong.lower(`amountMsat`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `cancel`(`requestId`: kotlin.String) {
+        callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_offlinereceivepayment_cancel(
+                    it,
+                    FfiConverterString.lower(`requestId`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+    @Throws(NodeException::class)
+    override fun `prepare`(`requestId`: kotlin.String, `amountMsat`: kotlin.ULong, `description`: kotlin.String): OfflineReceiveStatus {
+        return FfiConverterTypeOfflineReceiveStatus.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_offlinereceivepayment_prepare(
+                    it,
+                    FfiConverterString.lower(`requestId`),
+                    FfiConverterULong.lower(`amountMsat`),
+                    FfiConverterString.lower(`description`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `status`(`requestId`: kotlin.String): OfflineReceiveStatus {
+        return FfiConverterTypeOfflineReceiveStatus.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_offlinereceivepayment_status(
+                    it,
+                    FfiConverterString.lower(`requestId`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+
+
+
+
+
+
+    companion object
+
+}
+
+
+
+
+
+object FfiConverterTypeOfflineReceivePayment: FfiConverter<OfflineReceivePayment, Pointer> {
+
+    override fun lower(value: OfflineReceivePayment): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): OfflineReceivePayment {
+        return OfflineReceivePayment(value)
+    }
+
+    override fun read(buf: ByteBuffer): OfflineReceivePayment {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(buf.getLong().toPointer())
+    }
+
+    override fun allocationSize(value: OfflineReceivePayment) = 8UL
+
+    override fun write(value: OfflineReceivePayment, buf: ByteBuffer) {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(lower(value).toLong())
@@ -10367,6 +10659,80 @@ object FfiConverterTypeNodeStatus: FfiConverterRustBuffer<NodeStatus> {
 
 
 
+object FfiConverterTypeOfflineReceiveConfig: FfiConverterRustBuffer<OfflineReceiveConfig> {
+    override fun read(buf: ByteBuffer): OfflineReceiveConfig {
+        return OfflineReceiveConfig(
+            FfiConverterTypePublicKey.read(buf),
+            FfiConverterSequenceTypeOfflineReceiveWitnessConfig.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: OfflineReceiveConfig) = (
+            FfiConverterTypePublicKey.allocationSize(value.`settlementNodeId`) +
+            FfiConverterSequenceTypeOfflineReceiveWitnessConfig.allocationSize(value.`witnesses`) +
+            FfiConverterUInt.allocationSize(value.`invoiceExpirySeconds`) +
+            FfiConverterUInt.allocationSize(value.`invoiceSafetyMarginSeconds`) +
+            FfiConverterUInt.allocationSize(value.`settlementDeadlineBlocks`) +
+            FfiConverterUInt.allocationSize(value.`deadlineSafetyMarginBlocks`) +
+            FfiConverterUInt.allocationSize(value.`claimMarginBlocks`) +
+            FfiConverterUInt.allocationSize(value.`voucherExpiryBlocks`) +
+            FfiConverterUInt.allocationSize(value.`feeBaseMsat`) +
+            FfiConverterUInt.allocationSize(value.`feeProportionalMillionths`) +
+            FfiConverterULong.allocationSize(value.`pollIntervalSecs`)
+    )
+
+    override fun write(value: OfflineReceiveConfig, buf: ByteBuffer) {
+        FfiConverterTypePublicKey.write(value.`settlementNodeId`, buf)
+        FfiConverterSequenceTypeOfflineReceiveWitnessConfig.write(value.`witnesses`, buf)
+        FfiConverterUInt.write(value.`invoiceExpirySeconds`, buf)
+        FfiConverterUInt.write(value.`invoiceSafetyMarginSeconds`, buf)
+        FfiConverterUInt.write(value.`settlementDeadlineBlocks`, buf)
+        FfiConverterUInt.write(value.`deadlineSafetyMarginBlocks`, buf)
+        FfiConverterUInt.write(value.`claimMarginBlocks`, buf)
+        FfiConverterUInt.write(value.`voucherExpiryBlocks`, buf)
+        FfiConverterUInt.write(value.`feeBaseMsat`, buf)
+        FfiConverterUInt.write(value.`feeProportionalMillionths`, buf)
+        FfiConverterULong.write(value.`pollIntervalSecs`, buf)
+    }
+}
+
+
+
+
+object FfiConverterTypeOfflineReceiveWitnessConfig: FfiConverterRustBuffer<OfflineReceiveWitnessConfig> {
+    override fun read(buf: ByteBuffer): OfflineReceiveWitnessConfig {
+        return OfflineReceiveWitnessConfig(
+            FfiConverterTypePublicKey.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUByte.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: OfflineReceiveWitnessConfig) = (
+            FfiConverterTypePublicKey.allocationSize(value.`nodeId`) +
+            FfiConverterUInt.allocationSize(value.`retentionBlocks`) +
+            FfiConverterUByte.allocationSize(value.`minimumReceipts`)
+    )
+
+    override fun write(value: OfflineReceiveWitnessConfig, buf: ByteBuffer) {
+        FfiConverterTypePublicKey.write(value.`nodeId`, buf)
+        FfiConverterUInt.write(value.`retentionBlocks`, buf)
+        FfiConverterUByte.write(value.`minimumReceipts`, buf)
+    }
+}
+
+
+
+
 object FfiConverterTypeOnchainWalletAccount: FfiConverterRustBuffer<OnchainWalletAccount> {
     override fun read(buf: ByteBuffer): OnchainWalletAccount {
         return OnchainWalletAccount(
@@ -10937,6 +11303,7 @@ object FfiConverterTypeBuildError : FfiConverterRustBuffer<BuildException> {
             15 -> BuildException.LoggerSetupFailed(FfiConverterString.read(buf))
             16 -> BuildException.NetworkMismatch(FfiConverterString.read(buf))
             17 -> BuildException.AsyncPaymentsConfigMismatch(FfiConverterString.read(buf))
+            18 -> BuildException.InvalidOfflineReceiveConfig(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -11013,6 +11380,10 @@ object FfiConverterTypeBuildError : FfiConverterRustBuffer<BuildException> {
             }
             is BuildException.AsyncPaymentsConfigMismatch -> {
                 buf.putInt(17)
+                Unit
+            }
+            is BuildException.InvalidOfflineReceiveConfig -> {
+                buf.putInt(18)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -12200,6 +12571,11 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
             66 -> NodeException.AddressTypeNotMonitored(FfiConverterString.read(buf))
             67 -> NodeException.OnchainWalletAccountNotRegistered(FfiConverterString.read(buf))
             68 -> NodeException.InvalidSeedBytes(FfiConverterString.read(buf))
+            69 -> NodeException.OfflineReceiveDisabled(FfiConverterString.read(buf))
+            70 -> NodeException.OfflineReceiveUnavailable(FfiConverterString.read(buf))
+            71 -> NodeException.OfflineReceiveIneligible(FfiConverterString.read(buf))
+            72 -> NodeException.OfflineReceiveRequestNotFound(FfiConverterString.read(buf))
+            73 -> NodeException.OfflineReceiveRequestConflict(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -12482,6 +12858,26 @@ object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
                 buf.putInt(68)
                 Unit
             }
+            is NodeException.OfflineReceiveDisabled -> {
+                buf.putInt(69)
+                Unit
+            }
+            is NodeException.OfflineReceiveUnavailable -> {
+                buf.putInt(70)
+                Unit
+            }
+            is NodeException.OfflineReceiveIneligible -> {
+                buf.putInt(71)
+                Unit
+            }
+            is NodeException.OfflineReceiveRequestNotFound -> {
+                buf.putInt(72)
+                Unit
+            }
+            is NodeException.OfflineReceiveRequestConflict -> {
+                buf.putInt(73)
+                Unit
+            }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 }
@@ -12533,6 +12929,133 @@ object FfiConverterTypeOfferAmount : FfiConverterRustBuffer<OfferAmount>{
                 buf.putInt(2)
                 FfiConverterString.write(value.`iso4217Code`, buf)
                 FfiConverterULong.write(value.`amount`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+object FfiConverterTypeOfflineReceiveOutcome: FfiConverterRustBuffer<OfflineReceiveOutcome> {
+    override fun read(buf: ByteBuffer) = try {
+        OfflineReceiveOutcome.entries[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: OfflineReceiveOutcome) = 4UL
+
+    override fun write(value: OfflineReceiveOutcome, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+object FfiConverterTypeOfflineReceiveStatus : FfiConverterRustBuffer<OfflineReceiveStatus>{
+    override fun read(buf: ByteBuffer): OfflineReceiveStatus {
+        return when(buf.getInt()) {
+            1 -> OfflineReceiveStatus.Preparing
+            2 -> OfflineReceiveStatus.AwaitingActivation
+            3 -> OfflineReceiveStatus.AwaitingWitnesses
+            4 -> OfflineReceiveStatus.Ready(
+                FfiConverterString.read(buf),
+                )
+            5 -> OfflineReceiveStatus.Expired
+            6 -> OfflineReceiveStatus.Settled(
+                FfiConverterTypeOfflineReceiveOutcome.read(buf),
+                )
+            7 -> OfflineReceiveStatus.Failed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: OfflineReceiveStatus) = when(value) {
+        is OfflineReceiveStatus.Preparing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is OfflineReceiveStatus.AwaitingActivation -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is OfflineReceiveStatus.AwaitingWitnesses -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is OfflineReceiveStatus.Ready -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`bolt11`)
+            )
+        }
+        is OfflineReceiveStatus.Expired -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is OfflineReceiveStatus.Settled -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeOfflineReceiveOutcome.allocationSize(value.`outcome`)
+            )
+        }
+        is OfflineReceiveStatus.Failed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: OfflineReceiveStatus, buf: ByteBuffer) {
+        when(value) {
+            is OfflineReceiveStatus.Preparing -> {
+                buf.putInt(1)
+                Unit
+            }
+            is OfflineReceiveStatus.AwaitingActivation -> {
+                buf.putInt(2)
+                Unit
+            }
+            is OfflineReceiveStatus.AwaitingWitnesses -> {
+                buf.putInt(3)
+                Unit
+            }
+            is OfflineReceiveStatus.Ready -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`bolt11`, buf)
+                Unit
+            }
+            is OfflineReceiveStatus.Expired -> {
+                buf.putInt(5)
+                Unit
+            }
+            is OfflineReceiveStatus.Settled -> {
+                buf.putInt(6)
+                FfiConverterTypeOfflineReceiveOutcome.write(value.`outcome`, buf)
+                Unit
+            }
+            is OfflineReceiveStatus.Failed -> {
+                buf.putInt(7)
+                FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -14480,6 +15003,31 @@ object FfiConverterSequenceTypeCustomTlvRecord: FfiConverterRustBuffer<List<Cust
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeCustomTlvRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypeOfflineReceiveWitnessConfig: FfiConverterRustBuffer<List<OfflineReceiveWitnessConfig>> {
+    override fun read(buf: ByteBuffer): List<OfflineReceiveWitnessConfig> {
+        val len = buf.getInt()
+        return List<OfflineReceiveWitnessConfig>(len) {
+            FfiConverterTypeOfflineReceiveWitnessConfig.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<OfflineReceiveWitnessConfig>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeOfflineReceiveWitnessConfig.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<OfflineReceiveWitnessConfig>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeOfflineReceiveWitnessConfig.write(it, buf)
         }
     }
 }

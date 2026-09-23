@@ -10,6 +10,7 @@
 pub(crate) mod asynchronous;
 mod bolt11;
 mod bolt12;
+mod offline_receive;
 mod onchain;
 mod spontaneous;
 pub(crate) mod store;
@@ -17,6 +18,7 @@ mod unified_qr;
 
 pub use bolt11::Bolt11Payment;
 pub use bolt12::Bolt12Payment;
+pub use offline_receive::{OfflineReceiveOutcome, OfflineReceivePayment, OfflineReceiveStatus};
 pub use onchain::{AddressInfo, KeychainKind, OnchainPayment};
 pub use spontaneous::SpontaneousPayment;
 pub use store::{

@@ -51,13 +51,15 @@ use crate::chain::ChainSource;
 use crate::config::{
 	default_user_config, may_announce_channel, AddressType, AddressTypeRuntimeConfig,
 	AnnounceError, AsyncPaymentsRole, BitcoindRestClientConfig, Config, ElectrumSyncConfig,
-	EsploraSyncConfig, OnchainWalletAccount, RuntimeSyncIntervals, ScoringDecayParameters,
-	ScoringFeeParameters, BDK_CLIENT_STOP_GAP, DEFAULT_ESPLORA_SERVER_URL, DEFAULT_LOG_FILENAME,
-	DEFAULT_LOG_LEVEL, MAX_ONCHAIN_WALLET_ACCOUNT_INDEX, WALLET_KEYS_SEED_LEN,
+	EsploraSyncConfig, OfflineReceiveConfig, OnchainWalletAccount, RuntimeSyncIntervals,
+	ScoringDecayParameters, ScoringFeeParameters, BDK_CLIENT_STOP_GAP, DEFAULT_ESPLORA_SERVER_URL,
+	DEFAULT_LOG_FILENAME, DEFAULT_LOG_LEVEL, MAX_ONCHAIN_WALLET_ACCOUNT_INDEX,
+	WALLET_KEYS_SEED_LEN,
 };
 use crate::connection::ConnectionManager;
 use crate::event::EventQueue;
 use crate::fee_estimator::OnchainFeeEstimator;
+use crate::ffor::runtime::FforReceiverRuntime;
 use crate::gossip::GossipSource;
 use crate::io::local_graph_store::read_local_graph_cache;
 use crate::io::sqlite_store::SqliteStore;
@@ -76,6 +78,7 @@ use crate::liquidity::{
 	LSPS1ClientConfig, LSPS2ClientConfig, LSPS2ServiceConfig, LiquiditySourceBuilder,
 };
 use crate::logger::{log_error, LdkLogger, LogLevel, LogWriter, Logger};
+use crate::message_handler::ffor::{FforReceiverTransport, FforSetupAdapter};
 use crate::message_handler::NodeCustomMessageHandler;
 use crate::payment::asynchronous::om_mailbox::OnionMessageMailbox;
 use crate::peer_store::{persist_missing_channel_peers, PeerStore};
@@ -237,6 +240,8 @@ pub enum BuildError {
 	NetworkMismatch,
 	/// The role of the node in an asynchronous payments context is not compatible with the current configuration.
 	AsyncPaymentsConfigMismatch,
+	/// The offline-receive configuration is invalid.
+	InvalidOfflineReceiveConfig,
 }
 
 impl fmt::Display for BuildError {
@@ -276,6 +281,9 @@ impl fmt::Display for BuildError {
 					"The async payments role is not compatible with the current configuration."
 				)
 			},
+			Self::InvalidOfflineReceiveConfig => {
+				write!(f, "The offline-receive configuration is invalid.")
+			},
 		}
 	}
 }
@@ -301,6 +309,7 @@ pub struct NodeBuilder {
 	runtime_handle: Option<tokio::runtime::Handle>,
 	pathfinding_scores_sync_config: Option<PathfindingScoresSyncConfig>,
 	channel_data_migration: Option<ChannelDataMigration>,
+	offline_receive_config: Option<OfflineReceiveConfig>,
 }
 
 impl NodeBuilder {
@@ -331,6 +340,7 @@ impl NodeBuilder {
 			async_payments_role: None,
 			pathfinding_scores_sync_config,
 			channel_data_migration,
+			offline_receive_config: None,
 		}
 	}
 
@@ -665,6 +675,15 @@ impl NodeBuilder {
 		Ok(self)
 	}
 
+	/// Enables the experimental offline-receive (FFOR) runtime.
+	///
+	/// Disabled by default. The configuration is validated at build time; see
+	/// [`OfflineReceiveConfig`] for the development defaults and their limits.
+	pub fn set_offline_receive_config(&mut self, config: OfflineReceiveConfig) -> &mut Self {
+		self.offline_receive_config = Some(config);
+		self
+	}
+
 	/// Sets the role of the node in an asynchronous payments context.
 	///
 	/// See <https://github.com/lightning/bolts/pull/1149> for more information about the async payments protocol.
@@ -847,6 +866,7 @@ impl NodeBuilder {
 			logger,
 			Arc::new(vss_store),
 			self.channel_data_migration.as_ref(),
+			self.offline_receive_config.as_ref(),
 		)
 	}
 
@@ -882,6 +902,7 @@ impl NodeBuilder {
 			logger,
 			kv_store,
 			self.channel_data_migration.as_ref(),
+			self.offline_receive_config.as_ref(),
 		)
 	}
 }
@@ -1167,6 +1188,11 @@ impl ArcedNodeBuilder {
 	/// The provided alias must be a valid UTF-8 string and no longer than 32 bytes in total.
 	pub fn set_node_alias(&self, node_alias: String) -> Result<(), BuildError> {
 		self.inner.write().unwrap().set_node_alias(node_alias).map(|_| ())
+	}
+
+	/// Enables the experimental offline-receive (FFOR) runtime. Disabled by default.
+	pub fn set_offline_receive_config(&self, config: OfflineReceiveConfig) {
+		self.inner.write().unwrap().set_offline_receive_config(config);
 	}
 
 	/// Sets the role of the node in an asynchronous payments context.
@@ -1728,8 +1754,16 @@ fn build_with_store_internal(
 	async_payments_role: Option<AsyncPaymentsRole>, seed_bytes: [u8; 64], runtime: Runtime,
 	logger: Arc<Logger>, kv_store: Arc<DynStore>,
 	channel_data_migration: Option<&ChannelDataMigration>,
+	offline_receive_config: Option<&OfflineReceiveConfig>,
 ) -> Result<Node, BuildError> {
 	optionally_install_rustls_cryptoprovider();
+
+	if let Some(offline_receive) = offline_receive_config {
+		if let Err(err) = offline_receive.validate() {
+			log_error!(logger, "Invalid offline receive configuration: {:?}", err);
+			return Err(BuildError::InvalidOfflineReceiveConfig);
+		}
+	}
 
 	if let Err(err) = may_announce_channel(&config) {
 		if config.announcement_addresses.is_some() {
@@ -2346,6 +2380,15 @@ fn build_with_store_internal(
 		)),
 	};
 
+	// The FFOR transport and setup adapter exist only when offline receiving is configured.
+	let ffor_setup = offline_receive_config.map(|_| {
+		Arc::new(FforSetupAdapter::new(
+			Arc::clone(&channel_manager),
+			Arc::clone(&chain_monitor),
+			Arc::new(FforReceiverTransport::default()),
+		))
+	});
+
 	let (liquidity_source, custom_message_handler) =
 		if let Some(lsc) = liquidity_source_config.as_ref() {
 			let mut liquidity_source_builder = LiquiditySourceBuilder::new(
@@ -2390,11 +2433,18 @@ fn build_with_store_internal(
 
 			let liquidity_source = runtime
 				.block_on(async move { liquidity_source_builder.build().await.map(Arc::new) })?;
-			let custom_message_handler =
-				Arc::new(NodeCustomMessageHandler::new_liquidity(Arc::clone(&liquidity_source)));
-			(Some(liquidity_source), custom_message_handler)
+			let mut custom_message_handler =
+				NodeCustomMessageHandler::new_liquidity(Arc::clone(&liquidity_source));
+			if let Some(setup) = ffor_setup.as_ref() {
+				custom_message_handler = custom_message_handler.with_ffor_setup(Arc::clone(setup));
+			}
+			(Some(liquidity_source), Arc::new(custom_message_handler))
 		} else {
-			(None, Arc::new(NodeCustomMessageHandler::new_ignoring()))
+			let mut custom_message_handler = NodeCustomMessageHandler::new_ignoring();
+			if let Some(setup) = ffor_setup.as_ref() {
+				custom_message_handler = custom_message_handler.with_ffor_setup(Arc::clone(setup));
+			}
+			(None, Arc::new(custom_message_handler))
 		};
 
 	let msg_handler = match gossip_source.as_gossip_sync() {
@@ -2567,6 +2617,31 @@ fn build_with_store_internal(
 		Arc::clone(&logger),
 	));
 
+	let offline_receive = match (offline_receive_config.cloned(), ffor_setup) {
+		(Some(offline_config), Some(setup)) => {
+			let runtime = FforReceiverRuntime::new(
+				offline_config,
+				config.network,
+				&seed_bytes,
+				Arc::clone(&channel_manager),
+				Arc::clone(&chain_monitor),
+				Arc::clone(&network_graph),
+				Arc::clone(&payment_store),
+				Arc::clone(&event_queue),
+				Arc::clone(&kv_store),
+				Arc::clone(setup.transport()),
+				setup,
+				Arc::clone(&logger),
+			)
+			.map_err(|e| {
+				log_error!(logger, "Failed to open offline receive storage: {:?}", e);
+				BuildError::ReadFailed
+			})?;
+			Some(Arc::new(runtime))
+		},
+		_ => None,
+	};
+
 	let om_mailbox = if let Some(AsyncPaymentsRole::Server) = async_payments_role {
 		Some(Arc::new(OnionMessageMailbox::new()))
 	} else {
@@ -2612,6 +2687,7 @@ fn build_with_store_internal(
 		background_processor_generation: Arc::new(AtomicU64::new(0)),
 		node_metrics,
 		om_mailbox,
+		offline_receive,
 		async_payments_role,
 		runtime_sync_intervals: Arc::new(RwLock::new(RuntimeSyncIntervals::default())),
 		local_rgs_timestamp,
