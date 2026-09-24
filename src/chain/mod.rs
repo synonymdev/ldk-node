@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
 use bdk_wallet::event::WalletEvent as BdkWalletEvent;
 use bdk_wallet::{KeychainKind, Update as BdkUpdate};
-use bitcoin::{Script, Txid};
+use bitcoin::{BlockHash, Script, Txid};
 use lightning::chain::{BestBlock, Filter};
 use lightning::log_warn;
 use lightning_block_sync::gossip::UtxoSource;
@@ -30,7 +30,7 @@ use crate::config::{
 	ElectrumSyncConfig, EsploraSyncConfig, OnchainWalletAccount,
 	RESOLVED_CHANNEL_MONITOR_ARCHIVAL_INTERVAL, WALLET_SYNC_INTERVAL_MINIMUM_SECS,
 };
-use crate::event::{Event, EventQueue, SyncType, TransactionDetails};
+use crate::event::{Event, EventIdempotencyKey, EventQueue, SyncType, TransactionDetails};
 use crate::fee_estimator::OnchainFeeEstimator;
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
@@ -421,10 +421,52 @@ mod sync_tests {
 	}
 }
 
+// Queue the confirmation before retiring a durable explicit-broadcast event marker.
+async fn enqueue_onchain_transaction_confirmed<L2: Deref>(
+	txid: Txid, block_hash: BlockHash, block_height: u32, confirmation_time: u64,
+	wallet: &crate::wallet::Wallet, event_queue: &EventQueue<L2>, logger: &Arc<Logger>,
+	channel_manager: Option<&Arc<ChannelManager>>,
+) -> Result<(), Error>
+where
+	L2::Target: LdkLogger,
+{
+	let details = get_transaction_details(&txid, wallet, channel_manager).unwrap_or_else(|| {
+		log_error!(logger, "Transaction {} not found in wallet", txid);
+		TransactionDetails { amount_sats: 0, inputs: Vec::new(), outputs: Vec::new() }
+	});
+
+	log_info!(logger, "Onchain transaction {} confirmed at height {}", txid, block_height);
+
+	let event = Event::OnchainTransactionConfirmed {
+		txid,
+		block_hash,
+		block_height,
+		confirmation_time,
+		details,
+	};
+	event_queue
+		.add_event_with_idempotency_key(
+			event,
+			EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+		)
+		.await
+		.map_err(|e| {
+			log_error!(logger, "Failed to push onchain event to queue: {}", e);
+			e
+		})?;
+	wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+	event_queue
+		.clear_idempotency_keys(&[
+			EventIdempotencyKey::OnchainTransactionReceived(txid),
+			EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+		])
+		.await
+}
+
 // Process BDK wallet events and emit corresponding ldk-node events via the event queue.
 // When a transaction touches multiple wallet accounts, each wallet emits its own
 // BdkWalletEvent, so we deduplicate by txid before forwarding to the event queue.
-async fn process_wallet_events<L2: Deref>(
+pub(crate) async fn process_wallet_events<L2: Deref>(
 	wallet_events: Vec<BdkWalletEvent>, wallet: &crate::wallet::Wallet,
 	event_queue: &EventQueue<L2>, logger: &Arc<Logger>,
 	channel_manager: Option<&Arc<ChannelManager>>, _chain_monitor: Option<&Arc<ChainMonitor>>,
@@ -432,17 +474,77 @@ async fn process_wallet_events<L2: Deref>(
 where
 	L2::Target: LdkLogger,
 {
+	let _delivery_guard = wallet.lock_broadcast_event_delivery().await;
 	// Use per-type sets so that two wallets with different prior state can each contribute
 	// their event type for the same txid without suppressing the other.
 	let mut seen_received_txids = std::collections::HashSet::new();
 	let mut seen_confirmed_txids = std::collections::HashSet::new();
-	let mut seen_reorged_txids = std::collections::HashSet::new();
 	let mut seen_replaced_txids = std::collections::HashSet::new();
-	let transaction_confirmations = wallet.transaction_confirmations();
+	let snapshot = wallet.wallet_event_snapshot();
+	let transaction_confirmations = snapshot.confirmations;
+	let pending_reorgs = snapshot.pending_reorgs;
+	let mut reorgs_by_txid = HashMap::new();
+	for (account, sequence, txid) in &pending_reorgs {
+		reorgs_by_txid
+			.entry(*txid)
+			.or_insert_with(Vec::new)
+			.push(EventIdempotencyKey::wallet_reorg(*txid, *account, *sequence));
+	}
+	// Ordinary BDK events are a one-shot batch: their wallet state is already persisted.
+	// Reorg work can retry from its journal, so defer its errors until that batch is
+	// consumed. Returning early here would permanently lose unrelated incoming events.
+	let reorg_result = async {
+		event_queue
+			.prune_reorg_receipts(
+				&reorgs_by_txid.values().flatten().copied().collect(),
+				&snapshot.accounts,
+			)
+			.await?;
+		for (txid, receipts) in &reorgs_by_txid {
+			let confirmation = transaction_confirmations.get(txid).map(|block_time| {
+				let details = get_transaction_details(txid, wallet, channel_manager)
+					.unwrap_or_else(|| {
+						log_error!(logger, "Transaction {} not found in wallet", txid);
+						TransactionDetails {
+							amount_sats: 0,
+							inputs: Vec::new(),
+							outputs: Vec::new(),
+						}
+					});
+				Event::OnchainTransactionConfirmed {
+					txid: *txid,
+					block_hash: block_time.block_id.hash,
+					block_height: block_time.block_id.height,
+					confirmation_time: block_time.confirmation_time,
+					details,
+				}
+			});
+			event_queue.add_onchain_reorg_event(*txid, receipts, confirmation).await?;
+			if transaction_confirmations.contains_key(txid) {
+				wallet.mark_locally_applied_unconfirmed_delivered(*txid)?;
+				seen_confirmed_txids.insert(*txid);
+			}
+		}
+		// Keep delivery receipts until every source has acknowledged the exact sequence.
+		// Consumer acknowledgements may run in between these writes, including across restarts.
+		wallet.acknowledge_reorgs(&pending_reorgs)?;
+		let mut retired_receipts: Vec<_> = reorgs_by_txid.values().flatten().copied().collect();
+		for txid in &seen_confirmed_txids {
+			retired_receipts.push(EventIdempotencyKey::OnchainTransactionReceived(*txid));
+			retired_receipts.push(EventIdempotencyKey::OnchainTransactionConfirmed(*txid));
+		}
+		event_queue.clear_idempotency_keys(&retired_receipts).await
+	}
+	.await;
 
 	for wallet_event in wallet_events {
 		match wallet_event {
 			BdkWalletEvent::TxConfirmed { txid, .. } => {
+				// The journal owns this confirmation, including retries after a failed
+				// reorg write. Never let it overtake its corresponding reorg event.
+				if reorgs_by_txid.contains_key(&txid) {
+					continue;
+				}
 				let Some(block_time) = transaction_confirmations.get(&txid).copied() else {
 					log_trace!(
 						logger,
@@ -454,52 +556,22 @@ where
 				if !seen_confirmed_txids.insert(txid) {
 					continue;
 				}
-				let details = get_transaction_details(&txid, wallet, channel_manager)
-					.unwrap_or_else(|| {
-						log_error!(logger, "Transaction {} not found in wallet", txid);
-						TransactionDetails {
-							amount_sats: 0,
-							inputs: Vec::new(),
-							outputs: Vec::new(),
-						}
-					});
-
-				log_info!(
+				enqueue_onchain_transaction_confirmed(
+					txid,
+					block_time.block_id.hash,
+					block_time.block_id.height,
+					block_time.confirmation_time,
+					wallet,
+					event_queue,
 					logger,
-					"Onchain transaction {} confirmed at height {}",
-					txid,
-					block_time.block_id.height
-				);
-
-				let event = Event::OnchainTransactionConfirmed {
-					txid,
-					block_hash: block_time.block_id.hash,
-					block_height: block_time.block_id.height,
-					confirmation_time: block_time.confirmation_time,
-					details,
-				};
-				event_queue.add_event(event).await.map_err(|e| {
-					log_error!(logger, "Failed to push onchain event to queue: {}", e);
-					e
-				})?;
+					channel_manager,
+				)
+				.await?;
 			},
 			BdkWalletEvent::TxUnconfirmed { txid, old_block_time, .. } => {
 				match old_block_time {
 					Some(_) => {
-						if !seen_reorged_txids.insert(txid) {
-							continue;
-						}
-						// Transaction was previously confirmed but is now unconfirmed (reorg)
-						log_info!(
-							logger,
-							"Onchain transaction {} became unconfirmed (reorg)",
-							txid
-						);
-						let event = Event::OnchainTransactionReorged { txid };
-						event_queue.add_event(event).await.map_err(|e| {
-							log_error!(logger, "Failed to push onchain event to queue: {}", e);
-							e
-						})?;
+						// Delivered from the journal committed with the wallet chain above.
 					},
 					None => {
 						if !seen_received_txids.insert(txid) {
@@ -524,10 +596,23 @@ where
 						);
 
 						let event = Event::OnchainTransactionReceived { txid, details };
-						event_queue.add_event(event).await.map_err(|e| {
-							log_error!(logger, "Failed to push onchain event to queue: {}", e);
-							e
-						})?;
+						event_queue
+							.add_event_with_idempotency_key(
+								event,
+								EventIdempotencyKey::OnchainTransactionReceived(txid),
+							)
+							.await
+							.map_err(|e| {
+								log_error!(logger, "Failed to push onchain event to queue: {}", e);
+								e
+							})?;
+						wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+						event_queue
+							.clear_idempotency_keys(&[
+								EventIdempotencyKey::OnchainTransactionReceived(txid),
+								EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+							])
+							.await?;
 					},
 				}
 			},
@@ -565,7 +650,62 @@ where
 			},
 		}
 	}
-	Ok(())
+
+	for txid in wallet.ready_locally_applied_unconfirmed_txids()? {
+		if reorgs_by_txid.contains_key(&txid) {
+			continue;
+		}
+		if !seen_received_txids.insert(txid) {
+			wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+			continue;
+		}
+		if seen_confirmed_txids.contains(&txid) {
+			wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+			continue;
+		}
+		if let Some(block_time) = transaction_confirmations.get(&txid).copied() {
+			enqueue_onchain_transaction_confirmed(
+				txid,
+				block_time.block_id.hash,
+				block_time.block_id.height,
+				block_time.confirmation_time,
+				wallet,
+				event_queue,
+				logger,
+				channel_manager,
+			)
+			.await?;
+			continue;
+		}
+		let Some(details) = get_transaction_details(&txid, wallet, channel_manager) else {
+			continue;
+		};
+		log_info!(
+			logger,
+			"New unconfirmed transaction {} detected in mempool (amount: {} sats)",
+			txid,
+			details.amount_sats
+		);
+		let event = Event::OnchainTransactionReceived { txid, details };
+		event_queue
+			.add_event_with_idempotency_key(
+				event,
+				EventIdempotencyKey::OnchainTransactionReceived(txid),
+			)
+			.await
+			.map_err(|e| {
+				log_error!(logger, "Failed to push onchain event to queue: {}", e);
+				e
+			})?;
+		wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
+		event_queue
+			.clear_idempotency_keys(&[
+				EventIdempotencyKey::OnchainTransactionReceived(txid),
+				EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+			])
+			.await?;
+	}
+	reorg_result
 }
 
 impl ChainSource {
@@ -832,6 +972,7 @@ impl ChainSource {
 				}
 			},
 			ChainSourceKind::Bitcoind(bitcoind_chain_source) => {
+				let event_queue = self.event_queue.lock().unwrap().clone();
 				bitcoind_chain_source
 					.continuously_sync_wallets(
 						stop_sync_receiver,
@@ -839,6 +980,7 @@ impl ChainSource {
 						channel_manager,
 						chain_monitor,
 						output_sweeper,
+						event_queue,
 					)
 					.await
 			},
@@ -1266,12 +1408,14 @@ impl ChainSource {
 				unreachable!("Listeners will be synced via transction-based syncing")
 			},
 			ChainSourceKind::Bitcoind(bitcoind_chain_source) => {
+				let event_queue = self.event_queue.lock().unwrap().clone();
 				bitcoind_chain_source
 					.poll_and_update_listeners(
 						onchain_wallet,
 						channel_manager,
 						chain_monitor,
 						output_sweeper,
+						event_queue,
 					)
 					.await
 			},
@@ -1295,31 +1439,64 @@ impl ChainSource {
 	pub(crate) async fn continuously_process_broadcast_queue(
 		&self, mut stop_tx_bcast_receiver: tokio::sync::watch::Receiver<()>,
 	) {
-		let mut receiver = self.tx_broadcaster.get_broadcast_queue().await;
+		let mut receivers = self.tx_broadcaster.get_broadcast_queue_receivers().await;
+		let mut explicit_jobs = futures_util::stream::FuturesUnordered::new();
 		loop {
 			let tx_bcast_logger = Arc::clone(&self.logger);
+			let crate::tx_broadcaster::BroadcastQueueReceivers { ldk_receiver, explicit_receiver } =
+				&mut *receivers;
 			tokio::select! {
 				_ = stop_tx_bcast_receiver.changed() => {
+					self.tx_broadcaster.pause_explicit_broadcasts();
+					while let Ok(request) = explicit_receiver.try_recv() {
+						if request.try_claim() {
+							request.send_result(Err(crate::tx_broadcaster::TxBroadcastError::NotDispatched));
+						}
+					}
 					log_debug!(
 						tx_bcast_logger,
 						"Stopping broadcasting transactions.",
 					);
 					return;
 				}
-				Some(next_package) = receiver.recv() => {
-					match &self.kind {
-						ChainSourceKind::Esplora(esplora_chain_source) => {
-							esplora_chain_source.process_broadcast_package(next_package).await
-						},
-						ChainSourceKind::Electrum(electrum_chain_source) => {
-							electrum_chain_source.process_broadcast_package(next_package).await
-						},
-						ChainSourceKind::Bitcoind(bitcoind_chain_source) => {
-							bitcoind_chain_source.process_broadcast_package(next_package).await
-						},
+				Some(request) = ldk_receiver.recv() => {
+					self.process_broadcast_request(request).await;
+				}
+				Some(request) = explicit_receiver.recv(),
+					if explicit_jobs.len() < crate::tx_broadcaster::MAX_IN_FLIGHT_EXPLICIT_BROADCASTS => {
+					if request.try_claim() {
+						explicit_jobs.push(self.process_broadcast_request(request));
 					}
 				}
+				Some(()) = futures_util::StreamExt::next(&mut explicit_jobs), if !explicit_jobs.is_empty() => {
+				}
 			}
+		}
+	}
+
+	async fn process_broadcast_request(&self, request: crate::tx_broadcaster::BroadcastRequest) {
+		let explicit_guard = request.take_explicit_guard();
+		let crate::tx_broadcaster::BroadcastRequest {
+			package,
+			result_sender,
+			ldk_claim: _ldk_claim,
+			explicit_claim: _explicit_claim,
+		} = request;
+		let result = match &self.kind {
+			ChainSourceKind::Esplora(source) => {
+				let _explicit_guard = explicit_guard;
+				source.process_broadcast_package(package).await
+			},
+			ChainSourceKind::Electrum(source) => {
+				source.process_broadcast_package(package, explicit_guard).await
+			},
+			ChainSourceKind::Bitcoind(source) => {
+				let _explicit_guard = explicit_guard;
+				source.process_broadcast_package(package).await
+			},
+		};
+		if let Some(result_sender) = result_sender {
+			let _ = result_sender.send(result);
 		}
 	}
 }

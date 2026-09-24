@@ -805,7 +805,11 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_offer_supports_chain() != 2135:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_abandon_pending_broadcast() != 686:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp() != 31954:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome() != 30310:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index() != 63246:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -815,6 +819,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type() != 3701:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome() != 15076:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf() != 53877:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_cpfp_fee_rate() != 32879:
@@ -822,6 +828,8 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_send_all_fee() != 16052:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee() != 57218:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts() != 40346:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs() != 19144:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -836,6 +844,8 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_account() != 30767:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_rebroadcast_transaction() != 36642:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -2249,6 +2259,12 @@ _UniffiLib.uniffi_ldk_node_fn_free_onchainpayment.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_free_onchainpayment.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_abandon_pending_broadcast.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_abandon_pending_broadcast.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_accelerate_by_cpfp.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2257,6 +2273,12 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_accelerate_by_cpfp.argtypes 
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_accelerate_by_cpfp.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome.restype = None
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_address_info_for_account_at_index.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2293,6 +2315,12 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type.argty
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_address_infos_for_type.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_bump_fee_by_rbf.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2324,6 +2352,11 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_total_fee.argtypes
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_calculate_total_fee.restype = ctypes.c_uint64
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_list_spendable_outputs.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -2365,6 +2398,12 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type.ar
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_rebroadcast_transaction.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_rebroadcast_transaction.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -3389,9 +3428,15 @@ _UniffiLib.uniffi_ldk_node_checksum_method_offer_offer_description.restype = cty
 _UniffiLib.uniffi_ldk_node_checksum_method_offer_supports_chain.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_offer_supports_chain.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_abandon_pending_broadcast.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_abandon_pending_broadcast.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_accelerate_by_cpfp.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_acknowledge_broadcast_outcome.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_info_for_account_at_index.restype = ctypes.c_uint16
@@ -3404,6 +3449,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_acco
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_address_infos_for_type.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_broadcast_outcome.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_bump_fee_by_rbf.restype = ctypes.c_uint16
@@ -3416,6 +3464,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_send_all_fee
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_calculate_total_fee.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_list_pending_broadcasts.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_list_spendable_outputs.restype = ctypes.c_uint16
@@ -3437,6 +3488,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_a
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_rebroadcast_transaction.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_rebroadcast_transaction.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to.restype = ctypes.c_uint16
@@ -6885,7 +6939,21 @@ class _UniffiConverterTypeOffer:
 
 
 class OnchainPaymentProtocol(typing.Protocol):
+    def abandon_pending_broadcast(self, txid: "Txid"):
+        """
+        Releases a pending spend only after an independent source proves every lineage member
+        absent from both the mempool and chain and no other process can rebroadcast it.
+        """
+
+        raise NotImplementedError
     def accelerate_by_cpfp(self, txid: "Txid",fee_rate: "typing.Optional[FeeRate]",destination_address: "typing.Optional[Address]"):
+        raise NotImplementedError
+    def acknowledge_broadcast_outcome(self, txid: "Txid"):
+        """
+        Removes a terminal outcome after the consumer has durably handled it.
+        Fails while the lineage is still active and is idempotent after removal.
+        """
+
         raise NotImplementedError
     def address_info_for_account_at_index(self, address_type: "AddressType",account_index: "int",keychain: "KeychainKind",index: "int"):
         raise NotImplementedError
@@ -6895,13 +6963,32 @@ class OnchainPaymentProtocol(typing.Protocol):
         raise NotImplementedError
     def address_infos_for_type(self, address_type: "AddressType",keychain: "KeychainKind",start_index: "int",count: "int"):
         raise NotImplementedError
+    def broadcast_outcome(self, txid: "Txid"):
+        """
+        Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+        Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+        """
+
+        raise NotImplementedError
     def bump_fee_by_rbf(self, txid: "Txid",fee_rate: "FeeRate"):
+        """
+        Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         raise NotImplementedError
     def calculate_cpfp_fee_rate(self, parent_txid: "Txid",urgent: "bool"):
         raise NotImplementedError
     def calculate_send_all_fee(self, address: "Address",retain_reserves: "bool",fee_rate: "typing.Optional[FeeRate]"):
         raise NotImplementedError
     def calculate_total_fee(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]"):
+        raise NotImplementedError
+    def list_pending_broadcasts(self, ):
+        """
+        Lists unresolved broadcasts and every transaction in each RBF lineage.
+        """
+
         raise NotImplementedError
     def list_spendable_outputs(self, ):
         raise NotImplementedError
@@ -6917,6 +7004,13 @@ class OnchainPaymentProtocol(typing.Protocol):
         raise NotImplementedError
     def new_address_info_for_type(self, address_type: "AddressType"):
         raise NotImplementedError
+    def rebroadcast_transaction(self, txid: "Txid"):
+        """
+        Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+        Do not create another spend for the same payment while its pending entry remains.
+        """
+
+        raise NotImplementedError
     def reveal_receive_addresses_to(self, address_type: "AddressType",index: "int"):
         raise NotImplementedError
     def reveal_receive_addresses_to_account(self, address_type: "AddressType",account_index: "int",index: "int"):
@@ -6924,8 +7018,20 @@ class OnchainPaymentProtocol(typing.Protocol):
     def select_utxos_with_algorithm(self, target_amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",algorithm: "CoinSelectionAlgorithm",utxos: "typing.Optional[typing.List[SpendableUtxo]]"):
         raise NotImplementedError
     def send_all_to_address(self, address: "Address",retain_reserve: "bool",fee_rate: "typing.Optional[FeeRate]"):
+        """
+        Sends the available balance and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         raise NotImplementedError
     def send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]"):
+        """
+        Sends an exact amount and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         raise NotImplementedError
 
 
@@ -6954,6 +7060,22 @@ class OnchainPayment:
         return inst
 
 
+    def abandon_pending_broadcast(self, txid: "Txid") -> None:
+        """
+        Releases a pending spend only after an independent source proves every lineage member
+        absent from both the mempool and chain and no other process can rebroadcast it.
+        """
+
+        _UniffiConverterTypeTxid.check_lower(txid)
+
+        _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_abandon_pending_broadcast,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeTxid.lower(txid))
+
+
+
+
+
+
     def accelerate_by_cpfp(self, txid: "Txid",fee_rate: "typing.Optional[FeeRate]",destination_address: "typing.Optional[Address]") -> "Txid":
         _UniffiConverterTypeTxid.check_lower(txid)
 
@@ -6967,6 +7089,22 @@ class OnchainPayment:
         _UniffiConverterOptionalTypeFeeRate.lower(fee_rate),
         _UniffiConverterOptionalTypeAddress.lower(destination_address))
         )
+
+
+
+
+
+    def acknowledge_broadcast_outcome(self, txid: "Txid") -> None:
+        """
+        Removes a terminal outcome after the consumer has durably handled it.
+        Fails while the lineage is still active and is idempotent after removal.
+        """
+
+        _UniffiConverterTypeTxid.check_lower(txid)
+
+        _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_acknowledge_broadcast_outcome,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeTxid.lower(txid))
+
 
 
 
@@ -7056,7 +7194,30 @@ class OnchainPayment:
 
 
 
+    def broadcast_outcome(self, txid: "Txid") -> "typing.Optional[BroadcastOutcome]":
+        """
+        Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+        Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+        """
+
+        _UniffiConverterTypeTxid.check_lower(txid)
+
+        return _UniffiConverterOptionalTypeBroadcastOutcome.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_broadcast_outcome,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeTxid.lower(txid))
+        )
+
+
+
+
+
     def bump_fee_by_rbf(self, txid: "Txid",fee_rate: "FeeRate") -> "Txid":
+        """
+        Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         _UniffiConverterTypeTxid.check_lower(txid)
 
         _UniffiConverterTypeFeeRate.check_lower(fee_rate)
@@ -7119,6 +7280,19 @@ class OnchainPayment:
         _UniffiConverterUInt64.lower(amount_sats),
         _UniffiConverterOptionalTypeFeeRate.lower(fee_rate),
         _UniffiConverterOptionalSequenceTypeSpendableUtxo.lower(utxos_to_spend))
+        )
+
+
+
+
+
+    def list_pending_broadcasts(self, ) -> "typing.List[PendingBroadcastInfo]":
+        """
+        Lists unresolved broadcasts and every transaction in each RBF lineage.
+        """
+
+        return _UniffiConverterSequenceTypePendingBroadcastInfo.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_list_pending_broadcasts,self._uniffi_clone_pointer(),)
         )
 
 
@@ -7206,6 +7380,23 @@ class OnchainPayment:
 
 
 
+    def rebroadcast_transaction(self, txid: "Txid") -> "Txid":
+        """
+        Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+        Do not create another spend for the same payment while its pending entry remains.
+        """
+
+        _UniffiConverterTypeTxid.check_lower(txid)
+
+        return _UniffiConverterTypeTxid.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_rebroadcast_transaction,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeTxid.lower(txid))
+        )
+
+
+
+
+
     def reveal_receive_addresses_to(self, address_type: "AddressType",index: "int") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
 
@@ -7259,6 +7450,12 @@ class OnchainPayment:
 
 
     def send_all_to_address(self, address: "Address",retain_reserve: "bool",fee_rate: "typing.Optional[FeeRate]") -> "Txid":
+        """
+        Sends the available balance and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         _UniffiConverterTypeAddress.check_lower(address)
 
         _UniffiConverterBool.check_lower(retain_reserve)
@@ -7277,6 +7474,12 @@ class OnchainPayment:
 
 
     def send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]") -> "Txid":
+        """
+        Sends an exact amount and waits for the configured backend's broadcast result.
+        `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+        reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+        """
+
         _UniffiConverterTypeAddress.check_lower(address)
 
         _UniffiConverterUInt64.check_lower(amount_sats)
@@ -8138,6 +8341,49 @@ class _UniffiConverterTypeBestBlock(_UniffiConverterRustBuffer):
     def write(value, buf):
         _UniffiConverterTypeBlockHash.write(value.block_hash, buf)
         _UniffiConverterUInt32.write(value.height, buf)
+
+
+class BroadcastOutcome:
+    status: "BroadcastOutcomeStatus"
+    txid: "Txid"
+    lineage: "typing.List[Txid]"
+    def __init__(self, *, status: "BroadcastOutcomeStatus", txid: "Txid", lineage: "typing.List[Txid]"):
+        self.status = status
+        self.txid = txid
+        self.lineage = lineage
+
+    def __str__(self):
+        return "BroadcastOutcome(status={}, txid={}, lineage={})".format(self.status, self.txid, self.lineage)
+
+    def __eq__(self, other):
+        if self.status != other.status:
+            return False
+        if self.txid != other.txid:
+            return False
+        if self.lineage != other.lineage:
+            return False
+        return True
+
+class _UniffiConverterTypeBroadcastOutcome(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return BroadcastOutcome(
+            status=_UniffiConverterTypeBroadcastOutcomeStatus.read(buf),
+            txid=_UniffiConverterTypeTxid.read(buf),
+            lineage=_UniffiConverterSequenceTypeTxid.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterTypeBroadcastOutcomeStatus.check_lower(value.status)
+        _UniffiConverterTypeTxid.check_lower(value.txid)
+        _UniffiConverterSequenceTypeTxid.check_lower(value.lineage)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterTypeBroadcastOutcomeStatus.write(value.status, buf)
+        _UniffiConverterTypeTxid.write(value.txid, buf)
+        _UniffiConverterSequenceTypeTxid.write(value.lineage, buf)
 
 
 class ChannelConfig:
@@ -9762,6 +10008,42 @@ class _UniffiConverterTypePeerDetails(_UniffiConverterRustBuffer):
         _UniffiConverterBool.write(value.is_connected, buf)
 
 
+class PendingBroadcastInfo:
+    txid: "Txid"
+    lineage: "typing.List[Txid]"
+    def __init__(self, *, txid: "Txid", lineage: "typing.List[Txid]"):
+        self.txid = txid
+        self.lineage = lineage
+
+    def __str__(self):
+        return "PendingBroadcastInfo(txid={}, lineage={})".format(self.txid, self.lineage)
+
+    def __eq__(self, other):
+        if self.txid != other.txid:
+            return False
+        if self.lineage != other.lineage:
+            return False
+        return True
+
+class _UniffiConverterTypePendingBroadcastInfo(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return PendingBroadcastInfo(
+            txid=_UniffiConverterTypeTxid.read(buf),
+            lineage=_UniffiConverterSequenceTypeTxid.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiConverterTypeTxid.check_lower(value.txid)
+        _UniffiConverterSequenceTypeTxid.check_lower(value.lineage)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiConverterTypeTxid.write(value.txid, buf)
+        _UniffiConverterSequenceTypeTxid.write(value.lineage, buf)
+
+
 class ProbeHandle:
     payment_hash: "PaymentHash"
     payment_id: "PaymentId"
@@ -10549,6 +10831,52 @@ class _UniffiConverterTypeBolt11InvoiceDescription(_UniffiConverterRustBuffer):
         if value.is_direct():
             buf.write_i32(2)
             _UniffiConverterString.write(value.description, buf)
+
+
+
+
+
+
+
+class BroadcastOutcomeStatus(enum.Enum):
+    PENDING = 0
+
+    ACCEPTED = 1
+
+    ABANDONED = 2
+
+
+
+class _UniffiConverterTypeBroadcastOutcomeStatus(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        variant = buf.read_i32()
+        if variant == 1:
+            return BroadcastOutcomeStatus.PENDING
+        if variant == 2:
+            return BroadcastOutcomeStatus.ACCEPTED
+        if variant == 3:
+            return BroadcastOutcomeStatus.ABANDONED
+        raise InternalError("Raw enum value doesn't match any cases")
+
+    @staticmethod
+    def check_lower(value):
+        if value == BroadcastOutcomeStatus.PENDING:
+            return
+        if value == BroadcastOutcomeStatus.ACCEPTED:
+            return
+        if value == BroadcastOutcomeStatus.ABANDONED:
+            return
+        raise ValueError(value)
+
+    @staticmethod
+    def write(value, buf):
+        if value == BroadcastOutcomeStatus.PENDING:
+            buf.write_i32(1)
+        if value == BroadcastOutcomeStatus.ACCEPTED:
+            buf.write_i32(2)
+        if value == BroadcastOutcomeStatus.ABANDONED:
+            buf.write_i32(3)
 
 
 
@@ -13181,345 +13509,539 @@ _UniffiTempNodeError = NodeError
 
 class NodeError:  # type: ignore
     class AlreadyRunning(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.AlreadyRunning({})".format(repr(str(self)))
+            return "NodeError.AlreadyRunning({})".format(str(self))
     _UniffiTempNodeError.AlreadyRunning = AlreadyRunning # type: ignore
     class NotRunning(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.NotRunning({})".format(repr(str(self)))
+            return "NodeError.NotRunning({})".format(str(self))
     _UniffiTempNodeError.NotRunning = NotRunning # type: ignore
     class OnchainTxCreationFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.OnchainTxCreationFailed({})".format(repr(str(self)))
+            return "NodeError.OnchainTxCreationFailed({})".format(str(self))
     _UniffiTempNodeError.OnchainTxCreationFailed = OnchainTxCreationFailed # type: ignore
     class ConnectionFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.ConnectionFailed({})".format(repr(str(self)))
+            return "NodeError.ConnectionFailed({})".format(str(self))
     _UniffiTempNodeError.ConnectionFailed = ConnectionFailed # type: ignore
     class InvoiceCreationFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvoiceCreationFailed({})".format(repr(str(self)))
+            return "NodeError.InvoiceCreationFailed({})".format(str(self))
     _UniffiTempNodeError.InvoiceCreationFailed = InvoiceCreationFailed # type: ignore
     class InvoiceRequestCreationFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvoiceRequestCreationFailed({})".format(repr(str(self)))
+            return "NodeError.InvoiceRequestCreationFailed({})".format(str(self))
     _UniffiTempNodeError.InvoiceRequestCreationFailed = InvoiceRequestCreationFailed # type: ignore
     class OfferCreationFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.OfferCreationFailed({})".format(repr(str(self)))
+            return "NodeError.OfferCreationFailed({})".format(str(self))
     _UniffiTempNodeError.OfferCreationFailed = OfferCreationFailed # type: ignore
     class RefundCreationFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.RefundCreationFailed({})".format(repr(str(self)))
+            return "NodeError.RefundCreationFailed({})".format(str(self))
     _UniffiTempNodeError.RefundCreationFailed = RefundCreationFailed # type: ignore
     class PaymentSendingFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.PaymentSendingFailed({})".format(repr(str(self)))
+            return "NodeError.PaymentSendingFailed({})".format(str(self))
     _UniffiTempNodeError.PaymentSendingFailed = PaymentSendingFailed # type: ignore
     class InvalidCustomTlvs(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidCustomTlvs({})".format(repr(str(self)))
+            return "NodeError.InvalidCustomTlvs({})".format(str(self))
     _UniffiTempNodeError.InvalidCustomTlvs = InvalidCustomTlvs # type: ignore
     class ProbeSendingFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.ProbeSendingFailed({})".format(repr(str(self)))
+            return "NodeError.ProbeSendingFailed({})".format(str(self))
     _UniffiTempNodeError.ProbeSendingFailed = ProbeSendingFailed # type: ignore
     class RouteNotFound(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.RouteNotFound({})".format(repr(str(self)))
+            return "NodeError.RouteNotFound({})".format(str(self))
     _UniffiTempNodeError.RouteNotFound = RouteNotFound # type: ignore
     class ChannelCreationFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.ChannelCreationFailed({})".format(repr(str(self)))
+            return "NodeError.ChannelCreationFailed({})".format(str(self))
     _UniffiTempNodeError.ChannelCreationFailed = ChannelCreationFailed # type: ignore
     class ChannelClosingFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.ChannelClosingFailed({})".format(repr(str(self)))
+            return "NodeError.ChannelClosingFailed({})".format(str(self))
     _UniffiTempNodeError.ChannelClosingFailed = ChannelClosingFailed # type: ignore
     class ChannelSplicingFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.ChannelSplicingFailed({})".format(repr(str(self)))
+            return "NodeError.ChannelSplicingFailed({})".format(str(self))
     _UniffiTempNodeError.ChannelSplicingFailed = ChannelSplicingFailed # type: ignore
     class ChannelConfigUpdateFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.ChannelConfigUpdateFailed({})".format(repr(str(self)))
+            return "NodeError.ChannelConfigUpdateFailed({})".format(str(self))
     _UniffiTempNodeError.ChannelConfigUpdateFailed = ChannelConfigUpdateFailed # type: ignore
     class PersistenceFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.PersistenceFailed({})".format(repr(str(self)))
+            return "NodeError.PersistenceFailed({})".format(str(self))
     _UniffiTempNodeError.PersistenceFailed = PersistenceFailed # type: ignore
     class FeerateEstimationUpdateFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.FeerateEstimationUpdateFailed({})".format(repr(str(self)))
+            return "NodeError.FeerateEstimationUpdateFailed({})".format(str(self))
     _UniffiTempNodeError.FeerateEstimationUpdateFailed = FeerateEstimationUpdateFailed # type: ignore
     class FeerateEstimationUpdateTimeout(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.FeerateEstimationUpdateTimeout({})".format(repr(str(self)))
+            return "NodeError.FeerateEstimationUpdateTimeout({})".format(str(self))
     _UniffiTempNodeError.FeerateEstimationUpdateTimeout = FeerateEstimationUpdateTimeout # type: ignore
     class WalletOperationFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.WalletOperationFailed({})".format(repr(str(self)))
+            return "NodeError.WalletOperationFailed({})".format(str(self))
     _UniffiTempNodeError.WalletOperationFailed = WalletOperationFailed # type: ignore
     class WalletOperationTimeout(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.WalletOperationTimeout({})".format(repr(str(self)))
+            return "NodeError.WalletOperationTimeout({})".format(str(self))
     _UniffiTempNodeError.WalletOperationTimeout = WalletOperationTimeout # type: ignore
     class OnchainTxSigningFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.OnchainTxSigningFailed({})".format(repr(str(self)))
+            return "NodeError.OnchainTxSigningFailed({})".format(str(self))
     _UniffiTempNodeError.OnchainTxSigningFailed = OnchainTxSigningFailed # type: ignore
     class TxSyncFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.TxSyncFailed({})".format(repr(str(self)))
+            return "NodeError.TxSyncFailed({})".format(str(self))
     _UniffiTempNodeError.TxSyncFailed = TxSyncFailed # type: ignore
     class TxSyncTimeout(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.TxSyncTimeout({})".format(repr(str(self)))
+            return "NodeError.TxSyncTimeout({})".format(str(self))
     _UniffiTempNodeError.TxSyncTimeout = TxSyncTimeout # type: ignore
     class GossipUpdateFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.GossipUpdateFailed({})".format(repr(str(self)))
+            return "NodeError.GossipUpdateFailed({})".format(str(self))
     _UniffiTempNodeError.GossipUpdateFailed = GossipUpdateFailed # type: ignore
     class GossipUpdateTimeout(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.GossipUpdateTimeout({})".format(repr(str(self)))
+            return "NodeError.GossipUpdateTimeout({})".format(str(self))
     _UniffiTempNodeError.GossipUpdateTimeout = GossipUpdateTimeout # type: ignore
     class LiquidityRequestFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.LiquidityRequestFailed({})".format(repr(str(self)))
+            return "NodeError.LiquidityRequestFailed({})".format(str(self))
     _UniffiTempNodeError.LiquidityRequestFailed = LiquidityRequestFailed # type: ignore
     class UriParameterParsingFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.UriParameterParsingFailed({})".format(repr(str(self)))
+            return "NodeError.UriParameterParsingFailed({})".format(str(self))
     _UniffiTempNodeError.UriParameterParsingFailed = UriParameterParsingFailed # type: ignore
     class InvalidAddress(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidAddress({})".format(repr(str(self)))
+            return "NodeError.InvalidAddress({})".format(str(self))
     _UniffiTempNodeError.InvalidAddress = InvalidAddress # type: ignore
     class InvalidSocketAddress(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidSocketAddress({})".format(repr(str(self)))
+            return "NodeError.InvalidSocketAddress({})".format(str(self))
     _UniffiTempNodeError.InvalidSocketAddress = InvalidSocketAddress # type: ignore
     class InvalidPublicKey(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidPublicKey({})".format(repr(str(self)))
+            return "NodeError.InvalidPublicKey({})".format(str(self))
     _UniffiTempNodeError.InvalidPublicKey = InvalidPublicKey # type: ignore
     class InvalidSecretKey(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidSecretKey({})".format(repr(str(self)))
+            return "NodeError.InvalidSecretKey({})".format(str(self))
     _UniffiTempNodeError.InvalidSecretKey = InvalidSecretKey # type: ignore
     class InvalidOfferId(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidOfferId({})".format(repr(str(self)))
+            return "NodeError.InvalidOfferId({})".format(str(self))
     _UniffiTempNodeError.InvalidOfferId = InvalidOfferId # type: ignore
     class InvalidNodeId(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidNodeId({})".format(repr(str(self)))
+            return "NodeError.InvalidNodeId({})".format(str(self))
     _UniffiTempNodeError.InvalidNodeId = InvalidNodeId # type: ignore
     class InvalidPaymentId(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidPaymentId({})".format(repr(str(self)))
+            return "NodeError.InvalidPaymentId({})".format(str(self))
     _UniffiTempNodeError.InvalidPaymentId = InvalidPaymentId # type: ignore
     class InvalidPaymentHash(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidPaymentHash({})".format(repr(str(self)))
+            return "NodeError.InvalidPaymentHash({})".format(str(self))
     _UniffiTempNodeError.InvalidPaymentHash = InvalidPaymentHash # type: ignore
     class InvalidPaymentPreimage(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidPaymentPreimage({})".format(repr(str(self)))
+            return "NodeError.InvalidPaymentPreimage({})".format(str(self))
     _UniffiTempNodeError.InvalidPaymentPreimage = InvalidPaymentPreimage # type: ignore
     class InvalidPaymentSecret(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidPaymentSecret({})".format(repr(str(self)))
+            return "NodeError.InvalidPaymentSecret({})".format(str(self))
     _UniffiTempNodeError.InvalidPaymentSecret = InvalidPaymentSecret # type: ignore
     class InvalidAmount(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidAmount({})".format(repr(str(self)))
+            return "NodeError.InvalidAmount({})".format(str(self))
     _UniffiTempNodeError.InvalidAmount = InvalidAmount # type: ignore
     class InvalidInvoice(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidInvoice({})".format(repr(str(self)))
+            return "NodeError.InvalidInvoice({})".format(str(self))
     _UniffiTempNodeError.InvalidInvoice = InvalidInvoice # type: ignore
     class InvalidOffer(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidOffer({})".format(repr(str(self)))
+            return "NodeError.InvalidOffer({})".format(str(self))
     _UniffiTempNodeError.InvalidOffer = InvalidOffer # type: ignore
     class InvalidRefund(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidRefund({})".format(repr(str(self)))
+            return "NodeError.InvalidRefund({})".format(str(self))
     _UniffiTempNodeError.InvalidRefund = InvalidRefund # type: ignore
     class InvalidChannelId(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidChannelId({})".format(repr(str(self)))
+            return "NodeError.InvalidChannelId({})".format(str(self))
     _UniffiTempNodeError.InvalidChannelId = InvalidChannelId # type: ignore
     class InvalidNetwork(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidNetwork({})".format(repr(str(self)))
+            return "NodeError.InvalidNetwork({})".format(str(self))
     _UniffiTempNodeError.InvalidNetwork = InvalidNetwork # type: ignore
     class InvalidUri(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidUri({})".format(repr(str(self)))
+            return "NodeError.InvalidUri({})".format(str(self))
     _UniffiTempNodeError.InvalidUri = InvalidUri # type: ignore
     class InvalidQuantity(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidQuantity({})".format(repr(str(self)))
+            return "NodeError.InvalidQuantity({})".format(str(self))
     _UniffiTempNodeError.InvalidQuantity = InvalidQuantity # type: ignore
     class InvalidNodeAlias(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidNodeAlias({})".format(repr(str(self)))
+            return "NodeError.InvalidNodeAlias({})".format(str(self))
     _UniffiTempNodeError.InvalidNodeAlias = InvalidNodeAlias # type: ignore
     class InvalidDateTime(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidDateTime({})".format(repr(str(self)))
+            return "NodeError.InvalidDateTime({})".format(str(self))
     _UniffiTempNodeError.InvalidDateTime = InvalidDateTime # type: ignore
     class InvalidFeeRate(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidFeeRate({})".format(repr(str(self)))
+            return "NodeError.InvalidFeeRate({})".format(str(self))
     _UniffiTempNodeError.InvalidFeeRate = InvalidFeeRate # type: ignore
     class DuplicatePayment(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.DuplicatePayment({})".format(repr(str(self)))
+            return "NodeError.DuplicatePayment({})".format(str(self))
     _UniffiTempNodeError.DuplicatePayment = DuplicatePayment # type: ignore
     class UnsupportedCurrency(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.UnsupportedCurrency({})".format(repr(str(self)))
+            return "NodeError.UnsupportedCurrency({})".format(str(self))
     _UniffiTempNodeError.UnsupportedCurrency = UnsupportedCurrency # type: ignore
     class InsufficientFunds(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InsufficientFunds({})".format(repr(str(self)))
+            return "NodeError.InsufficientFunds({})".format(str(self))
     _UniffiTempNodeError.InsufficientFunds = InsufficientFunds # type: ignore
     class LiquiditySourceUnavailable(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.LiquiditySourceUnavailable({})".format(repr(str(self)))
+            return "NodeError.LiquiditySourceUnavailable({})".format(str(self))
     _UniffiTempNodeError.LiquiditySourceUnavailable = LiquiditySourceUnavailable # type: ignore
     class LiquidityFeeTooHigh(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.LiquidityFeeTooHigh({})".format(repr(str(self)))
+            return "NodeError.LiquidityFeeTooHigh({})".format(str(self))
     _UniffiTempNodeError.LiquidityFeeTooHigh = LiquidityFeeTooHigh # type: ignore
     class InvalidBlindedPaths(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidBlindedPaths({})".format(repr(str(self)))
+            return "NodeError.InvalidBlindedPaths({})".format(str(self))
     _UniffiTempNodeError.InvalidBlindedPaths = InvalidBlindedPaths # type: ignore
     class AsyncPaymentServicesDisabled(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.AsyncPaymentServicesDisabled({})".format(repr(str(self)))
+            return "NodeError.AsyncPaymentServicesDisabled({})".format(str(self))
     _UniffiTempNodeError.AsyncPaymentServicesDisabled = AsyncPaymentServicesDisabled # type: ignore
     class CannotRbfFundingTransaction(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.CannotRbfFundingTransaction({})".format(repr(str(self)))
+            return "NodeError.CannotRbfFundingTransaction({})".format(str(self))
     _UniffiTempNodeError.CannotRbfFundingTransaction = CannotRbfFundingTransaction # type: ignore
     class TransactionNotFound(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.TransactionNotFound({})".format(repr(str(self)))
+            return "NodeError.TransactionNotFound({})".format(str(self))
     _UniffiTempNodeError.TransactionNotFound = TransactionNotFound # type: ignore
     class TransactionAlreadyConfirmed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.TransactionAlreadyConfirmed({})".format(repr(str(self)))
+            return "NodeError.TransactionAlreadyConfirmed({})".format(str(self))
     _UniffiTempNodeError.TransactionAlreadyConfirmed = TransactionAlreadyConfirmed # type: ignore
     class NoSpendableOutputs(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.NoSpendableOutputs({})".format(repr(str(self)))
+            return "NodeError.NoSpendableOutputs({})".format(str(self))
     _UniffiTempNodeError.NoSpendableOutputs = NoSpendableOutputs # type: ignore
     class CoinSelectionFailed(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.CoinSelectionFailed({})".format(repr(str(self)))
+            return "NodeError.CoinSelectionFailed({})".format(str(self))
     _UniffiTempNodeError.CoinSelectionFailed = CoinSelectionFailed # type: ignore
     class InvalidMnemonic(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidMnemonic({})".format(repr(str(self)))
+            return "NodeError.InvalidMnemonic({})".format(str(self))
     _UniffiTempNodeError.InvalidMnemonic = InvalidMnemonic # type: ignore
     class BackgroundSyncNotEnabled(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.BackgroundSyncNotEnabled({})".format(repr(str(self)))
+            return "NodeError.BackgroundSyncNotEnabled({})".format(str(self))
     _UniffiTempNodeError.BackgroundSyncNotEnabled = BackgroundSyncNotEnabled # type: ignore
     class AddressTypeAlreadyMonitored(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.AddressTypeAlreadyMonitored({})".format(repr(str(self)))
+            return "NodeError.AddressTypeAlreadyMonitored({})".format(str(self))
     _UniffiTempNodeError.AddressTypeAlreadyMonitored = AddressTypeAlreadyMonitored # type: ignore
     class AddressTypeIsPrimary(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.AddressTypeIsPrimary({})".format(repr(str(self)))
+            return "NodeError.AddressTypeIsPrimary({})".format(str(self))
     _UniffiTempNodeError.AddressTypeIsPrimary = AddressTypeIsPrimary # type: ignore
     class AddressTypeNotMonitored(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.AddressTypeNotMonitored({})".format(repr(str(self)))
+            return "NodeError.AddressTypeNotMonitored({})".format(str(self))
     _UniffiTempNodeError.AddressTypeNotMonitored = AddressTypeNotMonitored # type: ignore
     class OnchainWalletAccountNotRegistered(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.OnchainWalletAccountNotRegistered({})".format(repr(str(self)))
+            return "NodeError.OnchainWalletAccountNotRegistered({})".format(str(self))
     _UniffiTempNodeError.OnchainWalletAccountNotRegistered = OnchainWalletAccountNotRegistered # type: ignore
     class InvalidSeedBytes(_UniffiTempNodeError):
+        def __init__(self):
+            pass
 
         def __repr__(self):
-            return "NodeError.InvalidSeedBytes({})".format(repr(str(self)))
+            return "NodeError.InvalidSeedBytes({})".format(str(self))
     _UniffiTempNodeError.InvalidSeedBytes = InvalidSeedBytes # type: ignore
+    class OnchainTxBroadcastRejected(_UniffiTempNodeError):
+        """
+        The backend conclusively rejected the transaction.
+        """
+
+        def __init__(self, txid):
+            super().__init__(", ".join([
+                "txid={!r}".format(txid),
+            ]))
+            self.txid = txid
+
+        def __repr__(self):
+            return "NodeError.OnchainTxBroadcastRejected({})".format(str(self))
+    _UniffiTempNodeError.OnchainTxBroadcastRejected = OnchainTxBroadcastRejected # type: ignore
+    class OnchainTxBroadcastFailed(_UniffiTempNodeError):
+        """
+        Dispatch occurred, but backend acceptance is unknown. Do not create a fresh spend;
+        reconcile or rebroadcast this exact transaction ID.
+        """
+
+        def __init__(self, txid):
+            super().__init__(", ".join([
+                "txid={!r}".format(txid),
+            ]))
+            self.txid = txid
+
+        def __repr__(self):
+            return "NodeError.OnchainTxBroadcastFailed({})".format(str(self))
+    _UniffiTempNodeError.OnchainTxBroadcastFailed = OnchainTxBroadcastFailed # type: ignore
+    class OnchainTxBroadcastTimeout(_UniffiTempNodeError):
+        """
+        Dispatch occurred, but backend acceptance is unknown after the timeout. Do not create a
+        fresh spend; reconcile or rebroadcast this exact transaction ID.
+        """
+
+        def __init__(self, txid):
+            super().__init__(", ".join([
+                "txid={!r}".format(txid),
+            ]))
+            self.txid = txid
+
+        def __repr__(self):
+            return "NodeError.OnchainTxBroadcastTimeout({})".format(str(self))
+    _UniffiTempNodeError.OnchainTxBroadcastTimeout = OnchainTxBroadcastTimeout # type: ignore
+    class OnchainTxBroadcastNotDispatched(_UniffiTempNodeError):
+        """
+        The transaction was conclusively not dispatched to the backend.
+        """
+
+        def __init__(self, txid):
+            super().__init__(", ".join([
+                "txid={!r}".format(txid),
+            ]))
+            self.txid = txid
+
+        def __repr__(self):
+            return "NodeError.OnchainTxBroadcastNotDispatched({})".format(str(self))
+    _UniffiTempNodeError.OnchainTxBroadcastNotDispatched = OnchainTxBroadcastNotDispatched # type: ignore
 
 NodeError = _UniffiTempNodeError # type: ignore
 del _UniffiTempNodeError
@@ -13531,275 +14053,223 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
         variant = buf.read_i32()
         if variant == 1:
             return NodeError.AlreadyRunning(
-                _UniffiConverterString.read(buf),
             )
         if variant == 2:
             return NodeError.NotRunning(
-                _UniffiConverterString.read(buf),
             )
         if variant == 3:
             return NodeError.OnchainTxCreationFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 4:
             return NodeError.ConnectionFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 5:
             return NodeError.InvoiceCreationFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 6:
             return NodeError.InvoiceRequestCreationFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 7:
             return NodeError.OfferCreationFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 8:
             return NodeError.RefundCreationFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 9:
             return NodeError.PaymentSendingFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 10:
             return NodeError.InvalidCustomTlvs(
-                _UniffiConverterString.read(buf),
             )
         if variant == 11:
             return NodeError.ProbeSendingFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 12:
             return NodeError.RouteNotFound(
-                _UniffiConverterString.read(buf),
             )
         if variant == 13:
             return NodeError.ChannelCreationFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 14:
             return NodeError.ChannelClosingFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 15:
             return NodeError.ChannelSplicingFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 16:
             return NodeError.ChannelConfigUpdateFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 17:
             return NodeError.PersistenceFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 18:
             return NodeError.FeerateEstimationUpdateFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 19:
             return NodeError.FeerateEstimationUpdateTimeout(
-                _UniffiConverterString.read(buf),
             )
         if variant == 20:
             return NodeError.WalletOperationFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 21:
             return NodeError.WalletOperationTimeout(
-                _UniffiConverterString.read(buf),
             )
         if variant == 22:
             return NodeError.OnchainTxSigningFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 23:
             return NodeError.TxSyncFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 24:
             return NodeError.TxSyncTimeout(
-                _UniffiConverterString.read(buf),
             )
         if variant == 25:
             return NodeError.GossipUpdateFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 26:
             return NodeError.GossipUpdateTimeout(
-                _UniffiConverterString.read(buf),
             )
         if variant == 27:
             return NodeError.LiquidityRequestFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 28:
             return NodeError.UriParameterParsingFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 29:
             return NodeError.InvalidAddress(
-                _UniffiConverterString.read(buf),
             )
         if variant == 30:
             return NodeError.InvalidSocketAddress(
-                _UniffiConverterString.read(buf),
             )
         if variant == 31:
             return NodeError.InvalidPublicKey(
-                _UniffiConverterString.read(buf),
             )
         if variant == 32:
             return NodeError.InvalidSecretKey(
-                _UniffiConverterString.read(buf),
             )
         if variant == 33:
             return NodeError.InvalidOfferId(
-                _UniffiConverterString.read(buf),
             )
         if variant == 34:
             return NodeError.InvalidNodeId(
-                _UniffiConverterString.read(buf),
             )
         if variant == 35:
             return NodeError.InvalidPaymentId(
-                _UniffiConverterString.read(buf),
             )
         if variant == 36:
             return NodeError.InvalidPaymentHash(
-                _UniffiConverterString.read(buf),
             )
         if variant == 37:
             return NodeError.InvalidPaymentPreimage(
-                _UniffiConverterString.read(buf),
             )
         if variant == 38:
             return NodeError.InvalidPaymentSecret(
-                _UniffiConverterString.read(buf),
             )
         if variant == 39:
             return NodeError.InvalidAmount(
-                _UniffiConverterString.read(buf),
             )
         if variant == 40:
             return NodeError.InvalidInvoice(
-                _UniffiConverterString.read(buf),
             )
         if variant == 41:
             return NodeError.InvalidOffer(
-                _UniffiConverterString.read(buf),
             )
         if variant == 42:
             return NodeError.InvalidRefund(
-                _UniffiConverterString.read(buf),
             )
         if variant == 43:
             return NodeError.InvalidChannelId(
-                _UniffiConverterString.read(buf),
             )
         if variant == 44:
             return NodeError.InvalidNetwork(
-                _UniffiConverterString.read(buf),
             )
         if variant == 45:
             return NodeError.InvalidUri(
-                _UniffiConverterString.read(buf),
             )
         if variant == 46:
             return NodeError.InvalidQuantity(
-                _UniffiConverterString.read(buf),
             )
         if variant == 47:
             return NodeError.InvalidNodeAlias(
-                _UniffiConverterString.read(buf),
             )
         if variant == 48:
             return NodeError.InvalidDateTime(
-                _UniffiConverterString.read(buf),
             )
         if variant == 49:
             return NodeError.InvalidFeeRate(
-                _UniffiConverterString.read(buf),
             )
         if variant == 50:
             return NodeError.DuplicatePayment(
-                _UniffiConverterString.read(buf),
             )
         if variant == 51:
             return NodeError.UnsupportedCurrency(
-                _UniffiConverterString.read(buf),
             )
         if variant == 52:
             return NodeError.InsufficientFunds(
-                _UniffiConverterString.read(buf),
             )
         if variant == 53:
             return NodeError.LiquiditySourceUnavailable(
-                _UniffiConverterString.read(buf),
             )
         if variant == 54:
             return NodeError.LiquidityFeeTooHigh(
-                _UniffiConverterString.read(buf),
             )
         if variant == 55:
             return NodeError.InvalidBlindedPaths(
-                _UniffiConverterString.read(buf),
             )
         if variant == 56:
             return NodeError.AsyncPaymentServicesDisabled(
-                _UniffiConverterString.read(buf),
             )
         if variant == 57:
             return NodeError.CannotRbfFundingTransaction(
-                _UniffiConverterString.read(buf),
             )
         if variant == 58:
             return NodeError.TransactionNotFound(
-                _UniffiConverterString.read(buf),
             )
         if variant == 59:
             return NodeError.TransactionAlreadyConfirmed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 60:
             return NodeError.NoSpendableOutputs(
-                _UniffiConverterString.read(buf),
             )
         if variant == 61:
             return NodeError.CoinSelectionFailed(
-                _UniffiConverterString.read(buf),
             )
         if variant == 62:
             return NodeError.InvalidMnemonic(
-                _UniffiConverterString.read(buf),
             )
         if variant == 63:
             return NodeError.BackgroundSyncNotEnabled(
-                _UniffiConverterString.read(buf),
             )
         if variant == 64:
             return NodeError.AddressTypeAlreadyMonitored(
-                _UniffiConverterString.read(buf),
             )
         if variant == 65:
             return NodeError.AddressTypeIsPrimary(
-                _UniffiConverterString.read(buf),
             )
         if variant == 66:
             return NodeError.AddressTypeNotMonitored(
-                _UniffiConverterString.read(buf),
             )
         if variant == 67:
             return NodeError.OnchainWalletAccountNotRegistered(
-                _UniffiConverterString.read(buf),
             )
         if variant == 68:
             return NodeError.InvalidSeedBytes(
-                _UniffiConverterString.read(buf),
+            )
+        if variant == 69:
+            return NodeError.OnchainTxBroadcastRejected(
+                _UniffiConverterTypeTxid.read(buf),
+            )
+        if variant == 70:
+            return NodeError.OnchainTxBroadcastFailed(
+                _UniffiConverterTypeTxid.read(buf),
+            )
+        if variant == 71:
+            return NodeError.OnchainTxBroadcastTimeout(
+                _UniffiConverterTypeTxid.read(buf),
+            )
+        if variant == 72:
+            return NodeError.OnchainTxBroadcastNotDispatched(
+                _UniffiConverterTypeTxid.read(buf),
             )
         raise InternalError("Raw enum value doesn't match any cases")
 
@@ -13941,6 +14411,18 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             return
         if isinstance(value, NodeError.InvalidSeedBytes):
             return
+        if isinstance(value, NodeError.OnchainTxBroadcastRejected):
+            _UniffiConverterTypeTxid.check_lower(value.txid)
+            return
+        if isinstance(value, NodeError.OnchainTxBroadcastFailed):
+            _UniffiConverterTypeTxid.check_lower(value.txid)
+            return
+        if isinstance(value, NodeError.OnchainTxBroadcastTimeout):
+            _UniffiConverterTypeTxid.check_lower(value.txid)
+            return
+        if isinstance(value, NodeError.OnchainTxBroadcastNotDispatched):
+            _UniffiConverterTypeTxid.check_lower(value.txid)
+            return
 
     @staticmethod
     def write(value, buf):
@@ -14080,6 +14562,18 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             buf.write_i32(67)
         if isinstance(value, NodeError.InvalidSeedBytes):
             buf.write_i32(68)
+        if isinstance(value, NodeError.OnchainTxBroadcastRejected):
+            buf.write_i32(69)
+            _UniffiConverterTypeTxid.write(value.txid, buf)
+        if isinstance(value, NodeError.OnchainTxBroadcastFailed):
+            buf.write_i32(70)
+            _UniffiConverterTypeTxid.write(value.txid, buf)
+        if isinstance(value, NodeError.OnchainTxBroadcastTimeout):
+            buf.write_i32(71)
+            _UniffiConverterTypeTxid.write(value.txid, buf)
+        if isinstance(value, NodeError.OnchainTxBroadcastNotDispatched):
+            buf.write_i32(72)
+            _UniffiConverterTypeTxid.write(value.txid, buf)
 
 
 
@@ -15439,6 +15933,33 @@ class _UniffiConverterOptionalTypeBackgroundSyncConfig(_UniffiConverterRustBuffe
 
 
 
+class _UniffiConverterOptionalTypeBroadcastOutcome(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        if value is not None:
+            _UniffiConverterTypeBroadcastOutcome.check_lower(value)
+
+    @classmethod
+    def write(cls, value, buf):
+        if value is None:
+            buf.write_u8(0)
+            return
+
+        buf.write_u8(1)
+        _UniffiConverterTypeBroadcastOutcome.write(value, buf)
+
+    @classmethod
+    def read(cls, buf):
+        flag = buf.read_u8()
+        if flag == 0:
+            return None
+        elif flag == 1:
+            return _UniffiConverterTypeBroadcastOutcome.read(buf)
+        else:
+            raise InternalError("Unexpected flag byte for optional type")
+
+
+
 class _UniffiConverterOptionalTypeChannelConfig(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -16715,6 +17236,31 @@ class _UniffiConverterSequenceTypePeerDetails(_UniffiConverterRustBuffer):
 
 
 
+class _UniffiConverterSequenceTypePendingBroadcastInfo(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiConverterTypePendingBroadcastInfo.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiConverterTypePendingBroadcastInfo.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiConverterTypePendingBroadcastInfo.read(buf) for i in range(count)
+        ]
+
+
+
 class _UniffiConverterSequenceTypeProbeHandle(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -17655,6 +18201,7 @@ __all__ = [
     "AsyncPaymentsRole",
     "BalanceSource",
     "Bolt11InvoiceDescription",
+    "BroadcastOutcomeStatus",
     "BuildError",
     "ClosureReason",
     "CoinSelectionAlgorithm",
@@ -17684,6 +18231,7 @@ __all__ = [
     "BackgroundSyncConfig",
     "BalanceDetails",
     "BestBlock",
+    "BroadcastOutcome",
     "ChannelConfig",
     "ChannelDataMigration",
     "ChannelDetails",
@@ -17710,6 +18258,7 @@ __all__ = [
     "OutPoint",
     "PaymentDetails",
     "PeerDetails",
+    "PendingBroadcastInfo",
     "ProbeHandle",
     "RouteHintHop",
     "RouteParametersConfig",

@@ -593,8 +593,22 @@ interface OfferInterface {
 
 interface OnchainPaymentInterface {
 
+    /**
+     * Releases a pending spend only after an independent source proves every lineage member
+     * absent from both the mempool and chain and no other process can rebroadcast it.
+     */
+    @Throws(NodeException::class)
+    fun `abandonPendingBroadcast`(`txid`: Txid)
+
     @Throws(NodeException::class)
     fun `accelerateByCpfp`(`txid`: Txid, `feeRate`: FeeRate?, `destinationAddress`: Address?): Txid
+
+    /**
+     * Removes a terminal outcome after the consumer has durably handled it.
+     * Fails while the lineage is still active and is idempotent after removal.
+     */
+    @Throws(NodeException::class)
+    fun `acknowledgeBroadcastOutcome`(`txid`: Txid)
 
     @Throws(NodeException::class)
     fun `addressInfoForAccountAtIndex`(`addressType`: AddressType, `accountIndex`: kotlin.UInt, `keychain`: KeychainKind, `index`: kotlin.UInt): AddressInfo
@@ -608,6 +622,18 @@ interface OnchainPaymentInterface {
     @Throws(NodeException::class)
     fun `addressInfosForType`(`addressType`: AddressType, `keychain`: KeychainKind, `startIndex`: kotlin.UInt, `count`: kotlin.UInt): List<AddressInfo>
 
+    /**
+     * Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+     * Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+     */
+    @Throws(NodeException::class)
+    fun `broadcastOutcome`(`txid`: Txid): BroadcastOutcome?
+
+    /**
+     * Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     fun `bumpFeeByRbf`(`txid`: Txid, `feeRate`: FeeRate): Txid
 
@@ -619,6 +645,12 @@ interface OnchainPaymentInterface {
 
     @Throws(NodeException::class)
     fun `calculateTotalFee`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): kotlin.ULong
+
+    /**
+     * Lists unresolved broadcasts and every transaction in each RBF lineage.
+     */
+    @Throws(NodeException::class)
+    fun `listPendingBroadcasts`(): List<PendingBroadcastInfo>
 
     @Throws(NodeException::class)
     fun `listSpendableOutputs`(): List<SpendableUtxo>
@@ -641,6 +673,13 @@ interface OnchainPaymentInterface {
     @Throws(NodeException::class)
     fun `newAddressInfoForType`(`addressType`: AddressType): AddressInfo
 
+    /**
+     * Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+     * Do not create another spend for the same payment while its pending entry remains.
+     */
+    @Throws(NodeException::class)
+    fun `rebroadcastTransaction`(`txid`: Txid): Txid
+
     @Throws(NodeException::class)
     fun `revealReceiveAddressesTo`(`addressType`: AddressType, `index`: kotlin.UInt)
 
@@ -650,9 +689,19 @@ interface OnchainPaymentInterface {
     @Throws(NodeException::class)
     fun `selectUtxosWithAlgorithm`(`targetAmountSats`: kotlin.ULong, `feeRate`: FeeRate?, `algorithm`: CoinSelectionAlgorithm, `utxos`: List<SpendableUtxo>?): List<SpendableUtxo>
 
+    /**
+     * Sends the available balance and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     fun `sendAllToAddress`(`address`: Address, `retainReserve`: kotlin.Boolean, `feeRate`: FeeRate?): Txid
 
+    /**
+     * Sends an exact amount and waits for the configured backend's broadcast result.
+     * `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+     * reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
+     */
     @Throws(NodeException::class)
     fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid
 
@@ -798,6 +847,17 @@ data class BalanceDetails (
 data class BestBlock (
     val `blockHash`: BlockHash,
     val `height`: kotlin.UInt
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
+data class BroadcastOutcome (
+    val `status`: BroadcastOutcomeStatus,
+    val `txid`: Txid,
+    val `lineage`: List<Txid>
 ) {
     companion object
 }
@@ -1198,6 +1258,16 @@ data class PeerDetails (
 
 
 @kotlinx.serialization.Serializable
+data class PendingBroadcastInfo (
+    val `txid`: Txid,
+    val `lineage`: List<Txid>
+) {
+    companion object
+}
+
+
+
+@kotlinx.serialization.Serializable
 data class ProbeHandle (
     val `paymentHash`: PaymentHash,
     val `paymentId`: PaymentId
@@ -1389,6 +1459,21 @@ sealed class Bolt11InvoiceDescription {
     ) : Bolt11InvoiceDescription() {
     }
 
+}
+
+
+
+
+
+
+
+@kotlinx.serialization.Serializable
+enum class BroadcastOutcomeStatus {
+
+    PENDING,
+    ACCEPTED,
+    ABANDONED;
+    companion object
 }
 
 
@@ -1887,143 +1972,457 @@ enum class Network {
 
 
 
-sealed class NodeException(message: String): kotlin.Exception(message) {
-
-    class AlreadyRunning(message: String) : NodeException(message)
-
-    class NotRunning(message: String) : NodeException(message)
-
-    class OnchainTxCreationFailed(message: String) : NodeException(message)
-
-    class ConnectionFailed(message: String) : NodeException(message)
-
-    class InvoiceCreationFailed(message: String) : NodeException(message)
-
-    class InvoiceRequestCreationFailed(message: String) : NodeException(message)
-
-    class OfferCreationFailed(message: String) : NodeException(message)
-
-    class RefundCreationFailed(message: String) : NodeException(message)
-
-    class PaymentSendingFailed(message: String) : NodeException(message)
-
-    class InvalidCustomTlvs(message: String) : NodeException(message)
-
-    class ProbeSendingFailed(message: String) : NodeException(message)
-
-    class RouteNotFound(message: String) : NodeException(message)
-
-    class ChannelCreationFailed(message: String) : NodeException(message)
-
-    class ChannelClosingFailed(message: String) : NodeException(message)
-
-    class ChannelSplicingFailed(message: String) : NodeException(message)
-
-    class ChannelConfigUpdateFailed(message: String) : NodeException(message)
-
-    class PersistenceFailed(message: String) : NodeException(message)
-
-    class FeerateEstimationUpdateFailed(message: String) : NodeException(message)
-
-    class FeerateEstimationUpdateTimeout(message: String) : NodeException(message)
-
-    class WalletOperationFailed(message: String) : NodeException(message)
-
-    class WalletOperationTimeout(message: String) : NodeException(message)
-
-    class OnchainTxSigningFailed(message: String) : NodeException(message)
-
-    class TxSyncFailed(message: String) : NodeException(message)
-
-    class TxSyncTimeout(message: String) : NodeException(message)
-
-    class GossipUpdateFailed(message: String) : NodeException(message)
-
-    class GossipUpdateTimeout(message: String) : NodeException(message)
-
-    class LiquidityRequestFailed(message: String) : NodeException(message)
-
-    class UriParameterParsingFailed(message: String) : NodeException(message)
-
-    class InvalidAddress(message: String) : NodeException(message)
-
-    class InvalidSocketAddress(message: String) : NodeException(message)
-
-    class InvalidPublicKey(message: String) : NodeException(message)
-
-    class InvalidSecretKey(message: String) : NodeException(message)
-
-    class InvalidOfferId(message: String) : NodeException(message)
-
-    class InvalidNodeId(message: String) : NodeException(message)
-
-    class InvalidPaymentId(message: String) : NodeException(message)
-
-    class InvalidPaymentHash(message: String) : NodeException(message)
-
-    class InvalidPaymentPreimage(message: String) : NodeException(message)
-
-    class InvalidPaymentSecret(message: String) : NodeException(message)
-
-    class InvalidAmount(message: String) : NodeException(message)
-
-    class InvalidInvoice(message: String) : NodeException(message)
-
-    class InvalidOffer(message: String) : NodeException(message)
-
-    class InvalidRefund(message: String) : NodeException(message)
-
-    class InvalidChannelId(message: String) : NodeException(message)
-
-    class InvalidNetwork(message: String) : NodeException(message)
-
-    class InvalidUri(message: String) : NodeException(message)
-
-    class InvalidQuantity(message: String) : NodeException(message)
-
-    class InvalidNodeAlias(message: String) : NodeException(message)
-
-    class InvalidDateTime(message: String) : NodeException(message)
-
-    class InvalidFeeRate(message: String) : NodeException(message)
-
-    class DuplicatePayment(message: String) : NodeException(message)
-
-    class UnsupportedCurrency(message: String) : NodeException(message)
-
-    class InsufficientFunds(message: String) : NodeException(message)
-
-    class LiquiditySourceUnavailable(message: String) : NodeException(message)
-
-    class LiquidityFeeTooHigh(message: String) : NodeException(message)
-
-    class InvalidBlindedPaths(message: String) : NodeException(message)
-
-    class AsyncPaymentServicesDisabled(message: String) : NodeException(message)
-
-    class CannotRbfFundingTransaction(message: String) : NodeException(message)
-
-    class TransactionNotFound(message: String) : NodeException(message)
-
-    class TransactionAlreadyConfirmed(message: String) : NodeException(message)
-
-    class NoSpendableOutputs(message: String) : NodeException(message)
-
-    class CoinSelectionFailed(message: String) : NodeException(message)
-
-    class InvalidMnemonic(message: String) : NodeException(message)
-
-    class BackgroundSyncNotEnabled(message: String) : NodeException(message)
-
-    class AddressTypeAlreadyMonitored(message: String) : NodeException(message)
-
-    class AddressTypeIsPrimary(message: String) : NodeException(message)
-
-    class AddressTypeNotMonitored(message: String) : NodeException(message)
-
-    class OnchainWalletAccountNotRegistered(message: String) : NodeException(message)
-
-    class InvalidSeedBytes(message: String) : NodeException(message)
+sealed class NodeException: kotlin.Exception() {
+
+    class AlreadyRunning(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class NotRunning(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class OnchainTxCreationFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class ConnectionFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvoiceCreationFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvoiceRequestCreationFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class OfferCreationFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class RefundCreationFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class PaymentSendingFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidCustomTlvs(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class ProbeSendingFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class RouteNotFound(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class ChannelCreationFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class ChannelClosingFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class ChannelSplicingFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class ChannelConfigUpdateFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class PersistenceFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class FeerateEstimationUpdateFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class FeerateEstimationUpdateTimeout(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class WalletOperationFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class WalletOperationTimeout(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class OnchainTxSigningFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class TxSyncFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class TxSyncTimeout(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class GossipUpdateFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class GossipUpdateTimeout(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class LiquidityRequestFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class UriParameterParsingFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidAddress(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidSocketAddress(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidPublicKey(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidSecretKey(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidOfferId(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidNodeId(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidPaymentId(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidPaymentHash(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidPaymentPreimage(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidPaymentSecret(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidAmount(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidInvoice(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidOffer(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidRefund(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidChannelId(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidNetwork(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidUri(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidQuantity(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidNodeAlias(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidDateTime(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidFeeRate(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class DuplicatePayment(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class UnsupportedCurrency(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InsufficientFunds(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class LiquiditySourceUnavailable(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class LiquidityFeeTooHigh(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidBlindedPaths(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class AsyncPaymentServicesDisabled(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class CannotRbfFundingTransaction(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class TransactionNotFound(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class TransactionAlreadyConfirmed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class NoSpendableOutputs(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class CoinSelectionFailed(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidMnemonic(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class BackgroundSyncNotEnabled(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class AddressTypeAlreadyMonitored(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class AddressTypeIsPrimary(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class AddressTypeNotMonitored(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class OnchainWalletAccountNotRegistered(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    class InvalidSeedBytes(
+    ) : NodeException() {
+        override val message
+            get() = ""
+    }
+
+    /**
+     * The backend conclusively rejected the transaction.
+     */
+    class OnchainTxBroadcastRejected(
+        val `txid`: Txid,
+    ) : NodeException() {
+        override val message
+            get() = "txid=${ `txid` }"
+    }
+
+    /**
+     * Dispatch occurred, but backend acceptance is unknown. Do not create a fresh spend;
+     * reconcile or rebroadcast this exact transaction ID.
+     */
+    class OnchainTxBroadcastFailed(
+        val `txid`: Txid,
+    ) : NodeException() {
+        override val message
+            get() = "txid=${ `txid` }"
+    }
+
+    /**
+     * Dispatch occurred, but backend acceptance is unknown after the timeout. Do not create a
+     * fresh spend; reconcile or rebroadcast this exact transaction ID.
+     */
+    class OnchainTxBroadcastTimeout(
+        val `txid`: Txid,
+    ) : NodeException() {
+        override val message
+            get() = "txid=${ `txid` }"
+    }
+
+    /**
+     * The transaction was conclusively not dispatched to the backend.
+     */
+    class OnchainTxBroadcastNotDispatched(
+        val `txid`: Txid,
+    ) : NodeException() {
+        override val message
+            get() = "txid=${ `txid` }"
+    }
 
 }
 
@@ -2263,6 +2662,10 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
+
+
 
 
 

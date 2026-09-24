@@ -27,17 +27,23 @@ use lightning_block_sync::{
 };
 use serde::Serialize;
 
-use super::{periodically_archive_fully_resolved_monitors, WalletSyncStatus};
+use super::{
+	periodically_archive_fully_resolved_monitors, process_wallet_events, WalletSyncStatus,
+};
 use crate::config::{
 	BitcoindRestClientConfig, Config, OnchainWalletAccount, FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS,
 	TX_BROADCAST_TIMEOUT_SECS,
 };
+use crate::event::EventQueue;
 use crate::fee_estimator::{
 	apply_post_estimation_adjustments, get_all_conf_targets, get_num_block_defaults_for_target,
 	ConfirmationTarget, OnchainFeeEstimator,
 };
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
+use crate::tx_broadcaster::{
+	classify_rpc_broadcast_error, validate_broadcast_txid, TxBroadcastError,
+};
 use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::{Error, NodeMetrics};
 
@@ -61,6 +67,26 @@ pub(super) struct BitcoindChainSource {
 	pub(super) config: Arc<Config>,
 	logger: Arc<Logger>,
 	pub(super) node_metrics: Arc<RwLock<NodeMetrics>>,
+}
+
+// Bitcoind applies wallet updates directly, so pump durable explicit-broadcast markers even when
+// BDK did not return a wallet event for the locally applied transaction.
+async fn process_bitcoind_broadcast_events(
+	onchain_wallet: &Wallet, event_queue: Option<&Arc<EventQueue<Arc<Logger>>>>,
+	logger: &Arc<Logger>, channel_manager: &Arc<ChannelManager>, chain_monitor: &Arc<ChainMonitor>,
+) -> Result<(), Error> {
+	if let Some(event_queue) = event_queue {
+		process_wallet_events(
+			Vec::new(),
+			onchain_wallet,
+			event_queue,
+			logger,
+			Some(channel_manager),
+			Some(chain_monitor),
+		)
+		.await?;
+	}
+	Ok(())
 }
 
 impl BitcoindChainSource {
@@ -130,6 +156,7 @@ impl BitcoindChainSource {
 		&self, mut stop_sync_receiver: tokio::sync::watch::Receiver<()>,
 		onchain_wallet: Arc<Wallet>, channel_manager: Arc<ChannelManager>,
 		chain_monitor: Arc<ChainMonitor>, output_sweeper: Arc<Sweeper>,
+		event_queue: Option<Arc<EventQueue<Arc<Logger>>>>,
 	) {
 		// First register for the wallet polling status to make sure `Node::sync_wallets` calls
 		// wait on the result before proceeding.
@@ -163,6 +190,7 @@ impl BitcoindChainSource {
 					Arc::clone(&channel_manager),
 					Arc::clone(&chain_monitor),
 					Arc::clone(&output_sweeper),
+					event_queue.as_ref(),
 				)
 				.await
 			{
@@ -244,7 +272,8 @@ impl BitcoindChainSource {
 							Arc::clone(&onchain_wallet),
 							Arc::clone(&channel_manager),
 							Arc::clone(&chain_monitor),
-							Arc::clone(&output_sweeper)
+							Arc::clone(&output_sweeper),
+							event_queue.clone()
 						) => {}
 					}
 				}
@@ -298,6 +327,7 @@ impl BitcoindChainSource {
 	pub(super) async fn poll_and_update_listeners(
 		&self, onchain_wallet: Arc<Wallet>, channel_manager: Arc<ChannelManager>,
 		chain_monitor: Arc<ChainMonitor>, output_sweeper: Arc<Sweeper>,
+		event_queue: Option<Arc<EventQueue<Arc<Logger>>>>,
 	) -> Result<(), Error> {
 		let receiver_res = {
 			let mut status_lock = self.wallet_polling_status.lock().unwrap();
@@ -321,6 +351,7 @@ impl BitcoindChainSource {
 					Arc::clone(&channel_manager),
 					Arc::clone(&chain_monitor),
 					Arc::clone(&output_sweeper),
+					event_queue.as_ref(),
 				)
 				.await
 			{
@@ -369,6 +400,7 @@ impl BitcoindChainSource {
 	async fn poll_and_update_listeners_inner(
 		&self, onchain_wallet: Arc<Wallet>, channel_manager: Arc<ChannelManager>,
 		chain_monitor: Arc<ChainMonitor>, output_sweeper: Arc<Sweeper>,
+		event_queue: Option<&Arc<EventQueue<Arc<Logger>>>>,
 	) -> Result<ListenerSyncOutcome, Error> {
 		onchain_wallet.finish_pending_sync(false)?;
 
@@ -505,6 +537,14 @@ impl BitcoindChainSource {
 			self.api_client.commit_mempool_timestamp(mempool_update.next_timestamp);
 			self.last_mempool_account_generation.store(account_generation, Ordering::Release);
 		}
+		process_bitcoind_broadcast_events(
+			&onchain_wallet,
+			event_queue,
+			&self.logger,
+			&channel_manager,
+			&chain_monitor,
+		)
+		.await?;
 
 		let unix_time_secs_opt =
 			SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
@@ -643,30 +683,58 @@ impl BitcoindChainSource {
 		Ok(())
 	}
 
-	pub(crate) async fn process_broadcast_package(&self, package: Vec<Transaction>) {
+	pub(crate) async fn process_broadcast_package(
+		&self, package: Vec<Transaction>,
+	) -> Result<(), TxBroadcastError> {
 		// While it's a bit unclear when we'd be able to lean on Bitcoin Core >v28
 		// features, we should eventually switch to use `submitpackage` via the
 		// `rust-bitcoind-json-rpc` crate rather than just broadcasting individual
 		// transactions.
+		let mut package_result = Ok(());
 		for tx in &package {
 			let txid = tx.compute_txid();
 			let timeout_fut = tokio::time::timeout(
 				Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
 				self.api_client.broadcast_transaction(tx),
 			);
-			match timeout_fut.await {
+			let tx_result = match timeout_fut.await {
 				Ok(res) => match res {
 					Ok(id) => {
-						debug_assert_eq!(id, txid);
-						log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+						let result = classify_bitcoind_broadcast_success(txid, id);
+						if result.is_ok() {
+							log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+						} else {
+							log_error!(
+								self.logger,
+								"Backend returned transaction ID {} for submitted transaction {}",
+								id,
+								txid
+							);
+						}
+						result
 					},
 					Err(e) => {
-						log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
-						log_trace!(
-							self.logger,
-							"Failed broadcast transaction bytes: {}",
-							log_bytes!(tx.encode())
-						);
+						let result = classify_bitcoind_broadcast_error(&e);
+						if result.is_ok() {
+							log_trace!(
+								self.logger,
+								"Transaction {} is already known by backend",
+								txid
+							);
+						} else {
+							log_error!(
+								self.logger,
+								"Failed to broadcast transaction {}: {}",
+								txid,
+								e
+							);
+							log_trace!(
+								self.logger,
+								"Failed broadcast transaction bytes: {}",
+								log_bytes!(tx.encode())
+							);
+						}
+						result
 					},
 				},
 				Err(e) => {
@@ -681,9 +749,27 @@ impl BitcoindChainSource {
 						"Failed broadcast transaction bytes: {}",
 						log_bytes!(tx.encode())
 					);
+					Err(TxBroadcastError::Timeout)
 				},
+			};
+			if package_result.is_ok() {
+				package_result = tx_result;
 			}
 		}
+		package_result
+	}
+}
+
+fn classify_bitcoind_broadcast_success(
+	expected_txid: Txid, returned_txid: Txid,
+) -> Result<(), TxBroadcastError> {
+	validate_broadcast_txid(expected_txid, returned_txid)
+}
+
+fn classify_bitcoind_broadcast_error(error: &std::io::Error) -> Result<(), TxBroadcastError> {
+	match error.get_ref().and_then(|inner| inner.downcast_ref::<RpcError>()) {
+		Some(rpc_error) => classify_rpc_broadcast_error(Some(rpc_error.code), &rpc_error.message),
+		None => Err(TxBroadcastError::Failed),
 	}
 }
 
@@ -1607,13 +1693,20 @@ impl std::fmt::Display for HttpError {
 
 #[cfg(test)]
 mod tests {
+	use std::io;
 	use std::sync::Arc;
 
+	use bitcoin::absolute::LockTime;
 	use bitcoin::blockdata::constants::genesis_block;
 	use bitcoin::hashes::Hash;
-	use bitcoin::{FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
+	use bitcoin::transaction::Version;
+	use bitcoin::{
+		Amount, FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxMerkleNode, TxOut,
+		Txid, Witness,
+	};
 	use lightning::chain::{BestBlock, Listen};
 	use lightning_block_sync::http::JsonResponse;
+	use lightning_block_sync::rpc::RpcError;
 	use proptest::arbitrary::any;
 	use proptest::collection::vec;
 	use proptest::{prop_assert_eq, prop_compose, proptest};
@@ -1621,14 +1714,53 @@ mod tests {
 
 	use crate::builder::NodeBuilder;
 	use crate::chain::bitcoind::{
-		should_emit_mempool_entry, AccountChainListener, AccountChainListenerOutcome,
-		BitcoindClient, FeeResponse, GetMempoolEntryResponse, GetRawMempoolResponse,
-		GetRawTransactionResponse, MempoolMinFeeResponse, MempoolUpdate,
+		classify_bitcoind_broadcast_error, classify_bitcoind_broadcast_success,
+		process_bitcoind_broadcast_events, should_emit_mempool_entry, AccountChainListener,
+		AccountChainListenerOutcome, BitcoindClient, FeeResponse, GetMempoolEntryResponse,
+		GetRawMempoolResponse, GetRawTransactionResponse, MempoolMinFeeResponse, MempoolUpdate,
 	};
 	use crate::config::{AddressType, Config, OnchainWalletAccount};
 	use crate::io::test_utils::InMemoryStore;
+	use crate::tx_broadcaster::TxBroadcastError;
 	use crate::types::DynStore;
-	use crate::Error;
+	use crate::{Error, Event};
+
+	#[test]
+	fn bitcoind_broadcast_errors_are_classified_by_rpc_code() {
+		let already_known = io::Error::new(
+			io::ErrorKind::Other,
+			RpcError { code: -27, message: "Transaction already in block chain".to_string() },
+		);
+		assert_eq!(classify_bitcoind_broadcast_error(&already_known), Ok(()));
+
+		let rejected = io::Error::new(
+			io::ErrorKind::Other,
+			RpcError { code: -26, message: "non-final".to_string() },
+		);
+		assert_eq!(classify_bitcoind_broadcast_error(&rejected), Err(TxBroadcastError::Rejected));
+
+		let unavailable = io::Error::new(
+			io::ErrorKind::Other,
+			RpcError { code: -28, message: "Loading block index".to_string() },
+		);
+		assert_eq!(classify_bitcoind_broadcast_error(&unavailable), Err(TxBroadcastError::Failed));
+	}
+
+	#[test]
+	fn bitcoind_broadcast_success_requires_the_submitted_txid() {
+		let expected = "0000000000000000000000000000000000000000000000000000000000000001"
+			.parse::<Txid>()
+			.unwrap();
+		let returned = "0000000000000000000000000000000000000000000000000000000000000002"
+			.parse::<Txid>()
+			.unwrap();
+
+		assert_eq!(classify_bitcoind_broadcast_success(expected, expected), Ok(()));
+		assert_eq!(
+			classify_bitcoind_broadcast_success(expected, returned),
+			Err(TxBroadcastError::Failed)
+		);
+	}
 
 	fn test_node() -> (crate::Node, [u8; 64]) {
 		let seed = [42u8; 64];
@@ -1640,6 +1772,86 @@ mod tests {
 		builder.set_log_facade_logger();
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 		(builder.build_with_store(store).unwrap(), seed)
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn bitcoind_sync_pumps_ready_broadcast_markers() {
+		let (node, _) = test_node();
+		let tx = Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::ZERO,
+			input: Vec::new(),
+			output: vec![TxOut {
+				value: Amount::from_sat(1),
+				script_pubkey: node.onchain_payment().new_address().unwrap().script_pubkey(),
+			}],
+		};
+		let txid = tx.compute_txid();
+		node.wallet.begin_broadcast_dispatch(txid).unwrap();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.apply_mempool_txs(vec![(tx, 1)], Vec::new()).unwrap();
+
+		process_bitcoind_broadcast_events(
+			&node.wallet,
+			Some(&node.event_queue),
+			&node.logger,
+			&node.channel_manager,
+			&node.chain_monitor,
+		)
+		.await
+		.unwrap();
+
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionReceived { txid: event_txid, .. }) if event_txid == txid
+		));
+		node.wallet.end_broadcast_dispatches(&[txid]);
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn bitcoind_sync_emits_confirmation_for_confirmed_ready_marker() {
+		let (node, _) = test_node();
+		let tx = Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::ZERO,
+			input: Vec::new(),
+			output: vec![TxOut {
+				value: Amount::from_sat(1),
+				script_pubkey: node.onchain_payment().new_address().unwrap().script_pubkey(),
+			}],
+		};
+		let txid = tx.compute_txid();
+		node.wallet.begin_broadcast_dispatch(txid).unwrap();
+		node.wallet.prepare_pending_broadcast(&tx).unwrap();
+		node.wallet.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+		let genesis = genesis_block(Network::Regtest);
+		let mut block = child_block(&genesis, 1);
+		block.header.merkle_root = TxMerkleNode::from_byte_array(txid.to_byte_array());
+		block.txdata = vec![tx];
+		node.wallet
+			.apply_block_to_account(
+				OnchainWalletAccount::account_zero(AddressType::NativeSegwit),
+				&block,
+				1,
+			)
+			.unwrap();
+
+		process_bitcoind_broadcast_events(
+			&node.wallet,
+			Some(&node.event_queue),
+			&node.logger,
+			&node.channel_manager,
+			&node.chain_monitor,
+		)
+		.await
+		.unwrap();
+
+		assert!(matches!(
+			node.next_event(),
+			Some(Event::OnchainTransactionConfirmed { txid: event_txid, .. })
+				if event_txid == txid
+		));
+		node.wallet.end_broadcast_dispatches(&[txid]);
 	}
 
 	fn child_block(parent: &bitcoin::Block, nonce: u32) -> bitcoin::Block {

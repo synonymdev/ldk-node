@@ -1970,6 +1970,10 @@ fn build_with_store_internal(
 		Arc::clone(&logger),
 		derived_account_lookahead,
 	));
+	wallet.restore_pending_broadcasts().map_err(|e| {
+		log_error!(logger, "Failed to restore pending on-chain broadcasts: {}", e);
+		BuildError::WalletSetupFailed
+	})?;
 
 	// Initialize the KeysManager
 	let cur_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|e| {

@@ -23,6 +23,8 @@ use lightning::ln::msgs::DecodeError;
 use lightning::util::ser::{BigSize, Readable, RequiredWrapper, Writeable, Writer};
 use lightning::{decode_tlv_stream, encode_tlv_stream, read_tlv_fields, write_tlv_fields};
 
+use super::persist::WalletChainState;
+
 const CHANGESET_SERIALIZATION_VERSION: u8 = 1;
 
 pub(crate) struct ChangeSetSerWrapper<'a, T>(pub &'a T);
@@ -72,18 +74,20 @@ impl Readable for ChangeSetDeserWrapper<Network> {
 	}
 }
 
-impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkLocalChainChangeSet> {
+impl<'a> Writeable for ChangeSetSerWrapper<'a, WalletChainState> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		CHANGESET_SERIALIZATION_VERSION.write(writer)?;
 
 		encode_tlv_stream!(writer, {
-			(0, self.0.blocks, required),
+			(0, self.0.chain.blocks, required),
+			(1, Some(&self.0.pending_reorgs), option),
+			(3, Some(self.0.next_reorg_id), option),
 		});
 		Ok(())
 	}
 }
 
-impl Readable for ChangeSetDeserWrapper<BdkLocalChainChangeSet> {
+impl Readable for ChangeSetDeserWrapper<WalletChainState> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
 		let version: u8 = Readable::read(reader)?;
 		if version != CHANGESET_SERIALIZATION_VERSION {
@@ -91,10 +95,24 @@ impl Readable for ChangeSetDeserWrapper<BdkLocalChainChangeSet> {
 		}
 
 		let mut blocks = RequiredWrapper(None);
+		let mut pending_reorgs: Option<Vec<(u64, Txid)>> = None;
+		let mut next_reorg_id: Option<u64> = None;
 		decode_tlv_stream!(reader, {
 			(0, blocks, required),
+			(1, pending_reorgs, option),
+			(3, next_reorg_id, option),
 		});
-		Ok(Self(BdkLocalChainChangeSet { blocks: blocks.0.unwrap() }))
+		let pending_reorgs = pending_reorgs.unwrap_or_default();
+		let next_reorg_id = next_reorg_id.unwrap_or(0);
+		let mut ids = BTreeSet::new();
+		if pending_reorgs.iter().any(|(id, _)| *id >= next_reorg_id || !ids.insert(*id)) {
+			return Err(DecodeError::InvalidValue);
+		}
+		Ok(Self(WalletChainState {
+			chain: BdkLocalChainChangeSet { blocks: blocks.0.unwrap() },
+			pending_reorgs,
+			next_reorg_id,
+		}))
 	}
 }
 
@@ -352,5 +370,51 @@ impl Readable for ChangeSetDeserWrapper<Sha256Hash> {
 
 		let buf: [u8; 32] = Readable::read(reader)?;
 		Ok(Self(Sha256Hash::from_slice(&buf[..]).unwrap()))
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use bitcoin::hashes::Hash;
+
+	fn legacy_chain_bytes(chain: &BdkLocalChainChangeSet) -> Result<Vec<u8>, lightning::io::Error> {
+		let mut bytes = Vec::new();
+		CHANGESET_SERIALIZATION_VERSION.write(&mut bytes)?;
+		encode_tlv_stream!(&mut bytes, { (0, chain.blocks, required) });
+		Ok(bytes)
+	}
+
+	#[test]
+	fn chain_journal_reads_legacy_and_roundtrips_pending_reorgs() {
+		let mut chain = BdkLocalChainChangeSet::default();
+		chain.blocks.insert(0, Some(BlockHash::from_byte_array([1; 32])));
+		let legacy = legacy_chain_bytes(&chain).unwrap();
+		let restored = ChangeSetDeserWrapper::<WalletChainState>::read(&mut &legacy[..]).unwrap().0;
+		assert_eq!(restored.chain, chain);
+		assert!(restored.pending_reorgs.is_empty());
+		assert_eq!(restored.next_reorg_id, 0);
+		let state = WalletChainState {
+			chain,
+			pending_reorgs: vec![(3, Txid::from_byte_array([2; 32]))],
+			next_reorg_id: 4,
+		};
+		let bytes = ChangeSetSerWrapper(&state).encode();
+		let restored = ChangeSetDeserWrapper::<WalletChainState>::read(&mut &bytes[..]).unwrap().0;
+		assert_eq!(restored.chain, state.chain);
+		assert_eq!(restored.pending_reorgs, state.pending_reorgs);
+		assert_eq!(restored.next_reorg_id, 4);
+	}
+
+	#[test]
+	fn chain_journal_rejects_reused_sequence_numbers() {
+		let txid = Txid::from_byte_array([3; 32]);
+		for (pending_reorgs, next_reorg_id) in
+			[(vec![(0, txid)], 0), (vec![(0, txid), (0, txid)], 1)]
+		{
+			let state = WalletChainState { pending_reorgs, next_reorg_id, ..Default::default() };
+			let bytes = ChangeSetSerWrapper(&state).encode();
+			assert!(ChangeSetDeserWrapper::<WalletChainState>::read(&mut &bytes[..]).is_err());
+		}
 	}
 }

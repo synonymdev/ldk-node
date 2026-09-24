@@ -6,37 +6,375 @@
 // accordance with one or both of these licenses.
 
 use std::ops::Deref;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
-use bitcoin::Transaction;
+use bitcoin::{Transaction, Txid};
 use lightning::chain::chaininterface::BroadcasterInterface;
-use tokio::sync::{mpsc, Mutex, MutexGuard};
+use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard, Semaphore};
 
+use crate::config::TX_BROADCAST_TIMEOUT_SECS;
 use crate::logger::{log_error, LdkLogger};
 
-const BCAST_PACKAGE_QUEUE_SIZE: usize = 50;
+const EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE: usize = 50;
+pub(crate) const MAX_IN_FLIGHT_EXPLICIT_BROADCASTS: usize = 50;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TxBroadcastError {
+	Rejected,
+	NotDispatched,
+	Failed,
+	Timeout,
+}
+
+pub(crate) type ExplicitBroadcastGuard = Arc<dyn Send + Sync>;
+
+struct ExplicitBroadcastResources {
+	_guard: Option<ExplicitBroadcastGuard>,
+	_permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+pub(crate) fn classify_rpc_broadcast_error(
+	code: Option<i64>, message: &str,
+) -> Result<(), TxBroadcastError> {
+	let normalized_message = message.to_ascii_lowercase();
+	let compact_message = normalized_message
+		.chars()
+		.filter(|character| !character.is_ascii_whitespace())
+		.collect::<String>();
+	let contains_code = |candidate| {
+		code == Some(candidate)
+			|| compact_message.contains(&format!("\"code\":{}", candidate))
+			|| compact_message.contains(&format!("\\\"code\\\":{}", candidate))
+			|| normalized_message.contains(&format!("rpc error {}", candidate))
+	};
+
+	if contains_code(-27)
+		|| [
+			"already in block chain",
+			"already in blockchain",
+			"already in mempool",
+			"transaction already known",
+			"txn-already-known",
+		]
+		.iter()
+		.any(|marker| normalized_message.contains(marker))
+	{
+		return Ok(());
+	}
+
+	if contains_code(-25)
+		|| contains_code(-26)
+		|| [
+			"bad-txns-",
+			"dust",
+			"insufficient fee",
+			"mandatory-script-verify-flag-failed",
+			"mempool min fee not met",
+			"min relay fee not met",
+			"missing inputs",
+			"non-bip68-final",
+			"non-final",
+			"non-mandatory-script-verify-flag",
+			"txn-mempool-conflict",
+			"too-long-mempool-chain",
+			"absurdly-high-fee",
+			"tx-size",
+		]
+		.iter()
+		.any(|marker| normalized_message.contains(marker))
+	{
+		return Err(TxBroadcastError::Rejected);
+	}
+
+	Err(TxBroadcastError::Failed)
+}
+
+pub(crate) fn validate_broadcast_txid(
+	expected_txid: Txid, returned_txid: Txid,
+) -> Result<(), TxBroadcastError> {
+	if returned_txid == expected_txid {
+		Ok(())
+	} else {
+		Err(TxBroadcastError::Failed)
+	}
+}
+
+const EXPLICIT_BROADCAST_QUEUED: u8 = 0;
+const EXPLICIT_BROADCAST_CLAIMED: u8 = 1;
+const EXPLICIT_BROADCAST_CANCELLED: u8 = 2;
+
+pub(crate) struct ExplicitBroadcastClaim {
+	state: AtomicU8,
+	explicit_guard: std::sync::Mutex<Option<ExplicitBroadcastGuard>>,
+}
+
+impl ExplicitBroadcastClaim {
+	fn new(explicit_guard: Option<ExplicitBroadcastGuard>) -> Self {
+		Self {
+			state: AtomicU8::new(EXPLICIT_BROADCAST_QUEUED),
+			explicit_guard: std::sync::Mutex::new(explicit_guard),
+		}
+	}
+
+	fn try_claim(&self) -> bool {
+		self.state
+			.compare_exchange(
+				EXPLICIT_BROADCAST_QUEUED,
+				EXPLICIT_BROADCAST_CLAIMED,
+				Ordering::AcqRel,
+				Ordering::Acquire,
+			)
+			.is_ok()
+	}
+
+	fn cancel_if_queued(&self) -> bool {
+		let cancelled = self
+			.state
+			.compare_exchange(
+				EXPLICIT_BROADCAST_QUEUED,
+				EXPLICIT_BROADCAST_CANCELLED,
+				Ordering::AcqRel,
+				Ordering::Acquire,
+			)
+			.is_ok();
+		if cancelled {
+			drop(self.take_explicit_guard());
+		}
+		cancelled
+	}
+
+	fn take_explicit_guard(&self) -> Option<ExplicitBroadcastGuard> {
+		self.explicit_guard.lock().unwrap().take()
+	}
+}
+
+struct CancelExplicitBroadcastOnDrop {
+	claim: Arc<ExplicitBroadcastClaim>,
+}
+
+impl Drop for CancelExplicitBroadcastOnDrop {
+	fn drop(&mut self) {
+		self.claim.cancel_if_queued();
+	}
+}
+
+pub(crate) struct BroadcastRequest {
+	pub(crate) package: Vec<Transaction>,
+	pub(crate) result_sender: Option<oneshot::Sender<Result<(), TxBroadcastError>>>,
+	pub(crate) explicit_claim: Option<Arc<ExplicitBroadcastClaim>>,
+	pub(crate) ldk_claim: Option<LdkBroadcastClaim>,
+}
+
+pub(crate) struct LdkBroadcastClaim {
+	key: Vec<Txid>,
+	queued_packages: Arc<std::sync::Mutex<std::collections::HashSet<Vec<Txid>>>>,
+}
+
+impl Drop for LdkBroadcastClaim {
+	fn drop(&mut self) {
+		self.queued_packages.lock().unwrap().remove(&self.key);
+	}
+}
+
+impl BroadcastRequest {
+	fn explicit(
+		package: Vec<Transaction>, result_sender: oneshot::Sender<Result<(), TxBroadcastError>>,
+		explicit_guard: Option<ExplicitBroadcastGuard>,
+	) -> (Self, Arc<ExplicitBroadcastClaim>) {
+		let explicit_claim = Arc::new(ExplicitBroadcastClaim::new(explicit_guard));
+		(
+			Self {
+				package,
+				result_sender: Some(result_sender),
+				explicit_claim: Some(Arc::clone(&explicit_claim)),
+				ldk_claim: None,
+			},
+			explicit_claim,
+		)
+	}
+
+	fn ldk(
+		package: Vec<Transaction>, key: Vec<Txid>,
+		queued_packages: Arc<std::sync::Mutex<std::collections::HashSet<Vec<Txid>>>>,
+	) -> Self {
+		Self {
+			package,
+			result_sender: None,
+			explicit_claim: None,
+			ldk_claim: Some(LdkBroadcastClaim { key, queued_packages }),
+		}
+	}
+
+	pub(crate) fn try_claim(&self) -> bool {
+		self.explicit_claim.as_ref().map_or(true, |claim| claim.try_claim())
+	}
+
+	pub(crate) fn send_result(self, result: Result<(), TxBroadcastError>) {
+		let Self { result_sender, explicit_claim, .. } = self;
+		drop(explicit_claim.and_then(|claim| claim.take_explicit_guard()));
+		if let Some(result_sender) = result_sender {
+			let _ = result_sender.send(result);
+		}
+	}
+
+	pub(crate) fn take_explicit_guard(&self) -> Option<ExplicitBroadcastGuard> {
+		self.explicit_claim.as_ref().and_then(|claim| claim.take_explicit_guard())
+	}
+}
+
+/// Separate receivers for safety-critical LDK traffic and bounded explicit user sends.
+pub(crate) struct BroadcastQueueReceivers {
+	pub(crate) ldk_receiver: mpsc::UnboundedReceiver<BroadcastRequest>,
+	pub(crate) explicit_receiver: mpsc::Receiver<BroadcastRequest>,
+}
+
+impl BroadcastQueueReceivers {
+	#[cfg(test)]
+	pub(crate) async fn recv(&mut self) -> Option<BroadcastRequest> {
+		loop {
+			let request = tokio::select! {
+				biased;
+				request = self.ldk_receiver.recv() => request,
+				request = self.explicit_receiver.recv() => request,
+			};
+			match request {
+				Some(request) if request.try_claim() => return Some(request),
+				Some(_) => continue,
+				None => return None,
+			}
+		}
+	}
+
+	/// Completes queued explicit requests without dispatching them when the worker stops.
+	pub(crate) fn fail_queued_explicit_requests(&mut self) {
+		while let Ok(request) = self.explicit_receiver.try_recv() {
+			if !request.try_claim() {
+				continue;
+			}
+			request.send_result(Err(TxBroadcastError::NotDispatched));
+		}
+	}
+}
 
 pub(crate) struct TransactionBroadcaster<L: Deref>
 where
 	L::Target: LdkLogger,
 {
-	queue_sender: mpsc::Sender<Vec<Transaction>>,
-	queue_receiver: Mutex<mpsc::Receiver<Vec<Transaction>>>,
+	ldk_sender: mpsc::UnboundedSender<BroadcastRequest>,
+	ldk_queued_packages: Arc<std::sync::Mutex<std::collections::HashSet<Vec<Txid>>>>,
+	explicit_sender: mpsc::Sender<BroadcastRequest>,
+	queue_receivers: Mutex<BroadcastQueueReceivers>,
+	explicit_broadcast_run: std::sync::Mutex<Option<Arc<ExplicitBroadcastRun>>>,
+	explicit_broadcast_slots: Arc<Semaphore>,
 	logger: L,
 }
+
+struct ExplicitBroadcastRun;
+
+#[derive(Clone)]
+pub(crate) struct ExplicitBroadcastAdmission(Arc<ExplicitBroadcastRun>);
 
 impl<L: Deref> TransactionBroadcaster<L>
 where
 	L::Target: LdkLogger,
 {
 	pub(crate) fn new(logger: L) -> Self {
-		let (queue_sender, queue_receiver) = mpsc::channel(BCAST_PACKAGE_QUEUE_SIZE);
-		Self { queue_sender, queue_receiver: Mutex::new(queue_receiver), logger }
+		let (ldk_sender, ldk_receiver) = mpsc::unbounded_channel();
+		let ldk_queued_packages = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+		let (explicit_sender, explicit_receiver) = mpsc::channel(EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE);
+		let queue_receivers =
+			Mutex::new(BroadcastQueueReceivers { ldk_receiver, explicit_receiver });
+		Self {
+			ldk_sender,
+			ldk_queued_packages,
+			explicit_sender,
+			queue_receivers,
+			explicit_broadcast_run: std::sync::Mutex::new(Some(Arc::new(ExplicitBroadcastRun))),
+			explicit_broadcast_slots: Arc::new(Semaphore::new(MAX_IN_FLIGHT_EXPLICIT_BROADCASTS)),
+			logger,
+		}
 	}
 
-	pub(crate) async fn get_broadcast_queue(
+	/// Starts a new explicit-broadcast run after the prior queue was drained.
+	pub(crate) fn resume_explicit_broadcasts(&self) {
+		*self.explicit_broadcast_run.lock().unwrap() = Some(Arc::new(ExplicitBroadcastRun));
+	}
+
+	/// Invalidates every admission captured for the current run.
+	pub(crate) fn pause_explicit_broadcasts(&self) {
+		*self.explicit_broadcast_run.lock().unwrap() = None;
+	}
+
+	/// Captures the current run before transaction creation or durable preparation begins.
+	pub(crate) fn begin_explicit_broadcast(
 		&self,
-	) -> MutexGuard<'_, mpsc::Receiver<Vec<Transaction>>> {
-		self.queue_receiver.lock().await
+	) -> Result<ExplicitBroadcastAdmission, TxBroadcastError> {
+		self.explicit_broadcast_run
+			.lock()
+			.unwrap()
+			.as_ref()
+			.cloned()
+			.map(ExplicitBroadcastAdmission)
+			.ok_or(TxBroadcastError::NotDispatched)
+	}
+
+	/// Completes every queued explicit request after new enqueue operations have been fenced.
+	pub(crate) async fn drain_explicit_broadcasts(&self) {
+		let mut receivers = self.queue_receivers.lock().await;
+		receivers.fail_queued_explicit_requests();
+	}
+
+	pub(crate) async fn get_broadcast_queue_receivers(
+		&self,
+	) -> MutexGuard<'_, BroadcastQueueReceivers> {
+		self.queue_receivers.lock().await
+	}
+
+	pub(crate) async fn broadcast_transaction(
+		&self, admission: ExplicitBroadcastAdmission, tx: Transaction,
+		explicit_guard: Option<ExplicitBroadcastGuard>,
+	) -> Result<(), TxBroadcastError> {
+		self.broadcast_transaction_with_timeout(
+			admission,
+			tx,
+			Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
+			explicit_guard,
+		)
+		.await
+	}
+
+	async fn broadcast_transaction_with_timeout(
+		&self, admission: ExplicitBroadcastAdmission, tx: Transaction, timeout: Duration,
+		explicit_guard: Option<ExplicitBroadcastGuard>,
+	) -> Result<(), TxBroadcastError> {
+		let permit = Arc::clone(&self.explicit_broadcast_slots)
+			.try_acquire_owned()
+			.map_err(|_| TxBroadcastError::NotDispatched)?;
+		let explicit_guard: ExplicitBroadcastGuard =
+			Arc::new(ExplicitBroadcastResources { _guard: explicit_guard, _permit: permit });
+		let (result_sender, result_receiver) = oneshot::channel();
+		let (request, explicit_claim) =
+			BroadcastRequest::explicit(vec![tx], result_sender, Some(explicit_guard));
+		{
+			let active_run = self.explicit_broadcast_run.lock().unwrap();
+			if !active_run.as_ref().is_some_and(|active_run| Arc::ptr_eq(active_run, &admission.0))
+			{
+				return Err(TxBroadcastError::NotDispatched);
+			}
+			self.explicit_sender.try_send(request).map_err(|_| TxBroadcastError::NotDispatched)?;
+		}
+		let _cancel_on_drop = CancelExplicitBroadcastOnDrop { claim: Arc::clone(&explicit_claim) };
+		let mut result_receiver = result_receiver;
+		let receiver_result = match tokio::time::timeout(timeout, &mut result_receiver).await {
+			Ok(result) => result,
+			Err(_) if explicit_claim.cancel_if_queued() => {
+				return Err(TxBroadcastError::NotDispatched)
+			},
+			Err(_) => result_receiver.await,
+		};
+		receiver_result.map_err(|_| TxBroadcastError::Failed)?
 	}
 }
 
@@ -46,8 +384,401 @@ where
 {
 	fn broadcast_transactions(&self, txs: &[&Transaction]) {
 		let package = txs.iter().map(|&t| t.clone()).collect::<Vec<Transaction>>();
-		self.queue_sender.try_send(package).unwrap_or_else(|e| {
+		let key = package.iter().map(Transaction::compute_txid).collect::<Vec<_>>();
+		if !self.ldk_queued_packages.lock().unwrap().insert(key.clone()) {
+			return;
+		}
+		let request = BroadcastRequest::ldk(package, key, Arc::clone(&self.ldk_queued_packages));
+		self.ldk_sender.send(request).unwrap_or_else(|e| {
 			log_error!(self.logger, "Failed to broadcast transactions: {}", e);
 		});
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Arc;
+	use std::time::Duration;
+
+	use bitcoin::absolute::LockTime;
+	use bitcoin::transaction::Version;
+	use bitcoin::Transaction;
+	use lightning::chain::chaininterface::BroadcasterInterface;
+	use lightning::util::test_utils::TestLogger;
+
+	use super::{
+		classify_rpc_broadcast_error, BroadcastRequest, ExplicitBroadcastGuard,
+		TransactionBroadcaster, TxBroadcastError, EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE,
+		MAX_IN_FLIGHT_EXPLICIT_BROADCASTS,
+	};
+
+	fn test_transaction() -> Transaction {
+		test_transaction_with_lock_time(0)
+	}
+
+	fn test_transaction_with_lock_time(lock_time: u32) -> Transaction {
+		Transaction {
+			version: Version::TWO,
+			lock_time: LockTime::from_consensus(lock_time),
+			input: vec![],
+			output: vec![],
+		}
+	}
+
+	#[test]
+	fn rpc_broadcast_errors_distinguish_known_rejections_and_ambiguous_failures() {
+		assert_eq!(
+			classify_rpc_broadcast_error(Some(-27), "Transaction already in block chain"),
+			Ok(())
+		);
+		assert_eq!(
+			classify_rpc_broadcast_error(None, r#"sendrawtransaction: {"code": -26}"#),
+			Err(TxBroadcastError::Rejected)
+		);
+		assert_eq!(
+			classify_rpc_broadcast_error(None, "non-final"),
+			Err(TxBroadcastError::Rejected)
+		);
+		assert_eq!(
+			classify_rpc_broadcast_error(
+				None,
+				r#"sendrawtransaction: {\"code\":-26,\"message\":\"too-long-mempool-chain\"}"#,
+			),
+			Err(TxBroadcastError::Rejected)
+		);
+		assert_eq!(
+			classify_rpc_broadcast_error(Some(-28), "Loading block index"),
+			Err(TxBroadcastError::Failed)
+		);
+	}
+
+	#[tokio::test]
+	async fn explicit_broadcast_returns_after_backend_acceptance() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction(), None);
+		let process_fut = async {
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			request.send_result(Ok(()));
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
+		assert_eq!(result, Ok(()));
+	}
+
+	#[tokio::test]
+	async fn explicit_broadcast_propagates_backend_rejection() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction(), None);
+		let process_fut = async {
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			request.send_result(Err(TxBroadcastError::Rejected));
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
+		assert_eq!(result, Err(TxBroadcastError::Rejected));
+	}
+
+	#[tokio::test]
+	async fn explicit_broadcast_propagates_backend_failure() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction(admission, test_transaction(), None);
+		let process_fut = async {
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			request.send_result(Err(TxBroadcastError::Failed));
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
+		assert_eq!(result, Err(TxBroadcastError::Failed));
+	}
+
+	#[tokio::test]
+	async fn claimed_explicit_broadcast_waits_for_backend_result_after_queue_timeout() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			test_transaction(),
+			Duration::from_millis(10),
+			None,
+		);
+		let process_fut = async {
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			tokio::time::sleep(Duration::from_millis(20)).await;
+			request.send_result(Ok(()));
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
+		assert_eq!(result, Ok(()));
+	}
+
+	#[tokio::test]
+	async fn queued_explicit_broadcast_is_cancelled_before_backend_claim() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let cancelled_result = broadcaster
+			.broadcast_transaction_with_timeout(
+				admission,
+				test_transaction(),
+				Duration::from_millis(10),
+				None,
+			)
+			.await;
+		assert_eq!(cancelled_result, Err(TxBroadcastError::NotDispatched));
+
+		let live_tx = test_transaction_with_lock_time(1);
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			live_tx.clone(),
+			Duration::from_secs(1),
+			None,
+		);
+		let process_fut = async {
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			assert_eq!(request.package, vec![live_tx]);
+			request.send_result(Ok(()));
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
+		assert_eq!(result, Ok(()));
+	}
+
+	#[tokio::test]
+	async fn queued_initial_broadcast_timeout_releases_its_guard() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let guard = Arc::new(());
+		let weak_guard = Arc::downgrade(&guard);
+		let explicit_guard: ExplicitBroadcastGuard = guard;
+
+		let result = broadcaster
+			.broadcast_transaction_with_timeout(
+				broadcaster.begin_explicit_broadcast().unwrap(),
+				test_transaction(),
+				Duration::from_millis(10),
+				Some(explicit_guard),
+			)
+			.await;
+
+		assert_eq!(result, Err(TxBroadcastError::NotDispatched));
+		assert!(weak_guard.upgrade().is_none());
+		assert_eq!(
+			broadcaster.explicit_broadcast_slots.available_permits(),
+			MAX_IN_FLIGHT_EXPLICIT_BROADCASTS
+		);
+	}
+
+	#[tokio::test]
+	async fn stalled_explicit_broadcasts_are_globally_bounded() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+		let mut calls = Vec::new();
+		for lock_time in 0..MAX_IN_FLIGHT_EXPLICIT_BROADCASTS {
+			let broadcaster = Arc::clone(&broadcaster);
+			calls.push(tokio::spawn(async move {
+				broadcaster
+					.broadcast_transaction_with_timeout(
+						broadcaster.begin_explicit_broadcast().unwrap(),
+						test_transaction_with_lock_time(lock_time as u32),
+						Duration::from_secs(10),
+						None,
+					)
+					.await
+			}));
+		}
+		let mut stalled_requests = Vec::new();
+		for _ in 0..MAX_IN_FLIGHT_EXPLICIT_BROADCASTS {
+			stalled_requests.push(receivers.recv().await.unwrap());
+		}
+
+		assert_eq!(broadcaster.explicit_broadcast_slots.available_permits(), 0);
+		assert_eq!(
+			broadcaster
+				.broadcast_transaction_with_timeout(
+					broadcaster.begin_explicit_broadcast().unwrap(),
+					test_transaction(),
+					Duration::from_secs(1),
+					None,
+				)
+				.await,
+			Err(TxBroadcastError::NotDispatched)
+		);
+
+		for request in stalled_requests {
+			request.send_result(Ok(()));
+		}
+		for call in calls {
+			assert_eq!(call.await.unwrap(), Ok(()));
+		}
+	}
+
+	#[tokio::test]
+	async fn dropped_explicit_broadcast_future_cancels_queued_request() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let cancelled_broadcaster = Arc::clone(&broadcaster);
+		let cancelled_task = tokio::spawn(async move {
+			let admission = cancelled_broadcaster.begin_explicit_broadcast().unwrap();
+			cancelled_broadcaster
+				.broadcast_transaction_with_timeout(
+					admission,
+					test_transaction(),
+					Duration::from_secs(1),
+					None,
+				)
+				.await
+		});
+		tokio::task::yield_now().await;
+		assert_eq!(broadcaster.explicit_sender.capacity(), EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE - 1);
+		cancelled_task.abort();
+		assert!(cancelled_task.await.unwrap_err().is_cancelled());
+
+		let live_tx = test_transaction_with_lock_time(1);
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			live_tx.clone(),
+			Duration::from_secs(1),
+			None,
+		);
+		let process_fut = async {
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			assert_eq!(request.package, vec![live_tx]);
+			request.send_result(Ok(()));
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
+		assert_eq!(result, Ok(()));
+	}
+
+	#[tokio::test]
+	async fn stopping_worker_fails_queued_explicit_broadcast_without_dispatch() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			test_transaction(),
+			Duration::from_secs(1),
+			None,
+		);
+		let stop_fut = async {
+			tokio::task::yield_now().await;
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			receivers.fail_queued_explicit_requests();
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, stop_fut);
+		assert_eq!(result, Err(TxBroadcastError::NotDispatched));
+	}
+
+	#[tokio::test]
+	async fn stopped_queue_rejects_new_requests_and_does_not_replay_them_after_restart() {
+		let broadcaster = Arc::new(TransactionBroadcaster::new(Arc::new(TestLogger::new())));
+		let stale_admission = broadcaster.begin_explicit_broadcast().unwrap();
+		broadcaster.pause_explicit_broadcasts();
+		broadcaster.drain_explicit_broadcasts().await;
+
+		assert_eq!(
+			broadcaster.begin_explicit_broadcast().err(),
+			Some(TxBroadcastError::NotDispatched)
+		);
+
+		broadcaster.resume_explicit_broadcasts();
+		assert_eq!(
+			broadcaster
+				.broadcast_transaction_with_timeout(
+					stale_admission,
+					test_transaction(),
+					Duration::from_secs(1),
+					None,
+				)
+				.await,
+			Err(TxBroadcastError::NotDispatched)
+		);
+
+		let live_tx = test_transaction_with_lock_time(1);
+		let admission = broadcaster.begin_explicit_broadcast().unwrap();
+		let broadcast_fut = broadcaster.broadcast_transaction_with_timeout(
+			admission,
+			live_tx.clone(),
+			Duration::from_secs(1),
+			None,
+		);
+		let process_fut = async {
+			let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+			let request = receivers.recv().await.unwrap();
+			assert_eq!(request.package, vec![live_tx]);
+			request.send_result(Ok(()));
+		};
+
+		let (result, ()) = tokio::join!(broadcast_fut, process_fut);
+		assert_eq!(result, Ok(()));
+	}
+
+	#[tokio::test]
+	async fn ldk_broadcast_remains_fire_and_forget() {
+		let broadcaster = TransactionBroadcaster::new(Arc::new(TestLogger::new()));
+		let tx = test_transaction();
+		broadcaster.broadcast_transactions(&[&tx]);
+
+		let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		assert_eq!(request.package, vec![tx]);
+		assert!(request.result_sender.is_none());
+	}
+
+	#[tokio::test]
+	async fn duplicate_ldk_packages_are_coalesced_until_dispatch_finishes() {
+		let broadcaster = TransactionBroadcaster::new(Arc::new(TestLogger::new()));
+		let tx = test_transaction();
+		broadcaster.broadcast_transactions(&[&tx]);
+		broadcaster.broadcast_transactions(&[&tx]);
+
+		let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		assert_eq!(request.package, vec![tx.clone()]);
+		assert!(tokio::time::timeout(Duration::from_millis(20), receivers.recv()).await.is_err());
+
+		drop(request);
+		broadcaster.broadcast_transactions(&[&tx]);
+		assert_eq!(receivers.recv().await.unwrap().package, vec![tx]);
+	}
+
+	#[tokio::test]
+	async fn ldk_broadcast_is_not_dropped_when_explicit_queue_is_saturated() {
+		let broadcaster = TransactionBroadcaster::new(Arc::new(TestLogger::new()));
+		for _ in 0..EXPLICIT_BCAST_PACKAGE_QUEUE_SIZE {
+			let (result_sender, _result_receiver) = tokio::sync::oneshot::channel();
+			let (request, _claim) =
+				BroadcastRequest::explicit(vec![test_transaction()], result_sender, None);
+			broadcaster.explicit_sender.try_send(request).unwrap();
+		}
+
+		assert_eq!(
+			broadcaster
+				.broadcast_transaction_with_timeout(
+					broadcaster.begin_explicit_broadcast().unwrap(),
+					test_transaction(),
+					Duration::from_secs(1),
+					None,
+				)
+				.await,
+			Err(TxBroadcastError::NotDispatched)
+		);
+
+		let ldk_tx = test_transaction();
+		broadcaster.broadcast_transactions(&[&ldk_tx]);
+
+		let mut receivers = broadcaster.get_broadcast_queue_receivers().await;
+		let request = receivers.recv().await.unwrap();
+		assert_eq!(request.package, vec![ldk_tx]);
+		assert!(request.result_sender.is_none());
 	}
 }

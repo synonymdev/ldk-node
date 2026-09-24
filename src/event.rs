@@ -7,13 +7,13 @@
 
 use core::future::Future;
 use core::task::{Poll, Waker};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Amount, OutPoint, TxIn, TxOut};
+use bitcoin::{Amount, OutPoint, TxIn, TxOut, Txid};
 use lightning::events::bump_transaction::BumpTransactionEvent;
 use lightning::events::{
 	ClosureReason, Event as LdkEvent, PaymentFailureReason, PaymentPurpose, ReplayEvent,
@@ -978,11 +978,71 @@ impl_writeable_tlv_based_enum!(Event,
 	}
 );
 
+/// Identifies a durable event transition without conflating different transitions for one txid.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum EventIdempotencyKey {
+	OnchainTransactionReceived(Txid),
+	OnchainTransactionConfirmed(Txid),
+	WalletReorg(Txid, u64, u64),
+}
+
+impl EventIdempotencyKey {
+	fn wallet_namespace(account: crate::config::OnchainWalletAccount) -> u64 {
+		(u64::from(account.account_index) << 8)
+			| u64::from(account.address_type.serialization_tag())
+	}
+
+	pub(crate) fn wallet_reorg(
+		txid: Txid, account: crate::config::OnchainWalletAccount, sequence: u64,
+	) -> Self {
+		let namespace = Self::wallet_namespace(account);
+		Self::WalletReorg(txid, namespace, sequence)
+	}
+}
+
+impl Writeable for EventIdempotencyKey {
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+		match self {
+			Self::OnchainTransactionReceived(txid) => {
+				0u8.write(writer)?;
+				txid.write(writer)
+			},
+			Self::OnchainTransactionConfirmed(txid) => {
+				1u8.write(writer)?;
+				txid.write(writer)
+			},
+			Self::WalletReorg(txid, account, sequence) => {
+				2u8.write(writer)?;
+				txid.write(writer)?;
+				account.write(writer)?;
+				sequence.write(writer)
+			},
+		}
+	}
+}
+
+impl Readable for EventIdempotencyKey {
+	fn read<R: lightning::io::Read>(
+		reader: &mut R,
+	) -> Result<Self, lightning::ln::msgs::DecodeError> {
+		let transition: u8 = Readable::read(reader)?;
+		let txid = Readable::read(reader)?;
+		match transition {
+			0 => Ok(Self::OnchainTransactionReceived(txid)),
+			1 => Ok(Self::OnchainTransactionConfirmed(txid)),
+			2 => Ok(Self::WalletReorg(txid, Readable::read(reader)?, Readable::read(reader)?)),
+			_ => Err(lightning::ln::msgs::DecodeError::InvalidValue),
+		}
+	}
+}
+
 pub struct EventQueue<L: Deref>
 where
 	L::Target: LdkLogger,
 {
 	queue: Arc<Mutex<VecDeque<Event>>>,
+	idempotency_keys: Arc<Mutex<HashSet<EventIdempotencyKey>>>,
+	mutation_lock: tokio::sync::Mutex<()>,
 	waker: Arc<Mutex<Option<Waker>>>,
 	kv_store: Arc<DynStore>,
 	logger: L,
@@ -994,15 +1054,19 @@ where
 {
 	pub(crate) fn new(kv_store: Arc<DynStore>, logger: L) -> Self {
 		let queue = Arc::new(Mutex::new(VecDeque::new()));
+		let idempotency_keys = Arc::new(Mutex::new(HashSet::new()));
+		let mutation_lock = tokio::sync::Mutex::new(());
 		let waker = Arc::new(Mutex::new(None));
-		Self { queue, waker, kv_store, logger }
+		Self { queue, idempotency_keys, mutation_lock, waker, kv_store, logger }
 	}
 
 	pub(crate) async fn add_event(&self, event: Event) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
 		let data = {
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.push_back(event);
-			EventQueueSerWrapper(&locked_queue).encode()
+			let locked_keys = self.idempotency_keys.lock().unwrap();
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
 		};
 
 		self.persist_queue(data).await?;
@@ -1010,6 +1074,102 @@ where
 		if let Some(waker) = self.waker.lock().unwrap().take() {
 			waker.wake();
 		}
+		Ok(())
+	}
+
+	pub(crate) async fn add_event_with_idempotency_key(
+		&self, event: Event, idempotency_key: EventIdempotencyKey,
+	) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
+		let data = {
+			let mut locked_queue = self.queue.lock().unwrap();
+			let mut locked_keys = self.idempotency_keys.lock().unwrap();
+			if locked_keys.insert(idempotency_key) && !locked_queue.contains(&event) {
+				locked_queue.push_back(event);
+			}
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
+		};
+
+		self.persist_queue(data).await?;
+		if let Some(waker) = self.waker.lock().unwrap().take() {
+			waker.wake();
+		}
+		Ok(())
+	}
+
+	// A reorg starts a new confirmation transition. Commit the event and retirement
+	// together so a crash cannot expose the reorg while retaining the old receipt.
+	pub(crate) async fn add_onchain_reorg_event(
+		&self, txid: Txid, receipts: &[EventIdempotencyKey], confirmation: Option<Event>,
+	) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
+		let mut queue = self.queue.lock().unwrap().clone();
+		let mut keys = self.idempotency_keys.lock().unwrap().clone();
+		if receipts.iter().any(|receipt| !keys.contains(receipt)) {
+			queue.push_back(Event::OnchainTransactionReorged { txid });
+			keys.remove(&EventIdempotencyKey::OnchainTransactionConfirmed(txid));
+			keys.extend(receipts.iter().copied());
+		}
+		// A retry may run after reconfirmation. Commit both notifications before retiring
+		// the source journal; a restart must not lose that later confirmation either.
+		if let Some(event) = confirmation {
+			if keys.insert(EventIdempotencyKey::OnchainTransactionConfirmed(txid))
+				&& !queue.contains(&event)
+			{
+				queue.push_back(event);
+			}
+		}
+		self.persist_queue(EventQueueSerWrapper(&queue, &keys).encode()).await?;
+		*self.queue.lock().unwrap() = queue;
+		*self.idempotency_keys.lock().unwrap() = keys;
+		if let Some(waker) = self.waker.lock().unwrap().take() {
+			waker.wake();
+		}
+		Ok(())
+	}
+
+	pub(crate) async fn clear_idempotency_keys(
+		&self, idempotency_keys: &[EventIdempotencyKey],
+	) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
+		let data = {
+			let locked_queue = self.queue.lock().unwrap();
+			let mut locked_keys = self.idempotency_keys.lock().unwrap();
+			let mut removed_any = false;
+			for idempotency_key in idempotency_keys {
+				removed_any |= locked_keys.remove(idempotency_key);
+			}
+			if !removed_any {
+				return Ok(());
+			}
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
+		};
+		self.persist_queue(data).await
+	}
+
+	// Recover cleanup interrupted after the wallet acknowledged its journal. Never
+	// discard receipts belonging to an unloaded account whose journal we cannot inspect.
+	pub(crate) async fn prune_reorg_receipts(
+		&self, active: &HashSet<EventIdempotencyKey>,
+		loaded_accounts: &[crate::config::OnchainWalletAccount],
+	) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
+		let namespaces: HashSet<_> =
+			loaded_accounts.iter().copied().map(EventIdempotencyKey::wallet_namespace).collect();
+		let mut keys = self.idempotency_keys.lock().unwrap().clone();
+		let before = keys.len();
+		keys.retain(|key| match key {
+			EventIdempotencyKey::WalletReorg(_, account, _) => {
+				!namespaces.contains(account) || active.contains(key)
+			},
+			_ => true,
+		});
+		if keys.len() == before {
+			return Ok(());
+		}
+		let queue = self.queue.lock().unwrap().clone();
+		self.persist_queue(EventQueueSerWrapper(&queue, &keys).encode()).await?;
+		*self.idempotency_keys.lock().unwrap() = keys;
 		Ok(())
 	}
 
@@ -1023,10 +1183,12 @@ where
 	}
 
 	pub(crate) async fn event_handled(&self) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
 		let data = {
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.pop_front();
-			EventQueueSerWrapper(&locked_queue).encode()
+			let locked_keys = self.idempotency_keys.lock().unwrap();
+			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
 		};
 
 		self.persist_queue(data).await?;
@@ -1072,12 +1234,14 @@ where
 		let (kv_store, logger) = args;
 		let read_queue: EventQueueDeserWrapper = Readable::read(reader)?;
 		let queue = Arc::new(Mutex::new(read_queue.0));
+		let idempotency_keys = Arc::new(Mutex::new(read_queue.1));
+		let mutation_lock = tokio::sync::Mutex::new(());
 		let waker = Arc::new(Mutex::new(None));
-		Ok(Self { queue, waker, kv_store, logger })
+		Ok(Self { queue, idempotency_keys, mutation_lock, waker, kv_store, logger })
 	}
 }
 
-struct EventQueueDeserWrapper(VecDeque<Event>);
+struct EventQueueDeserWrapper(VecDeque<Event>, HashSet<EventIdempotencyKey>);
 
 impl Readable for EventQueueDeserWrapper {
 	fn read<R: lightning::io::Read>(
@@ -1088,17 +1252,82 @@ impl Readable for EventQueueDeserWrapper {
 		for _ in 0..len {
 			queue.push_back(Readable::read(reader)?);
 		}
-		Ok(Self(queue))
+		let extension_version = match u8::read(reader) {
+			Ok(version) => version,
+			Err(lightning::ln::msgs::DecodeError::ShortRead) => {
+				return Ok(Self(queue, HashSet::new()))
+			},
+			Err(error) => return Err(error),
+		};
+		let idempotency_keys = match extension_version {
+			1 => {
+				let queued_keys: HashSet<_> = queue
+					.iter()
+					.filter_map(|event| match event {
+						Event::OnchainTransactionReceived { txid, .. } => {
+							Some(EventIdempotencyKey::OnchainTransactionReceived(*txid))
+						},
+						Event::OnchainTransactionConfirmed { txid, .. } => {
+							Some(EventIdempotencyKey::OnchainTransactionConfirmed(*txid))
+						},
+						_ => None,
+					})
+					.collect();
+				let key_count: u16 = Readable::read(reader)?;
+				let mut idempotency_keys = HashSet::with_capacity(key_count as usize);
+				for _ in 0..key_count {
+					let txid = Readable::read(reader)?;
+					let received = EventIdempotencyKey::OnchainTransactionReceived(txid);
+					let confirmed = EventIdempotencyKey::OnchainTransactionConfirmed(txid);
+					let known_received = queued_keys.contains(&received);
+					let known_confirmed = queued_keys.contains(&confirmed);
+					// Version one used one receipt for both event types. Once handled,
+					// its type is irrecoverable: retain the old broad suppression rather
+					// than invent a received-only receipt and replay a confirmation.
+					// Marker retirement clears both; a reorg retires confirmation alone.
+					if known_received || !known_confirmed {
+						idempotency_keys.insert(received);
+					}
+					if known_confirmed || !known_received {
+						idempotency_keys.insert(confirmed);
+					}
+				}
+				idempotency_keys
+			},
+			2 => {
+				let key_count: u16 = Readable::read(reader)?;
+				let mut idempotency_keys = HashSet::with_capacity(key_count as usize);
+				for _ in 0..key_count {
+					idempotency_keys.insert(Readable::read(reader)?);
+				}
+				idempotency_keys
+			},
+			_ => return Err(lightning::ln::msgs::DecodeError::InvalidValue),
+		};
+		Ok(Self(queue, idempotency_keys))
 	}
 }
 
-struct EventQueueSerWrapper<'a>(&'a VecDeque<Event>);
+struct EventQueueSerWrapper<'a>(&'a VecDeque<Event>, &'a HashSet<EventIdempotencyKey>);
 
 impl Writeable for EventQueueSerWrapper<'_> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		(self.0.len() as u16).write(writer)?;
 		for e in self.0.iter() {
 			e.write(writer)?;
+		}
+		2u8.write(writer)?;
+		let mut idempotency_keys = self.1.iter().copied().collect::<Vec<_>>();
+		idempotency_keys.sort_unstable();
+		let key_count = u16::try_from(idempotency_keys.len()).map_err(|_| {
+			lightning::io::Error::new(
+				lightning::io::ErrorKind::InvalidData,
+				"too many event idempotency keys",
+			)
+		})?;
+		key_count.write(writer)?;
+		for key in idempotency_keys {
+			key.write(writer)?;
 		}
 		Ok(())
 	}
@@ -2502,13 +2731,120 @@ where
 
 #[cfg(test)]
 mod tests {
-	use std::sync::atomic::{AtomicU16, Ordering};
+	use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 	use std::time::Duration;
 
+	use bitcoin::hashes::Hash;
 	use lightning::util::test_utils::TestLogger;
 
 	use super::*;
 	use crate::io::test_utils::InMemoryStore;
+
+	struct DelayedWriteStore {
+		inner: Arc<InMemoryStore>,
+		block_next_write: AtomicBool,
+		write_started: Arc<tokio::sync::Notify>,
+		release_write: Arc<tokio::sync::Notify>,
+	}
+
+	impl DelayedWriteStore {
+		fn new() -> Self {
+			Self {
+				inner: Arc::new(InMemoryStore::new()),
+				block_next_write: AtomicBool::new(false),
+				write_started: Arc::new(tokio::sync::Notify::new()),
+				release_write: Arc::new(tokio::sync::Notify::new()),
+			}
+		}
+	}
+
+	impl KVStore for DelayedWriteStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<u8>, lightning::io::Error>> + Send>>
+		{
+			KVStore::read(&*self.inner, primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<(), lightning::io::Error>> + Send>> {
+			let inner = Arc::clone(&self.inner);
+			let primary_namespace = primary_namespace.to_string();
+			let secondary_namespace = secondary_namespace.to_string();
+			let key = key.to_string();
+			let should_block = self.block_next_write.swap(false, Ordering::SeqCst);
+			let write_started = Arc::clone(&self.write_started);
+			let release_write = Arc::clone(&self.release_write);
+			Box::pin(async move {
+				if should_block {
+					write_started.notify_one();
+					release_write.notified().await;
+				}
+				KVStore::write(&*inner, &primary_namespace, &secondary_namespace, &key, buf).await
+			})
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<(), lightning::io::Error>> + Send>> {
+			KVStore::remove(&*self.inner, primary_namespace, secondary_namespace, key, lazy)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<String>, lightning::io::Error>> + Send>>
+		{
+			KVStore::list(&*self.inner, primary_namespace, secondary_namespace)
+		}
+	}
+
+	impl lightning::util::persist::KVStoreSync for DelayedWriteStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> Result<Vec<u8>, lightning::io::Error> {
+			lightning::util::persist::KVStoreSync::read(
+				&*self.inner,
+				primary_namespace,
+				secondary_namespace,
+				key,
+			)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> Result<(), lightning::io::Error> {
+			lightning::util::persist::KVStoreSync::write(
+				&*self.inner,
+				primary_namespace,
+				secondary_namespace,
+				key,
+				buf,
+			)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> Result<(), lightning::io::Error> {
+			lightning::util::persist::KVStoreSync::remove(
+				&*self.inner,
+				primary_namespace,
+				secondary_namespace,
+				key,
+				lazy,
+			)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> Result<Vec<String>, lightning::io::Error> {
+			lightning::util::persist::KVStoreSync::list(
+				&*self.inner,
+				primary_namespace,
+				secondary_namespace,
+			)
+		}
+	}
 
 	#[tokio::test]
 	async fn event_queue_persistence() {
@@ -2546,6 +2882,254 @@ mod tests {
 
 		event_queue.event_handled().await.unwrap();
 		assert_eq!(event_queue.next_event(), None);
+	}
+
+	#[tokio::test]
+	async fn legacy_event_queue_without_idempotency_extension_is_readable() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let expected_event = Event::ChannelReady {
+			channel_id: ChannelId([24u8; 32]),
+			user_channel_id: UserChannelId(2424),
+			counterparty_node_id: None,
+			funding_txo: None,
+		};
+		let mut legacy_bytes = Vec::new();
+		1u16.write(&mut legacy_bytes).unwrap();
+		expected_event.write(&mut legacy_bytes).unwrap();
+
+		let event_queue = EventQueue::read(&mut &legacy_bytes[..], (store, logger)).unwrap();
+
+		assert_eq!(event_queue.next_event_async().await, expected_event);
+	}
+
+	#[tokio::test]
+	async fn acknowledged_version_one_receipts_preserve_ambiguous_transitions() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let txid = Txid::from_byte_array([41; 32]);
+		let mut version_one_bytes = Vec::new();
+		0u16.write(&mut version_one_bytes).unwrap();
+		1u8.write(&mut version_one_bytes).unwrap();
+		1u16.write(&mut version_one_bytes).unwrap();
+		txid.write(&mut version_one_bytes).unwrap();
+
+		let event_queue = EventQueue::read(&mut &version_one_bytes[..], (store, logger)).unwrap();
+		let idempotency_keys = event_queue.idempotency_keys.lock().unwrap();
+
+		assert!(idempotency_keys.contains(&EventIdempotencyKey::OnchainTransactionReceived(txid)));
+		assert!(idempotency_keys.contains(&EventIdempotencyKey::OnchainTransactionConfirmed(txid)));
+	}
+
+	#[tokio::test]
+	async fn queued_version_one_receipts_recover_the_known_transition() {
+		let txid = Txid::from_byte_array([41; 32]);
+		let details =
+			TransactionDetails { amount_sats: 1, inputs: Vec::new(), outputs: Vec::new() };
+		for (event, expected_key, absent_key) in [
+			(
+				Event::OnchainTransactionReceived { txid, details: details.clone() },
+				EventIdempotencyKey::OnchainTransactionReceived(txid),
+				EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+			),
+			(
+				Event::OnchainTransactionConfirmed {
+					txid,
+					details: details.clone(),
+					block_hash: bitcoin::BlockHash::all_zeros(),
+					block_height: 1,
+					confirmation_time: 1,
+				},
+				EventIdempotencyKey::OnchainTransactionConfirmed(txid),
+				EventIdempotencyKey::OnchainTransactionReceived(txid),
+			),
+		] {
+			let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+			let logger = Arc::new(TestLogger::new());
+			let mut bytes = Vec::new();
+			1u16.write(&mut bytes).unwrap();
+			event.write(&mut bytes).unwrap();
+			1u8.write(&mut bytes).unwrap();
+			1u16.write(&mut bytes).unwrap();
+			txid.write(&mut bytes).unwrap();
+			let queue = EventQueue::read(&mut &bytes[..], (store, logger)).unwrap();
+			assert_eq!(queue.next_event(), Some(event));
+			let keys = queue.idempotency_keys.lock().unwrap();
+			assert!(keys.contains(&expected_key));
+			assert!(!keys.contains(&absent_key));
+		}
+	}
+
+	#[tokio::test]
+	async fn idempotency_keys_deduplicate_only_the_same_event_transition() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let event_queue = EventQueue::new(store, logger);
+		let txid = Txid::from_byte_array([42; 32]);
+		let details =
+			TransactionDetails { amount_sats: 42, inputs: Vec::new(), outputs: Vec::new() };
+		let received_event = Event::OnchainTransactionReceived { txid, details: details.clone() };
+		let confirmed_event = Event::OnchainTransactionConfirmed {
+			txid,
+			block_hash: bitcoin::BlockHash::from_byte_array([43; 32]),
+			block_height: 43,
+			confirmation_time: 43,
+			details,
+		};
+		let received_key = EventIdempotencyKey::OnchainTransactionReceived(txid);
+		let confirmed_key = EventIdempotencyKey::OnchainTransactionConfirmed(txid);
+
+		event_queue
+			.add_event_with_idempotency_key(received_event.clone(), received_key)
+			.await
+			.unwrap();
+		event_queue
+			.add_event_with_idempotency_key(received_event.clone(), received_key)
+			.await
+			.unwrap();
+		event_queue
+			.add_event_with_idempotency_key(confirmed_event.clone(), confirmed_key)
+			.await
+			.unwrap();
+
+		assert_eq!(event_queue.next_event(), Some(received_event));
+		event_queue.event_handled().await.unwrap();
+		assert_eq!(event_queue.next_event(), Some(confirmed_event));
+		event_queue.event_handled().await.unwrap();
+		assert_eq!(event_queue.next_event(), None);
+	}
+
+	#[tokio::test]
+	async fn handled_event_is_not_restored_by_concurrent_idempotency_cleanup() {
+		let store = Arc::new(DelayedWriteStore::new());
+		let dyn_store: Arc<DynStore> = store.clone();
+		let logger = Arc::new(TestLogger::new());
+		let event_queue = Arc::new(EventQueue::new(Arc::clone(&dyn_store), Arc::clone(&logger)));
+		let txid = Txid::from_byte_array([42; 32]);
+		let event = Event::OnchainTransactionReceived {
+			txid,
+			details: TransactionDetails {
+				amount_sats: 42,
+				inputs: Vec::new(),
+				outputs: Vec::new(),
+			},
+		};
+		let idempotency_key = EventIdempotencyKey::OnchainTransactionReceived(txid);
+		event_queue.add_event_with_idempotency_key(event, idempotency_key).await.unwrap();
+
+		store.block_next_write.store(true, Ordering::SeqCst);
+		let cleanup_queue = Arc::clone(&event_queue);
+		let cleanup =
+			tokio::spawn(
+				async move { cleanup_queue.clear_idempotency_keys(&[idempotency_key]).await },
+			);
+		store.write_started.notified().await;
+
+		let handled_queue = Arc::clone(&event_queue);
+		let mut handled = tokio::spawn(async move { handled_queue.event_handled().await });
+		assert!(
+			tokio::time::timeout(Duration::from_millis(200), &mut handled).await.is_err(),
+			"event acknowledgement must wait for the cleanup write"
+		);
+		store.release_write.notify_one();
+		cleanup.await.unwrap().unwrap();
+		handled.await.unwrap().unwrap();
+
+		let persisted_bytes = KVStore::read(
+			&*dyn_store,
+			EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_KEY,
+		)
+		.await
+		.unwrap();
+		let restored_queue =
+			EventQueue::read(&mut &persisted_bytes[..], (dyn_store, logger)).unwrap();
+		assert_eq!(restored_queue.next_event(), None);
+	}
+
+	#[tokio::test]
+	async fn reorg_commit_serializes_event_acknowledgement() {
+		let store = Arc::new(DelayedWriteStore::new());
+		let dyn_store: Arc<DynStore> = store.clone();
+		let logger = Arc::new(TestLogger::new());
+		let queue = Arc::new(EventQueue::new(Arc::clone(&dyn_store), Arc::clone(&logger)));
+		let txid = Txid::from_byte_array([44; 32]);
+		let key = EventIdempotencyKey::OnchainTransactionConfirmed(txid);
+		let event = Event::OnchainTransactionConfirmed {
+			txid,
+			block_hash: bitcoin::BlockHash::all_zeros(),
+			block_height: 1,
+			confirmation_time: 1,
+			details: TransactionDetails { amount_sats: 1, inputs: Vec::new(), outputs: Vec::new() },
+		};
+		queue.add_event_with_idempotency_key(event.clone(), key).await.unwrap();
+		store.block_next_write.store(true, Ordering::SeqCst);
+		let reorg_queue = Arc::clone(&queue);
+		let reorg = tokio::spawn(async move {
+			reorg_queue
+				.add_onchain_reorg_event(
+					txid,
+					&[EventIdempotencyKey::WalletReorg(txid, 2, 0)],
+					None,
+				)
+				.await
+		});
+		store.write_started.notified().await;
+		assert_eq!(queue.next_event(), Some(event));
+		assert!(queue.idempotency_keys.lock().unwrap().contains(&key));
+		let ack_queue = Arc::clone(&queue);
+		let mut ack = tokio::spawn(async move { ack_queue.event_handled().await });
+		assert!(tokio::time::timeout(Duration::from_millis(100), &mut ack).await.is_err());
+		store.release_write.notify_one();
+		reorg.await.unwrap().unwrap();
+		ack.await.unwrap().unwrap();
+		let bytes = KVStore::read(
+			&*dyn_store,
+			EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_KEY,
+		)
+		.await
+		.unwrap();
+		let restored = EventQueue::read(&mut &bytes[..], (dyn_store, logger)).unwrap();
+		assert_eq!(restored.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+		assert!(!restored.idempotency_keys.lock().unwrap().contains(&key));
+		restored.event_handled().await.unwrap();
+		assert!(restored.next_event().is_none());
+	}
+
+	#[tokio::test]
+	async fn reorg_receipts_survive_ack_and_only_prune_inspected_accounts() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let queue = EventQueue::new(Arc::clone(&store), Arc::clone(&logger));
+		let txid = Txid::from_byte_array([45; 32]);
+		let account = crate::config::OnchainWalletAccount::account_zero(
+			crate::config::AddressType::NativeSegwit,
+		);
+		let receipt = EventIdempotencyKey::wallet_reorg(txid, account, 0);
+		queue.add_onchain_reorg_event(txid, &[receipt], None).await.unwrap();
+		queue.event_handled().await.unwrap();
+		queue.prune_reorg_receipts(&HashSet::new(), &[]).await.unwrap();
+		queue.add_onchain_reorg_event(txid, &[receipt], None).await.unwrap();
+		assert!(queue.next_event().is_none());
+		queue.prune_reorg_receipts(&HashSet::from([receipt]), &[account]).await.unwrap();
+		assert!(queue.idempotency_keys.lock().unwrap().contains(&receipt));
+		queue.prune_reorg_receipts(&HashSet::new(), &[account]).await.unwrap();
+		let bytes = KVStore::read(
+			&*store,
+			EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_KEY,
+		)
+		.await
+		.unwrap();
+		let restored = EventQueue::read(&mut &bytes[..], (store, logger)).unwrap();
+		assert!(restored.idempotency_keys.lock().unwrap().is_empty());
+		let next = EventIdempotencyKey::wallet_reorg(txid, account, 1);
+		restored.add_onchain_reorg_event(txid, &[next], None).await.unwrap();
+		assert_eq!(restored.next_event(), Some(Event::OnchainTransactionReorged { txid }));
 	}
 
 	#[tokio::test]

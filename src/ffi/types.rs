@@ -59,7 +59,9 @@ pub use crate::payment::store::{
 };
 pub use crate::payment::QrPaymentResult;
 #[allow(unused_imports)]
-pub use crate::payment::{AddressInfo, KeychainKind};
+pub use crate::payment::{
+	AddressInfo, BroadcastOutcome, BroadcastOutcomeStatus, KeychainKind, PendingBroadcastInfo,
+};
 pub use crate::types::SpendableUtxo;
 use crate::{hex_utils, SocketAddress, UniffiCustomTypeConverter, UserChannelId};
 

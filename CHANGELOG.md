@@ -1,20 +1,34 @@
-# 0.7.0-rc.66 (Synonym Fork)
+# 0.7.0-rc.67 (Synonym Fork)
 
-## Bug Fixes
+## Synonym Fork Additions
 
+- Preserve ordinary incoming transaction notifications when reorg event delivery or receipt
+  cleanup encounters a storage failure in the same sync.
+- Persist pending on-chain reorg notifications with the wallet chain state so ordinary sync can
+  retry event delivery after a storage failure or restart, without suppressing reconfirmation.
+- Added durable `broadcast_outcome` reconciliation by any RBF-lineage transaction ID with explicit
+  `Pending`, `Accepted`, and `Abandoned` states. Acceptance-unknown outcomes survive restart and
+  confirmation until the consumer calls `acknowledge_broadcast_outcome`; conservative retention is
+  persisted before dispatch so a later backend observation cannot erase the outcome.
+- `list_pending_broadcasts` now returns each unresolved spend's complete RBF lineage so callers can
+  independently reconcile every replacement before `abandon_pending_broadcast`.
+- Explicit on-chain sends now return a transaction ID only after the configured backend accepts
+  the transaction. Transaction-keyed rejected, not-dispatched, acceptance-unknown failure, and
+  acceptance-unknown timeout outcomes are distinct. Uncertain signed transactions remain reserved
+  in a durable intent store for enumeration, exact-byte rebroadcast, sync reconciliation, and
+  recovery after restart. Callers can explicitly abandon an externally reconciled intent, and RBF
+  replacements use the same result-bearing, durable lifecycle while exposing only the canonical
+  transaction in payment history. Concurrent wallet syncs serialize received-event delivery.
+- `NodeError` is now a fielded bindings error type so broadcast failures can expose their
+  transaction ID. Swift error cases no longer contain the legacy generated `message` associated
+  value, while fieldless Kotlin and Python exceptions have an empty generated message; callers
+  should match the error variant and use its typed fields.
+- Electrum transaction rejections are now logged as failures instead of successful broadcasts.
 - Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
 - Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
 - Add keep consumer rules for JNA types UniFFI needs under R8.
 
-# 0.7.0-rc.64 (Synonym Fork)
-
-## Bug Fixes
-
 - The Android AAR now ships targeted R8 consumer keep rules for the UniFFI/JNA FFI surface.
-
-# 0.7.0-rc.63 (Synonym Fork)
-
-## Bug Fixes
 
 - Moved peer persistence to async KV storage so slow writes no longer hold the peer-store lock.
 - Prevented Electrum runtime self-drop crashes and unbounded shutdown waits.
@@ -81,8 +95,6 @@
   writing a channel monitor when the KV store already holds one with a newer or equal `update_id`,
   and skips the channel manager when one already exists. Read or deserialization failures fail-closed
   to prevent silent data loss.
-
-## Synonym Fork Additions
 
 - Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.
   Stale channel-monitor mismatches now fail closed with `BuildError::DangerousValue`.

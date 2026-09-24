@@ -382,10 +382,38 @@ interface OnchainPayment {
     sequence<SpendableUtxo> list_spendable_outputs();
     [Throws=NodeError]
     sequence<SpendableUtxo> select_utxos_with_algorithm(u64 target_amount_sats, FeeRate? fee_rate, CoinSelectionAlgorithm algorithm, sequence<SpendableUtxo>? utxos);
+    /// Sends an exact amount and waits for the configured backend's broadcast result.
+    /// `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+    /// reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
     [Throws=NodeError]
     Txid send_to_address([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate, sequence<SpendableUtxo>? utxos_to_spend);
+    /// Sends the available balance and waits for the configured backend's broadcast result.
+    /// `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+    /// reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
     [Throws=NodeError]
     Txid send_all_to_address([ByRef]Address address, boolean retain_reserve, FeeRate? fee_rate);
+    /// Rebroadcasts the exact persisted transaction for an acceptance-unknown send.
+    /// Do not create another spend for the same payment while its pending entry remains.
+    [Throws=NodeError]
+    Txid rebroadcast_transaction([ByRef]Txid txid);
+    /// Lists unresolved broadcasts and every transaction in each RBF lineage.
+    [Throws=NodeError]
+    sequence<PendingBroadcastInfo> list_pending_broadcasts();
+    /// Returns a durable Pending, Accepted, or Abandoned outcome by any RBF-lineage txid.
+    /// Only Accepted proves backend acceptance. A null result is unknown or acknowledged.
+    [Throws=NodeError]
+    BroadcastOutcome? broadcast_outcome([ByRef]Txid txid);
+    /// Removes a terminal outcome after the consumer has durably handled it.
+    /// Fails while the lineage is still active and is idempotent after removal.
+    [Throws=NodeError]
+    void acknowledge_broadcast_outcome([ByRef]Txid txid);
+    /// Releases a pending spend only after an independent source proves every lineage member
+    /// absent from both the mempool and chain and no other process can rebroadcast it.
+    [Throws=NodeError]
+    void abandon_pending_broadcast([ByRef]Txid txid);
+    /// Replaces an unconfirmed transaction and waits for the configured backend's broadcast result.
+    /// `OnchainTxBroadcastFailed` and `OnchainTxBroadcastTimeout` mean acceptance is unknown:
+    /// reconcile or rebroadcast the returned transaction ID and do not create a fresh spend.
     [Throws=NodeError]
     Txid bump_fee_by_rbf([ByRef]Txid txid, FeeRate fee_rate);
     [Throws=NodeError]
@@ -403,6 +431,23 @@ enum CoinSelectionAlgorithm {
 	"LargestFirst",
 	"OldestFirst",
 	"SingleRandomDraw",
+};
+
+dictionary PendingBroadcastInfo {
+    Txid txid;
+    sequence<Txid> lineage;
+};
+
+enum BroadcastOutcomeStatus {
+    "Pending",
+    "Accepted",
+    "Abandoned",
+};
+
+dictionary BroadcastOutcome {
+    BroadcastOutcomeStatus status;
+    Txid txid;
+    sequence<Txid> lineage;
 };
 
 dictionary SpendableUtxo {
@@ -435,75 +480,85 @@ interface LSPS1Liquidity {
 };
 
 [Error]
-enum NodeError {
-	"AlreadyRunning",
-	"NotRunning",
-	"OnchainTxCreationFailed",
-	"ConnectionFailed",
-	"InvoiceCreationFailed",
-	"InvoiceRequestCreationFailed",
-	"OfferCreationFailed",
-	"RefundCreationFailed",
-	"PaymentSendingFailed",
-	"InvalidCustomTlvs",
-	"ProbeSendingFailed",
-	"RouteNotFound",
-	"ChannelCreationFailed",
-	"ChannelClosingFailed",
-	"ChannelSplicingFailed",
-	"ChannelConfigUpdateFailed",
-	"PersistenceFailed",
-	"FeerateEstimationUpdateFailed",
-	"FeerateEstimationUpdateTimeout",
-	"WalletOperationFailed",
-	"WalletOperationTimeout",
-	"OnchainTxSigningFailed",
-	"TxSyncFailed",
-	"TxSyncTimeout",
-	"GossipUpdateFailed",
-	"GossipUpdateTimeout",
-	"LiquidityRequestFailed",
-	"UriParameterParsingFailed",
-	"InvalidAddress",
-	"InvalidSocketAddress",
-	"InvalidPublicKey",
-	"InvalidSecretKey",
-	"InvalidOfferId",
-	"InvalidNodeId",
-	"InvalidPaymentId",
-	"InvalidPaymentHash",
-	"InvalidPaymentPreimage",
-	"InvalidPaymentSecret",
-	"InvalidAmount",
-	"InvalidInvoice",
-	"InvalidOffer",
-	"InvalidRefund",
-	"InvalidChannelId",
-	"InvalidNetwork",
-	"InvalidUri",
-	"InvalidQuantity",
-	"InvalidNodeAlias",
-	"InvalidDateTime",
-	"InvalidFeeRate",
-	"DuplicatePayment",
-	"UnsupportedCurrency",
-	"InsufficientFunds",
-	"LiquiditySourceUnavailable",
-	"LiquidityFeeTooHigh",
-	"InvalidBlindedPaths",
-	"AsyncPaymentServicesDisabled",
-	"CannotRbfFundingTransaction",
-    "TransactionNotFound",
-    "TransactionAlreadyConfirmed",
-    "NoSpendableOutputs",
-    "CoinSelectionFailed",
-    "InvalidMnemonic",
-    "BackgroundSyncNotEnabled",
-    "AddressTypeAlreadyMonitored",
-    "AddressTypeIsPrimary",
-    "AddressTypeNotMonitored",
-    "OnchainWalletAccountNotRegistered",
-    "InvalidSeedBytes",
+interface NodeError {
+	AlreadyRunning();
+	NotRunning();
+	OnchainTxCreationFailed();
+	ConnectionFailed();
+	InvoiceCreationFailed();
+	InvoiceRequestCreationFailed();
+	OfferCreationFailed();
+	RefundCreationFailed();
+	PaymentSendingFailed();
+	InvalidCustomTlvs();
+	ProbeSendingFailed();
+	RouteNotFound();
+	ChannelCreationFailed();
+	ChannelClosingFailed();
+	ChannelSplicingFailed();
+	ChannelConfigUpdateFailed();
+	PersistenceFailed();
+	FeerateEstimationUpdateFailed();
+	FeerateEstimationUpdateTimeout();
+	WalletOperationFailed();
+	WalletOperationTimeout();
+	OnchainTxSigningFailed();
+	TxSyncFailed();
+	TxSyncTimeout();
+	GossipUpdateFailed();
+	GossipUpdateTimeout();
+	LiquidityRequestFailed();
+	UriParameterParsingFailed();
+	InvalidAddress();
+	InvalidSocketAddress();
+	InvalidPublicKey();
+	InvalidSecretKey();
+	InvalidOfferId();
+	InvalidNodeId();
+	InvalidPaymentId();
+	InvalidPaymentHash();
+	InvalidPaymentPreimage();
+	InvalidPaymentSecret();
+	InvalidAmount();
+	InvalidInvoice();
+	InvalidOffer();
+	InvalidRefund();
+	InvalidChannelId();
+	InvalidNetwork();
+	InvalidUri();
+	InvalidQuantity();
+	InvalidNodeAlias();
+	InvalidDateTime();
+	InvalidFeeRate();
+	DuplicatePayment();
+	UnsupportedCurrency();
+	InsufficientFunds();
+	LiquiditySourceUnavailable();
+	LiquidityFeeTooHigh();
+	InvalidBlindedPaths();
+	AsyncPaymentServicesDisabled();
+	CannotRbfFundingTransaction();
+	TransactionNotFound();
+	TransactionAlreadyConfirmed();
+	NoSpendableOutputs();
+	CoinSelectionFailed();
+	InvalidMnemonic();
+	BackgroundSyncNotEnabled();
+	AddressTypeAlreadyMonitored();
+	AddressTypeIsPrimary();
+	AddressTypeNotMonitored();
+	OnchainWalletAccountNotRegistered();
+	InvalidSeedBytes();
+	/// The backend conclusively rejected the transaction.
+	OnchainTxBroadcastRejected(Txid txid);
+	/// Dispatch occurred, but backend acceptance is unknown. Do not create a fresh spend;
+	/// reconcile or rebroadcast this exact transaction ID.
+	OnchainTxBroadcastFailed(Txid txid);
+	/// Dispatch occurred, but backend acceptance is unknown after the timeout. Do not create a
+	/// fresh spend; reconcile or rebroadcast this exact transaction ID.
+	OnchainTxBroadcastTimeout(Txid txid);
+	/// The transaction was conclusively not dispatched to the backend.
+	OnchainTxBroadcastNotDispatched(Txid txid);
 };
 
 dictionary NodeStatus {
