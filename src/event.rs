@@ -983,6 +983,21 @@ impl_writeable_tlv_based_enum!(Event,
 pub(crate) enum EventIdempotencyKey {
 	OnchainTransactionReceived(Txid),
 	OnchainTransactionConfirmed(Txid),
+	WalletReorg(Txid, u64, u64),
+}
+
+impl EventIdempotencyKey {
+	fn wallet_namespace(account: crate::config::OnchainWalletAccount) -> u64 {
+		(u64::from(account.account_index) << 8)
+			| u64::from(account.address_type.serialization_tag())
+	}
+
+	pub(crate) fn wallet_reorg(
+		txid: Txid, account: crate::config::OnchainWalletAccount, sequence: u64,
+	) -> Self {
+		let namespace = Self::wallet_namespace(account);
+		Self::WalletReorg(txid, namespace, sequence)
+	}
 }
 
 impl Writeable for EventIdempotencyKey {
@@ -995,6 +1010,12 @@ impl Writeable for EventIdempotencyKey {
 			Self::OnchainTransactionConfirmed(txid) => {
 				1u8.write(writer)?;
 				txid.write(writer)
+			},
+			Self::WalletReorg(txid, account, sequence) => {
+				2u8.write(writer)?;
+				txid.write(writer)?;
+				account.write(writer)?;
+				sequence.write(writer)
 			},
 		}
 	}
@@ -1009,6 +1030,7 @@ impl Readable for EventIdempotencyKey {
 		match transition {
 			0 => Ok(Self::OnchainTransactionReceived(txid)),
 			1 => Ok(Self::OnchainTransactionConfirmed(txid)),
+			2 => Ok(Self::WalletReorg(txid, Readable::read(reader)?, Readable::read(reader)?)),
 			_ => Err(lightning::ln::msgs::DecodeError::InvalidValue),
 		}
 	}
@@ -1077,12 +1099,26 @@ where
 
 	// A reorg starts a new confirmation transition. Commit the event and retirement
 	// together so a crash cannot expose the reorg while retaining the old receipt.
-	pub(crate) async fn add_onchain_reorg_event(&self, txid: Txid) -> Result<(), Error> {
+	pub(crate) async fn add_onchain_reorg_event(
+		&self, txid: Txid, receipts: &[EventIdempotencyKey], confirmation: Option<Event>,
+	) -> Result<(), Error> {
 		let _guard = self.mutation_lock.lock().await;
 		let mut queue = self.queue.lock().unwrap().clone();
 		let mut keys = self.idempotency_keys.lock().unwrap().clone();
-		queue.push_back(Event::OnchainTransactionReorged { txid });
-		keys.remove(&EventIdempotencyKey::OnchainTransactionConfirmed(txid));
+		if receipts.iter().any(|receipt| !keys.contains(receipt)) {
+			queue.push_back(Event::OnchainTransactionReorged { txid });
+			keys.remove(&EventIdempotencyKey::OnchainTransactionConfirmed(txid));
+			keys.extend(receipts.iter().copied());
+		}
+		// A retry may run after reconfirmation. Commit both notifications before retiring
+		// the source journal; a restart must not lose that later confirmation either.
+		if let Some(event) = confirmation {
+			if keys.insert(EventIdempotencyKey::OnchainTransactionConfirmed(txid))
+				&& !queue.contains(&event)
+			{
+				queue.push_back(event);
+			}
+		}
 		self.persist_queue(EventQueueSerWrapper(&queue, &keys).encode()).await?;
 		*self.queue.lock().unwrap() = queue;
 		*self.idempotency_keys.lock().unwrap() = keys;
@@ -1109,6 +1145,32 @@ where
 			EventQueueSerWrapper(&locked_queue, &locked_keys).encode()
 		};
 		self.persist_queue(data).await
+	}
+
+	// Recover cleanup interrupted after the wallet acknowledged its journal. Never
+	// discard receipts belonging to an unloaded account whose journal we cannot inspect.
+	pub(crate) async fn prune_reorg_receipts(
+		&self, active: &HashSet<EventIdempotencyKey>,
+		loaded_accounts: &[crate::config::OnchainWalletAccount],
+	) -> Result<(), Error> {
+		let _guard = self.mutation_lock.lock().await;
+		let namespaces: HashSet<_> =
+			loaded_accounts.iter().copied().map(EventIdempotencyKey::wallet_namespace).collect();
+		let mut keys = self.idempotency_keys.lock().unwrap().clone();
+		let before = keys.len();
+		keys.retain(|key| match key {
+			EventIdempotencyKey::WalletReorg(_, account, _) => {
+				!namespaces.contains(account) || active.contains(key)
+			},
+			_ => true,
+		});
+		if keys.len() == before {
+			return Ok(());
+		}
+		let queue = self.queue.lock().unwrap().clone();
+		self.persist_queue(EventQueueSerWrapper(&queue, &keys).encode()).await?;
+		*self.idempotency_keys.lock().unwrap() = keys;
+		Ok(())
 	}
 
 	pub(crate) fn next_event(&self) -> Option<Event> {
@@ -3004,7 +3066,15 @@ mod tests {
 		queue.add_event_with_idempotency_key(event.clone(), key).await.unwrap();
 		store.block_next_write.store(true, Ordering::SeqCst);
 		let reorg_queue = Arc::clone(&queue);
-		let reorg = tokio::spawn(async move { reorg_queue.add_onchain_reorg_event(txid).await });
+		let reorg = tokio::spawn(async move {
+			reorg_queue
+				.add_onchain_reorg_event(
+					txid,
+					&[EventIdempotencyKey::WalletReorg(txid, 2, 0)],
+					None,
+				)
+				.await
+		});
 		store.write_started.notified().await;
 		assert_eq!(queue.next_event(), Some(event));
 		assert!(queue.idempotency_keys.lock().unwrap().contains(&key));
@@ -3027,6 +3097,39 @@ mod tests {
 		assert!(!restored.idempotency_keys.lock().unwrap().contains(&key));
 		restored.event_handled().await.unwrap();
 		assert!(restored.next_event().is_none());
+	}
+
+	#[tokio::test]
+	async fn reorg_receipts_survive_ack_and_only_prune_inspected_accounts() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let logger = Arc::new(TestLogger::new());
+		let queue = EventQueue::new(Arc::clone(&store), Arc::clone(&logger));
+		let txid = Txid::from_byte_array([45; 32]);
+		let account = crate::config::OnchainWalletAccount::account_zero(
+			crate::config::AddressType::NativeSegwit,
+		);
+		let receipt = EventIdempotencyKey::wallet_reorg(txid, account, 0);
+		queue.add_onchain_reorg_event(txid, &[receipt], None).await.unwrap();
+		queue.event_handled().await.unwrap();
+		queue.prune_reorg_receipts(&HashSet::new(), &[]).await.unwrap();
+		queue.add_onchain_reorg_event(txid, &[receipt], None).await.unwrap();
+		assert!(queue.next_event().is_none());
+		queue.prune_reorg_receipts(&HashSet::from([receipt]), &[account]).await.unwrap();
+		assert!(queue.idempotency_keys.lock().unwrap().contains(&receipt));
+		queue.prune_reorg_receipts(&HashSet::new(), &[account]).await.unwrap();
+		let bytes = KVStore::read(
+			&*store,
+			EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
+			EVENT_QUEUE_PERSISTENCE_KEY,
+		)
+		.await
+		.unwrap();
+		let restored = EventQueue::read(&mut &bytes[..], (store, logger)).unwrap();
+		assert!(restored.idempotency_keys.lock().unwrap().is_empty());
+		let next = EventIdempotencyKey::wallet_reorg(txid, account, 1);
+		restored.add_onchain_reorg_event(txid, &[next], None).await.unwrap();
+		assert_eq!(restored.next_event(), Some(Event::OnchainTransactionReorged { txid }));
 	}
 
 	#[tokio::test]

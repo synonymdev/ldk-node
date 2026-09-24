@@ -1182,10 +1182,13 @@ impl OnchainPayment {
 mod tests {
 	use std::future::Future;
 	use std::pin::Pin;
+	use std::sync::atomic::{AtomicBool, Ordering};
 	use std::sync::{Arc, Condvar, Mutex};
 	use std::time::Duration;
 
+	use bdk_chain::{BlockId, CheckPoint};
 	use bdk_wallet::event::WalletEvent;
+	use bdk_wallet::Update;
 	use bitcoin::absolute::LockTime;
 	use bitcoin::block::Header;
 	use bitcoin::blockdata::constants::genesis_block;
@@ -1223,6 +1226,7 @@ mod tests {
 		fail_next_write_namespace: Mutex<Option<String>>,
 		fail_next_remove_namespace: Mutex<Option<String>>,
 		fail_event_queue_write_after: Mutex<Option<usize>>,
+		fail_local_chain_write: AtomicBool,
 	}
 
 	impl BlockingBroadcastIntentStore {
@@ -1234,6 +1238,7 @@ mod tests {
 				fail_next_write_namespace: Mutex::new(None),
 				fail_next_remove_namespace: Mutex::new(None),
 				fail_event_queue_write_after: Mutex::new(None),
+				fail_local_chain_write: AtomicBool::new(false),
 			}
 		}
 
@@ -1353,6 +1358,15 @@ mod tests {
 		fn write(
 			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
 		) -> io::Result<()> {
+			if primary_namespace == crate::io::BDK_WALLET_LOCAL_CHAIN_PRIMARY_NAMESPACE
+				&& key == crate::io::BDK_WALLET_LOCAL_CHAIN_KEY
+				&& self.fail_local_chain_write.swap(false, Ordering::SeqCst)
+			{
+				return Err(io::Error::new(
+					io::ErrorKind::Other,
+					"Injected chain journal write failure",
+				));
+			}
 			self.maybe_block_broadcast_intent_write(primary_namespace);
 			self.fail_armed_write(primary_namespace)?;
 			KVStoreSync::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
@@ -1898,7 +1912,8 @@ mod tests {
 
 		let node = test_node(Arc::clone(&store));
 		assert!(node.next_event().is_none());
-		process_test_wallet_events(&node, vec![reorg]).await.unwrap();
+		// A normal sync after restart has no copy of the old BDK transition to replay.
+		process_test_wallet_events(&node, Vec::new()).await.unwrap();
 		drop(node);
 		let node = test_node(Arc::clone(&store));
 		assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
@@ -1926,6 +1941,296 @@ mod tests {
 		);
 		node.event_handled().unwrap();
 		assert!(node.next_event().is_none());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn durable_reorg_recovers_after_restart_without_bdk_replay() {
+		// Crash before enqueue, failed enqueue, failed source acknowledgement (including
+		// consumer acknowledgement before restart), and failed receipt cleanup.
+		for failure in 0..4 {
+			let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+			let store: Arc<DynStore> = concrete_store.clone();
+			let node = test_node(Arc::clone(&store));
+			let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+			let tx = tracked_test_transaction(
+				node.onchain_payment().new_address().unwrap().script_pubkey(),
+			);
+			let txid = tx.compute_txid();
+			let block = confirmation_block(tx);
+			node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+			node.wallet.finish_pending_sync(false).unwrap();
+			assert!(node.wallet.pending_reorgs().is_empty());
+			let mut replacement = block.clone();
+			replacement.header.nonce += 1;
+			replacement.txdata.clear();
+			node.wallet.apply_block_to_account(account, &replacement, 1).unwrap();
+			node.wallet.finish_pending_sync(false).unwrap();
+			assert_eq!(node.wallet.pending_reorgs().len(), 1);
+			match failure {
+				1 => *concrete_store.fail_event_queue_write_after.lock().unwrap() = Some(0),
+				2 => concrete_store.fail_local_chain_write.store(true, Ordering::SeqCst),
+				3 => *concrete_store.fail_event_queue_write_after.lock().unwrap() = Some(1),
+				_ => {},
+			}
+			if failure != 0 {
+				assert_eq!(
+					process_test_wallet_events(&node, Vec::new()).await,
+					Err(Error::PersistenceFailed)
+				);
+			}
+			if failure >= 2 {
+				assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+				node.event_handled().unwrap();
+			}
+			drop(node);
+			let node = test_node(Arc::clone(&store));
+			// The production Bitcoind sync path also drains with an empty BDK event vector.
+			process_test_wallet_events(&node, Vec::new()).await.unwrap();
+			if failure < 2 {
+				assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+				node.event_handled().unwrap();
+			}
+			assert!(node.next_event().is_none(), "handled reorg must not replay: {failure}");
+			assert!(node.wallet.pending_reorgs().is_empty());
+			// A subsequent reorg of the very same block is a new transition, not a replay.
+			node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+			node.wallet.apply_block_to_account(account, &replacement, 1).unwrap();
+			process_test_wallet_events(&node, Vec::new()).await.unwrap();
+			assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+			node.event_handled().unwrap();
+			assert!(node.next_event().is_none());
+		}
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn durable_reorg_recovers_reconfirmation_before_retry() {
+		for acknowledge_first_reorg in [false, true] {
+			let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+			let store: Arc<DynStore> = concrete_store.clone();
+			let node = test_node(Arc::clone(&store));
+			let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+			let tx = tracked_test_transaction(
+				node.onchain_payment().new_address().unwrap().script_pubkey(),
+			);
+			let txid = tx.compute_txid();
+			let block = confirmation_block(tx);
+			node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+			let mut replacement = block.clone();
+			replacement.header.nonce += 1;
+			replacement.txdata.clear();
+			node.wallet.apply_block_to_account(account, &replacement, 1).unwrap();
+			if acknowledge_first_reorg {
+				concrete_store.fail_local_chain_write.store(true, Ordering::SeqCst);
+				assert_eq!(
+					process_test_wallet_events(&node, Vec::new()).await,
+					Err(Error::PersistenceFailed)
+				);
+				assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+				node.event_handled().unwrap();
+			}
+			// The journal survives a later persisted confirmation and a restart before delivery.
+			node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+			drop(node);
+			let node = test_node(Arc::clone(&store));
+			concrete_store.fail_local_chain_write.store(true, Ordering::SeqCst);
+			assert_eq!(
+				process_test_wallet_events(&node, Vec::new()).await,
+				Err(Error::PersistenceFailed)
+			);
+			if !acknowledge_first_reorg {
+				assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+				node.event_handled().unwrap();
+			}
+			assert!(
+				matches!(node.next_event(), Some(Event::OnchainTransactionConfirmed { txid: id, block_hash, .. }) if id == txid && block_hash == block.block_hash())
+			);
+			node.event_handled().unwrap();
+			drop(node);
+			let node = test_node(store);
+			process_test_wallet_events(&node, Vec::new()).await.unwrap();
+			assert!(node.next_event().is_none());
+			assert!(node.wallet.pending_reorgs().is_empty());
+		}
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn failed_chain_write_retries_reorg_journal_atomically() {
+		for restart in [false, true] {
+			let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+			let store: Arc<DynStore> = concrete_store.clone();
+			let mut node = test_node(Arc::clone(&store));
+			let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+			let tx = tracked_test_transaction(
+				node.onchain_payment().new_address().unwrap().script_pubkey(),
+			);
+			let txid = tx.compute_txid();
+			let block = confirmation_block(tx);
+			node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+			let mut replacement = block;
+			replacement.header.nonce += 1;
+			replacement.txdata.clear();
+			concrete_store.fail_local_chain_write.store(true, Ordering::SeqCst);
+			assert_eq!(
+				node.wallet.apply_block_to_account(account, &replacement, 1),
+				Err(Error::PersistenceFailed)
+			);
+			assert!(node.wallet.pending_reorgs().is_empty());
+			if restart {
+				drop(node);
+				node = test_node(store);
+				assert!(node.wallet.transaction_confirmations().contains_key(&txid));
+				node.wallet.apply_block_to_account(account, &replacement, 1).unwrap();
+			} else {
+				node.wallet.finish_pending_sync(false).unwrap();
+			}
+			process_test_wallet_events(&node, Vec::new()).await.unwrap();
+			assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+			node.event_handled().unwrap();
+			assert!(node.next_event().is_none());
+		}
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn reorg_retry_uses_ordinary_wallet_update_after_restart() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let node = test_node(Arc::clone(&store));
+		let account = OnchainWalletAccount::account_zero(AddressType::NativeSegwit);
+		let tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		let txid = tx.compute_txid();
+		node.wallet.apply_mempool_txs(vec![(tx.clone(), 1)], Vec::new()).unwrap();
+		let block = confirmation_block(tx);
+		node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+		let mut replacement = block;
+		replacement.header.nonce += 1;
+		replacement.txdata.clear();
+		let update = Update {
+			chain: Some(
+				CheckPoint::new(BlockId {
+					height: 0,
+					hash: genesis_block(Network::Regtest).block_hash(),
+				})
+				.push(BlockId { height: 1, hash: replacement.block_hash() })
+				.unwrap(),
+			),
+			..Default::default()
+		};
+		let events =
+			node.wallet.apply_update_for_wallet_account(account, update.clone()).unwrap().unwrap();
+		assert!(events.iter().any(|event| matches!(event, WalletEvent::TxUnconfirmed { txid: id, old_block_time: Some(_), .. } if *id == txid)));
+		*concrete_store.fail_event_queue_write_after.lock().unwrap() = Some(0);
+		assert_eq!(process_test_wallet_events(&node, events).await, Err(Error::PersistenceFailed));
+		drop(node);
+		let node = test_node(store);
+		let events = node.wallet.apply_update_for_wallet_account(account, update).unwrap().unwrap();
+		assert!(!events.iter().any(|event| matches!(
+			event,
+			WalletEvent::TxUnconfirmed { old_block_time: Some(_), .. }
+		)));
+		process_test_wallet_events(&node, events).await.unwrap();
+		assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+		node.event_handled().unwrap();
+		process_test_wallet_events(&node, Vec::new()).await.unwrap();
+		assert!(node.next_event().is_none());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn durable_reorg_deduplicates_wallet_accounts_and_covers_rewind() {
+		let concrete_store = Arc::new(BlockingBroadcastIntentStore::new());
+		let store: Arc<DynStore> = concrete_store.clone();
+		let config = Config {
+			network: Network::Regtest,
+			address_types_to_monitor: vec![AddressType::Taproot],
+			..Default::default()
+		};
+		let mut builder = NodeBuilder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_string(), None);
+		builder.set_entropy_seed_bytes([43u8; 64]);
+		builder.set_log_facade_logger();
+		let node = builder.build_with_store(store).unwrap();
+		let mut tx =
+			tracked_test_transaction(node.onchain_payment().new_address().unwrap().script_pubkey());
+		tx.output.push(TxOut {
+			value: Amount::from_sat(10_000),
+			script_pubkey: node
+				.wallet
+				.get_new_address_for_type(AddressType::Taproot)
+				.unwrap()
+				.script_pubkey(),
+		});
+		let txid = tx.compute_txid();
+		let block = confirmation_block(tx);
+		let accounts = [
+			OnchainWalletAccount::account_zero(AddressType::NativeSegwit),
+			OnchainWalletAccount::account_zero(AddressType::Taproot),
+		];
+		for account in accounts {
+			node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+			node.wallet
+				.rewind_wallet_account(
+					account,
+					lightning::chain::BestBlock::from_network(Network::Regtest),
+				)
+				.unwrap();
+		}
+		assert_eq!(node.wallet.pending_reorgs().len(), 2);
+		concrete_store.fail_local_chain_write.store(true, Ordering::SeqCst);
+		assert_eq!(
+			process_test_wallet_events(&node, Vec::new()).await,
+			Err(Error::PersistenceFailed)
+		);
+		assert_eq!(node.next_event(), Some(Event::OnchainTransactionReorged { txid }));
+		node.event_handled().unwrap();
+		// Simulate a crash after only one account's journal acknowledgement committed.
+		let pending = node.wallet.pending_reorgs();
+		node.wallet.acknowledge_reorgs(&pending[..1]).unwrap();
+		process_test_wallet_events(&node, Vec::new()).await.unwrap();
+		assert!(node.next_event().is_none());
+		assert!(node.wallet.pending_reorgs().is_empty());
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn reorg_receipt_survives_account_unload_before_source_acknowledgement() {
+		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
+		let node = test_node(Arc::clone(&store));
+		let account =
+			OnchainWalletAccount { address_type: AddressType::NativeSegwit, account_index: 1 };
+		let xpub = node
+			.export_onchain_wallet_account_xpub(account.address_type, account.account_index)
+			.unwrap();
+		node.add_onchain_wallet_account(account.address_type, account.account_index, xpub.clone())
+			.unwrap();
+		let tx = tracked_test_transaction(
+			node.wallet.get_new_address_for_account(account).unwrap().script_pubkey(),
+		);
+		let txid = tx.compute_txid();
+		let block = confirmation_block(tx);
+		node.wallet.apply_block_to_account(account, &block, 1).unwrap();
+		node.wallet
+			.rewind_wallet_account(
+				account,
+				lightning::chain::BestBlock::from_network(Network::Regtest),
+			)
+			.unwrap();
+		let pending = node.wallet.pending_reorgs();
+		assert_eq!(pending.len(), 1);
+		let receipt = crate::event::EventIdempotencyKey::wallet_reorg(txid, account, pending[0].1);
+		node.event_queue.add_onchain_reorg_event(txid, &[receipt], None).await.unwrap();
+		node.event_handled().unwrap();
+		node.remove_onchain_wallet_account(account.address_type, account.account_index).unwrap();
+		assert_eq!(
+			node.wallet.acknowledge_reorgs(&pending),
+			Err(Error::OnchainWalletAccountNotRegistered)
+		);
+		process_test_wallet_events(&node, Vec::new()).await.unwrap();
+		drop(node);
+		let node = test_node(store);
+		node.add_onchain_wallet_account(account.address_type, account.account_index, xpub).unwrap();
+		assert_eq!(node.wallet.pending_reorgs(), pending);
+		process_test_wallet_events(&node, Vec::new()).await.unwrap();
+		assert!(node.next_event().is_none());
+		assert!(node.wallet.pending_reorgs().is_empty());
 	}
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]

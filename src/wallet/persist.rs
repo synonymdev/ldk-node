@@ -7,20 +7,30 @@
 
 use std::sync::Arc;
 
-use bdk_chain::BlockId;
-use bdk_chain::Merge;
+use bdk_chain::{BlockId, ChainPosition, Merge};
 use bdk_wallet::{ChangeSet, WalletPersister};
+use bitcoin::Txid;
 
 use crate::config::OnchainWalletAccount;
 use crate::io::utils::{
-	read_bdk_wallet_change_set, write_bdk_wallet_change_descriptor, write_bdk_wallet_descriptor,
-	write_bdk_wallet_indexer, write_bdk_wallet_local_chain, write_bdk_wallet_network,
-	write_bdk_wallet_tx_graph,
+	read_bdk_wallet_change_set, read_bdk_wallet_local_chain, write_bdk_wallet_change_descriptor,
+	write_bdk_wallet_descriptor, write_bdk_wallet_indexer, write_bdk_wallet_local_chain,
+	write_bdk_wallet_network, write_bdk_wallet_tx_graph,
 };
 use crate::logger::{log_error, LdkLogger, Logger};
 use crate::types::DynStore;
+
+/// The pending notifications and the chain transition that produces them share one KV write.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WalletChainState {
+	pub(crate) chain: bdk_chain::local_chain::ChangeSet,
+	pub(crate) pending_reorgs: Vec<(u64, Txid)>,
+	pub(crate) next_reorg_id: u64,
+}
+
 pub(crate) struct KVStoreWalletPersister {
 	latest_change_set: Option<ChangeSet>,
+	chain_state: WalletChainState,
 	kv_store: Arc<DynStore>,
 	logger: Arc<Logger>,
 	wallet_account: OnchainWalletAccount,
@@ -30,7 +40,70 @@ impl KVStoreWalletPersister {
 	pub(crate) fn new(
 		kv_store: Arc<DynStore>, logger: Arc<Logger>, wallet_account: OnchainWalletAccount,
 	) -> Self {
-		Self { latest_change_set: None, kv_store, logger, wallet_account }
+		Self {
+			latest_change_set: None,
+			chain_state: WalletChainState::default(),
+			kv_store,
+			logger,
+			wallet_account,
+		}
+	}
+
+	pub(crate) fn pending_reorgs(&self) -> &[(u64, Txid)] {
+		&self.chain_state.pending_reorgs
+	}
+
+	pub(crate) fn acknowledge_reorgs(&mut self, ids: &[u64]) -> Result<(), std::io::Error> {
+		let mut next = self.chain_state.clone();
+		next.pending_reorgs.retain(|(id, _)| !ids.contains(id));
+		if next.pending_reorgs.len() == self.chain_state.pending_reorgs.len() {
+			return Ok(());
+		}
+		write_bdk_wallet_local_chain(
+			&next,
+			Arc::clone(&self.kv_store),
+			Arc::clone(&self.logger),
+			self.wallet_account,
+		)?;
+		self.chain_state = next;
+		Ok(())
+	}
+
+	// Reconstruct only on checkpoint replacement/removal, not ordinary chain extensions.
+	// This uses BDK's canonical wallet view, so irrelevant graph anchors do not emit events.
+	fn reorged_transactions(
+		previous: &ChangeSet, next: &ChangeSet,
+	) -> Result<Vec<Txid>, std::io::Error> {
+		let load = |changes: &ChangeSet| {
+			bdk_wallet::Wallet::load()
+				.load_wallet_no_persist(changes.clone())
+				.map_err(|e| {
+					std::io::Error::new(
+						std::io::ErrorKind::InvalidData,
+						format!("Failed to inspect wallet reorg: {e}"),
+					)
+				})?
+				.ok_or_else(|| {
+					std::io::Error::new(
+						std::io::ErrorKind::InvalidData,
+						"Missing persisted wallet during reorg",
+					)
+				})
+		};
+		let before = load(previous)?;
+		let after = load(next)?;
+		let mut reorgs = Vec::new();
+		for tx in before.transactions() {
+			if let ChainPosition::Confirmed { anchor, .. } = tx.chain_position {
+				let still_confirmed = after.get_tx(tx.tx_node.txid).is_some_and(|current| {
+					matches!(current.chain_position, ChainPosition::Confirmed { anchor: current_anchor, .. } if current_anchor.block_id == anchor.block_id)
+				});
+				if !still_confirmed {
+					reorgs.push(tx.tx_node.txid);
+				}
+			}
+		}
+		Ok(reorgs)
 	}
 
 	/// Replaces the stored local-chain tip while retaining descriptors, transactions, and indexes.
@@ -86,6 +159,12 @@ impl WalletPersister for KVStoreWalletPersister {
 				ChangeSet::default()
 			},
 		};
+		persister.chain_state = read_bdk_wallet_local_chain(
+			Arc::clone(&persister.kv_store),
+			Arc::clone(&persister.logger),
+			persister.wallet_account,
+		)?
+		.unwrap_or_default();
 		persister.latest_change_set = Some(change_set.clone());
 		Ok(change_set)
 	}
@@ -97,12 +176,31 @@ impl WalletPersister for KVStoreWalletPersister {
 
 		// We're allowed to fail here if we're not initialized, BDK docs state: "This method can fail if the
 		// persister is not initialized."
-		let latest_change_set = persister.latest_change_set.as_mut().ok_or_else(|| {
+		let previous = persister.latest_change_set.as_ref().ok_or_else(|| {
 			std::io::Error::new(
 				std::io::ErrorKind::Other,
 				"Wallet must be initialized before calling persist",
 			)
 		})?;
+		let mut latest_change_set = previous.clone();
+		let mut next_chain_state = persister.chain_state.clone();
+		let replaces_checkpoint = change_set.local_chain.blocks.iter().any(|(height, hash)| {
+			previous.local_chain.blocks.get(height).is_some_and(|old| old.is_some() && old != hash)
+		});
+		if replaces_checkpoint {
+			let mut next = previous.clone();
+			next.merge(change_set.clone());
+			for txid in Self::reorged_transactions(previous, &next)? {
+				let id = next_chain_state.next_reorg_id;
+				next_chain_state.next_reorg_id = id.checked_add(1).ok_or_else(|| {
+					std::io::Error::new(
+						std::io::ErrorKind::InvalidData,
+						"Wallet reorg sequence exhausted",
+					)
+				})?;
+				next_chain_state.pending_reorgs.push((id, txid));
+			}
+		}
 
 		// Check that we'd never accidentally override any persisted data if the change set doesn't
 		// match our descriptor/change_descriptor/network.
@@ -209,13 +307,17 @@ impl WalletPersister for KVStoreWalletPersister {
 
 		if !change_set.local_chain.is_empty() {
 			latest_change_set.local_chain.merge(change_set.local_chain.clone());
+			next_chain_state.chain = latest_change_set.local_chain.clone();
 			write_bdk_wallet_local_chain(
-				&latest_change_set.local_chain,
+				&next_chain_state,
 				Arc::clone(&persister.kv_store),
 				Arc::clone(&persister.logger),
 				persister.wallet_account,
 			)?;
 		}
+		// Failed writes must leave the previous comparison state intact for a retry.
+		persister.latest_change_set = Some(latest_change_set);
+		persister.chain_state = next_chain_state;
 
 		Ok(())
 	}

@@ -479,9 +479,53 @@ where
 	// their event type for the same txid without suppressing the other.
 	let mut seen_received_txids = std::collections::HashSet::new();
 	let mut seen_confirmed_txids = std::collections::HashSet::new();
-	let mut seen_reorged_txids = std::collections::HashSet::new();
 	let mut seen_replaced_txids = std::collections::HashSet::new();
-	let transaction_confirmations = wallet.transaction_confirmations();
+	let snapshot = wallet.wallet_event_snapshot();
+	let transaction_confirmations = snapshot.confirmations;
+	let pending_reorgs = snapshot.pending_reorgs;
+	let mut reorgs_by_txid = HashMap::new();
+	for (account, sequence, txid) in &pending_reorgs {
+		reorgs_by_txid
+			.entry(*txid)
+			.or_insert_with(Vec::new)
+			.push(EventIdempotencyKey::wallet_reorg(*txid, *account, *sequence));
+	}
+	event_queue
+		.prune_reorg_receipts(
+			&reorgs_by_txid.values().flatten().copied().collect(),
+			&snapshot.accounts,
+		)
+		.await?;
+	for (txid, receipts) in &reorgs_by_txid {
+		let confirmation = transaction_confirmations.get(txid).map(|block_time| {
+			let details =
+				get_transaction_details(txid, wallet, channel_manager).unwrap_or_else(|| {
+					log_error!(logger, "Transaction {} not found in wallet", txid);
+					TransactionDetails { amount_sats: 0, inputs: Vec::new(), outputs: Vec::new() }
+				});
+			Event::OnchainTransactionConfirmed {
+				txid: *txid,
+				block_hash: block_time.block_id.hash,
+				block_height: block_time.block_id.height,
+				confirmation_time: block_time.confirmation_time,
+				details,
+			}
+		});
+		event_queue.add_onchain_reorg_event(*txid, receipts, confirmation).await?;
+		if transaction_confirmations.contains_key(txid) {
+			wallet.mark_locally_applied_unconfirmed_delivered(*txid)?;
+			seen_confirmed_txids.insert(*txid);
+		}
+	}
+	// Keep delivery receipts until every source has acknowledged the exact sequence.
+	// Consumer acknowledgements may run in between these writes, including across restarts.
+	wallet.acknowledge_reorgs(&pending_reorgs)?;
+	let mut retired_receipts: Vec<_> = reorgs_by_txid.values().flatten().copied().collect();
+	for txid in &seen_confirmed_txids {
+		retired_receipts.push(EventIdempotencyKey::OnchainTransactionReceived(*txid));
+		retired_receipts.push(EventIdempotencyKey::OnchainTransactionConfirmed(*txid));
+	}
+	event_queue.clear_idempotency_keys(&retired_receipts).await?;
 
 	for wallet_event in wallet_events {
 		match wallet_event {
@@ -512,19 +556,7 @@ where
 			BdkWalletEvent::TxUnconfirmed { txid, old_block_time, .. } => {
 				match old_block_time {
 					Some(_) => {
-						if !seen_reorged_txids.insert(txid) {
-							continue;
-						}
-						// Transaction was previously confirmed but is now unconfirmed (reorg)
-						log_info!(
-							logger,
-							"Onchain transaction {} became unconfirmed (reorg)",
-							txid
-						);
-						event_queue.add_onchain_reorg_event(txid).await.map_err(|e| {
-							log_error!(logger, "Failed to push onchain event to queue: {}", e);
-							e
-						})?;
+						// Delivered from the journal committed with the wallet chain above.
 					},
 					None => {
 						if !seen_received_txids.insert(txid) {

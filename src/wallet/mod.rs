@@ -87,6 +87,13 @@ const ONCHAIN_BROADCAST_INTENT_SERIALIZATION_VERSION: u8 = 7;
 const ONCHAIN_BROADCAST_OUTCOME_SERIALIZATION_VERSION: u8 = 1;
 const NO_PREDECESSOR_INDEX: u64 = u64::MAX;
 
+/// One locked snapshot keeps a pending reorg paired with its actual current confirmation state.
+pub(crate) struct WalletEventSnapshot {
+	pub(crate) confirmations: HashMap<Txid, ConfirmationBlockTime>,
+	pub(crate) pending_reorgs: Vec<(OnchainWalletAccount, u64, Txid)>,
+	pub(crate) accounts: Vec<OnchainWalletAccount>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BroadcastEventState {
 	Held = 0,
@@ -751,6 +758,50 @@ impl Wallet {
 
 	pub(crate) fn transaction_confirmations(&self) -> HashMap<Txid, ConfirmationBlockTime> {
 		self.inner.lock().unwrap().transaction_confirmations()
+	}
+
+	pub(crate) fn wallet_event_snapshot(&self) -> WalletEventSnapshot {
+		let inner = self.inner.lock().unwrap();
+		let pending_reorgs = inner
+			.persisters()
+			.iter()
+			.flat_map(|(account, persister)| {
+				persister.pending_reorgs().iter().map(|(id, txid)| (*account, *id, *txid))
+			})
+			.collect();
+		WalletEventSnapshot {
+			confirmations: inner.transaction_confirmations(),
+			pending_reorgs,
+			accounts: inner.wallets().keys().copied().collect(),
+		}
+	}
+
+	#[cfg(test)]
+	pub(crate) fn pending_reorgs(&self) -> Vec<(OnchainWalletAccount, u64, Txid)> {
+		self.wallet_event_snapshot().pending_reorgs
+	}
+
+	pub(crate) fn acknowledge_reorgs(
+		&self, pending: &[(OnchainWalletAccount, u64, Txid)],
+	) -> Result<(), Error> {
+		let mut inner = self.inner.lock().unwrap();
+		// Unloading an account preserves its journal on disk. Do not report success
+		// and retire its queue receipt when that source could not be acknowledged.
+		if pending.iter().any(|(account, _, _)| !inner.persisters().contains_key(account)) {
+			return Err(Error::OnchainWalletAccountNotRegistered);
+		}
+		for (account, persister) in inner.persisters_mut() {
+			let ids: Vec<_> = pending
+				.iter()
+				.filter(|(source, _, _)| source == account)
+				.map(|(_, id, _)| *id)
+				.collect();
+			persister.acknowledge_reorgs(&ids).map_err(|e| {
+				log_error!(self.logger, "Failed to acknowledge durable wallet reorg: {}", e);
+				Error::PersistenceFailed
+			})?;
+		}
+		Ok(())
 	}
 
 	pub(crate) fn current_best_block(&self) -> BestBlock {

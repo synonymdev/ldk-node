@@ -2,6 +2,8 @@
 
 ## Synonym Fork Additions
 
+- Persist pending on-chain reorg notifications with the wallet chain state so ordinary sync can
+  retry event delivery after a storage failure or restart, without suppressing reconfirmation.
 - Added durable `broadcast_outcome` reconciliation by any RBF-lineage transaction ID with explicit
   `Pending`, `Accepted`, and `Abandoned` states. Acceptance-unknown outcomes survive restart and
   confirmation until the consumer calls `acknowledge_broadcast_outcome`; conservative retention is

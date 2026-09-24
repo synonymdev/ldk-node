@@ -12,7 +12,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bdk_chain::indexer::keychain_txout::ChangeSet as BdkIndexerChangeSet;
-use bdk_chain::local_chain::ChangeSet as BdkLocalChainChangeSet;
 use bdk_chain::miniscript::{Descriptor, DescriptorPublicKey};
 use bdk_chain::tx_graph::ChangeSet as BdkTxGraphChangeSet;
 use bdk_chain::ConfirmationBlockTime;
@@ -44,6 +43,7 @@ use crate::io::{
 };
 use crate::logger::{log_error, LdkLogger, Logger};
 use crate::types::{DynStore, WordCount};
+use crate::wallet::persist::WalletChainState;
 use crate::wallet::ser::{ChangeSetDeserWrapper, ChangeSetSerWrapper};
 use crate::{Error, NodeMetrics, PaymentDetails};
 
@@ -558,7 +558,7 @@ impl_read_write_change_set_type!(
 impl_read_write_change_set_type!(
 	read_bdk_wallet_local_chain,
 	write_bdk_wallet_local_chain,
-	BdkLocalChainChangeSet,
+	WalletChainState,
 	BDK_WALLET_LOCAL_CHAIN_PRIMARY_NAMESPACE,
 	BDK_WALLET_LOCAL_CHAIN_SECONDARY_NAMESPACE,
 	BDK_WALLET_LOCAL_CHAIN_KEY
@@ -619,7 +619,7 @@ pub(crate) fn read_bdk_wallet_change_set(
 	}
 
 	read_bdk_wallet_local_chain(Arc::clone(&kv_store), Arc::clone(&logger), wallet_account)?
-		.map(|local_chain| change_set.local_chain = local_chain);
+		.map(|local_chain| change_set.local_chain = local_chain.chain);
 	read_bdk_wallet_tx_graph(Arc::clone(&kv_store), Arc::clone(&logger), wallet_account)?
 		.map(|tx_graph| change_set.tx_graph = tx_graph);
 	read_bdk_wallet_indexer(Arc::clone(&kv_store), Arc::clone(&logger), wallet_account)?
