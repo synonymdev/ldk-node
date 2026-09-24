@@ -2,6 +2,8 @@
 
 ## Synonym Fork Additions
 
+- Preserve ordinary incoming transaction notifications when reorg event delivery or receipt
+  cleanup encounters a storage failure in the same sync.
 - Persist pending on-chain reorg notifications with the wallet chain state so ordinary sync can
   retry event delivery after a storage failure or restart, without suppressing reconfirmation.
 - Added durable `broadcast_outcome` reconciliation by any RBF-lineage transaction ID with explicit

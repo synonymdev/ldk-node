@@ -490,46 +490,61 @@ where
 			.or_insert_with(Vec::new)
 			.push(EventIdempotencyKey::wallet_reorg(*txid, *account, *sequence));
 	}
-	event_queue
-		.prune_reorg_receipts(
-			&reorgs_by_txid.values().flatten().copied().collect(),
-			&snapshot.accounts,
-		)
-		.await?;
-	for (txid, receipts) in &reorgs_by_txid {
-		let confirmation = transaction_confirmations.get(txid).map(|block_time| {
-			let details =
-				get_transaction_details(txid, wallet, channel_manager).unwrap_or_else(|| {
-					log_error!(logger, "Transaction {} not found in wallet", txid);
-					TransactionDetails { amount_sats: 0, inputs: Vec::new(), outputs: Vec::new() }
-				});
-			Event::OnchainTransactionConfirmed {
-				txid: *txid,
-				block_hash: block_time.block_id.hash,
-				block_height: block_time.block_id.height,
-				confirmation_time: block_time.confirmation_time,
-				details,
+	// Ordinary BDK events are a one-shot batch: their wallet state is already persisted.
+	// Reorg work can retry from its journal, so defer its errors until that batch is
+	// consumed. Returning early here would permanently lose unrelated incoming events.
+	let reorg_result = async {
+		event_queue
+			.prune_reorg_receipts(
+				&reorgs_by_txid.values().flatten().copied().collect(),
+				&snapshot.accounts,
+			)
+			.await?;
+		for (txid, receipts) in &reorgs_by_txid {
+			let confirmation = transaction_confirmations.get(txid).map(|block_time| {
+				let details = get_transaction_details(txid, wallet, channel_manager)
+					.unwrap_or_else(|| {
+						log_error!(logger, "Transaction {} not found in wallet", txid);
+						TransactionDetails {
+							amount_sats: 0,
+							inputs: Vec::new(),
+							outputs: Vec::new(),
+						}
+					});
+				Event::OnchainTransactionConfirmed {
+					txid: *txid,
+					block_hash: block_time.block_id.hash,
+					block_height: block_time.block_id.height,
+					confirmation_time: block_time.confirmation_time,
+					details,
+				}
+			});
+			event_queue.add_onchain_reorg_event(*txid, receipts, confirmation).await?;
+			if transaction_confirmations.contains_key(txid) {
+				wallet.mark_locally_applied_unconfirmed_delivered(*txid)?;
+				seen_confirmed_txids.insert(*txid);
 			}
-		});
-		event_queue.add_onchain_reorg_event(*txid, receipts, confirmation).await?;
-		if transaction_confirmations.contains_key(txid) {
-			wallet.mark_locally_applied_unconfirmed_delivered(*txid)?;
-			seen_confirmed_txids.insert(*txid);
 		}
+		// Keep delivery receipts until every source has acknowledged the exact sequence.
+		// Consumer acknowledgements may run in between these writes, including across restarts.
+		wallet.acknowledge_reorgs(&pending_reorgs)?;
+		let mut retired_receipts: Vec<_> = reorgs_by_txid.values().flatten().copied().collect();
+		for txid in &seen_confirmed_txids {
+			retired_receipts.push(EventIdempotencyKey::OnchainTransactionReceived(*txid));
+			retired_receipts.push(EventIdempotencyKey::OnchainTransactionConfirmed(*txid));
+		}
+		event_queue.clear_idempotency_keys(&retired_receipts).await
 	}
-	// Keep delivery receipts until every source has acknowledged the exact sequence.
-	// Consumer acknowledgements may run in between these writes, including across restarts.
-	wallet.acknowledge_reorgs(&pending_reorgs)?;
-	let mut retired_receipts: Vec<_> = reorgs_by_txid.values().flatten().copied().collect();
-	for txid in &seen_confirmed_txids {
-		retired_receipts.push(EventIdempotencyKey::OnchainTransactionReceived(*txid));
-		retired_receipts.push(EventIdempotencyKey::OnchainTransactionConfirmed(*txid));
-	}
-	event_queue.clear_idempotency_keys(&retired_receipts).await?;
+	.await;
 
 	for wallet_event in wallet_events {
 		match wallet_event {
 			BdkWalletEvent::TxConfirmed { txid, .. } => {
+				// The journal owns this confirmation, including retries after a failed
+				// reorg write. Never let it overtake its corresponding reorg event.
+				if reorgs_by_txid.contains_key(&txid) {
+					continue;
+				}
 				let Some(block_time) = transaction_confirmations.get(&txid).copied() else {
 					log_trace!(
 						logger,
@@ -637,6 +652,9 @@ where
 	}
 
 	for txid in wallet.ready_locally_applied_unconfirmed_txids()? {
+		if reorgs_by_txid.contains_key(&txid) {
+			continue;
+		}
 		if !seen_received_txids.insert(txid) {
 			wallet.mark_locally_applied_unconfirmed_delivered(txid)?;
 			continue;
@@ -687,7 +705,7 @@ where
 			])
 			.await?;
 	}
-	Ok(())
+	reorg_result
 }
 
 impl ChainSource {
