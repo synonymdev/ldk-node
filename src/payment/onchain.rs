@@ -147,6 +147,13 @@ impl OnchainPayment {
 		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
+		// A synchronous backend wait cannot run inside a current-thread Tokio runtime.
+		// Reject before preparing, signing, or persisting a transaction.
+		if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+			handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread
+		}) {
+			return Err(Error::PaymentSendingFailed);
+		}
 		let tx = self.wallet.prepare_send_to_address(
 			address,
 			send_amount,
@@ -669,6 +676,7 @@ impl OnchainPayment {
 	///
 	/// `Err` proves this invocation did not start broadcast. `Rejected` and `Unknown` both
 	/// retain the txid and do not authorize another payment. This does not wait for confirmation.
+	/// Current-thread Tokio callers receive [`Error::PaymentSendingFailed`] before wallet preparation.
 	pub fn send_to_address_with_broadcast_result(
 		&self, address: &bitcoin::Address, amount_sats: u64, fee_rate: Option<FeeRate>,
 		utxos_to_spend: Option<Vec<SpendableUtxo>>,
@@ -687,6 +695,7 @@ impl OnchainPayment {
 	///
 	/// The reserve behavior matches [`Self::send_all_to_address`]. `Err` is limited to a proven
 	/// pre-dispatch failure. Any attempted submission returns its txid, even if unresolved.
+	/// Current-thread Tokio callers receive [`Error::PaymentSendingFailed`] before wallet preparation.
 	pub fn send_all_to_address_with_broadcast_result(
 		&self, address: &bitcoin::Address, retain_reserves: bool, fee_rate: Option<FeeRate>,
 	) -> Result<OnchainSendResult, Error> {

@@ -507,13 +507,39 @@ impl EsploraChainSource {
 		Ok(())
 	}
 
+	async fn broadcast_transaction_checked(
+		&self, tx: &Transaction,
+	) -> Result<(), esplora_client::Error> {
+		// esplora-client's broadcast discards the success body. Reuse its configured client
+		// and URL so acknowledgement validation preserves headers and transport settings.
+		let response = self
+			.esplora_client
+			.client()
+			.post(format!("{}/tx", self.esplora_client.url()))
+			.body(bitcoin::consensus::encode::serialize_hex(tx))
+			.send()
+			.await?;
+		let status = response.status();
+		let body = response.text().await?;
+		if !status.is_success() {
+			return Err(esplora_client::Error::HttpResponse {
+				status: status.as_u16(),
+				message: body,
+			});
+		}
+		if body.trim().parse::<Txid>().ok() != Some(tx.compute_txid()) {
+			return Err(esplora_client::Error::InvalidResponse);
+		}
+		Ok(())
+	}
+
 	pub(crate) async fn broadcast_transaction_with_result(
 		&self, tx: &Transaction,
 	) -> BroadcastResponse {
 		let txid = tx.compute_txid();
 		match tokio::time::timeout(
 			Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
-			self.esplora_client.broadcast(tx),
+			self.broadcast_transaction_checked(tx),
 		)
 		.await
 		{
@@ -613,7 +639,100 @@ impl Filter for EsploraChainSource {
 
 #[cfg(test)]
 mod broadcast_tests {
+	use std::io::{BufRead, BufReader, Read, Write};
+	use std::net::TcpListener;
+	use std::thread;
+
+	use crate::io::test_utils::InMemoryStore;
+	use crate::runtime::Runtime;
+
 	use super::*;
+
+	#[test]
+	fn esplora_broadcast_http_requires_matching_txid_acknowledgement() {
+		let tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![],
+			output: vec![],
+		};
+		let txid = tx.compute_txid();
+		let refusal = "sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}";
+		for (name, status, body, extra_length, expected) in [
+			("matching", 200, txid.to_string(), 0, BroadcastResponse::Accepted),
+			("matching with newline", 201, format!("{txid}\n"), 0, BroadcastResponse::Accepted),
+			("empty", 200, String::new(), 0, BroadcastResponse::Unknown),
+			("no content", 204, String::new(), 0, BroadcastResponse::Unknown),
+			("malformed", 200, "<html>success</html>".to_owned(), 0, BroadcastResponse::Unknown),
+			("mismatched", 200, "00".repeat(32), 0, BroadcastResponse::Unknown),
+			("unreadable", 200, txid.to_string(), 1, BroadcastResponse::Unknown),
+			(
+				"refused",
+				400,
+				refusal.to_owned(),
+				0,
+				BroadcastResponse::Rejected(refusal.to_owned()),
+			),
+			("unstructured refusal", 400, "non-final".to_owned(), 0, BroadcastResponse::Unknown),
+			("server failure", 503, refusal.to_owned(), 0, BroadcastResponse::Unknown),
+		] {
+			let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+			let url = format!("http://{}/api", listener.local_addr().unwrap());
+			let expected_body = bitcoin::consensus::encode::serialize_hex(&tx);
+			let server = thread::spawn(move || {
+				let (mut stream, _) = listener.accept().unwrap();
+				stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+				let mut reader = BufReader::new(stream.try_clone().unwrap());
+				let mut line = String::new();
+				reader.read_line(&mut line).unwrap();
+				assert_eq!(line, "POST /api/tx HTTP/1.1\r\n");
+				let mut content_length = None;
+				let mut fixture_header = false;
+				loop {
+					line.clear();
+					reader.read_line(&mut line).unwrap();
+					if line == "\r\n" {
+						break;
+					}
+					let header = line.to_ascii_lowercase();
+					if let Some(length) = header.strip_prefix("content-length: ") {
+						content_length = Some(length.trim().parse::<usize>().unwrap());
+					}
+					fixture_header |= header == "x-broadcast-fixture: preserved\r\n";
+				}
+				assert!(fixture_header, "configured client headers must be preserved");
+				let mut request_body = vec![0; content_length.unwrap()];
+				reader.read_exact(&mut request_body).unwrap();
+				assert_eq!(request_body, expected_body.as_bytes());
+				write!(
+					stream,
+					"HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+					body.len() + extra_length
+				)
+				.unwrap();
+				listener
+			});
+			let logger = Arc::new(Logger::new_log_facade());
+			let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
+			let config = Arc::new(Config::default());
+			let source = EsploraChainSource::new(
+				url,
+				HashMap::from([("X-Broadcast-Fixture".to_owned(), "preserved".to_owned())]),
+				EsploraSyncConfig::default(),
+				Arc::new(OnchainFeeEstimator::new()),
+				Arc::new(InMemoryStore::new()),
+				Arc::clone(&config),
+				Arc::new(RwLock::new(AddressTypeRuntimeConfig::from_config(&config, vec![]))),
+				logger,
+				Arc::new(RwLock::new(NodeMetrics::default())),
+			);
+			let result = runtime.block_on(source.broadcast_transaction_with_result(&tx));
+			let listener = server.join().unwrap();
+			listener.set_nonblocking(true).unwrap();
+			assert!(listener.accept().is_err(), "{name}: must submit only once");
+			assert_eq!(result, expected, "{name}");
+		}
+	}
 
 	#[test]
 	fn esplora_broadcast_requires_structured_non_final_refusal() {

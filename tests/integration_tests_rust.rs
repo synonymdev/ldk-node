@@ -43,6 +43,61 @@ use lightning_types::payment::{PaymentHash, PaymentPreimage};
 use log::LevelFilter;
 
 #[cfg(not(feature = "uniffi"))]
+#[test]
+fn direct_onchain_current_thread_rejects_before_wallet_preparation() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let config = random_config(false);
+	let store: Arc<DynStore> =
+		Arc::new(TestSyncStore::new(config.node_config.storage_dir_path.clone().into()));
+	let mut builder = Builder::from_config(config.node_config);
+	builder.set_chain_source_esplora(
+		format!("http://{}", electrsd.esplora_url.as_ref().unwrap()),
+		Some(EsploraSyncConfig { background_sync_config: None }),
+	);
+	// Build/start outside Tokio, then move the caller into a current-thread runtime.
+	let node = builder.build_with_store(Arc::clone(&store)).unwrap();
+	node.start().unwrap();
+	let funding_address = node.onchain_payment().new_address().unwrap();
+	let funding_runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+	funding_runtime.block_on(premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![funding_address],
+		Amount::from_sat(100_000),
+	));
+	node.sync_wallets().unwrap();
+	let recipient: Address<NetworkUnchecked> =
+		bitcoind.client.get_new_address(None, None).unwrap().0.parse().unwrap();
+	let recipient = recipient.assume_checked();
+	let snapshot = || {
+		["indexer", "tx_graph"].map(|key| {
+			lightning::util::persist::KVStoreSync::read(&*store, "bdk_wallet", "native_segwit", key)
+				.unwrap()
+		})
+	};
+	let before = snapshot();
+	let mempool_before: Vec<Txid> = bitcoind.client.call("getrawmempool", &[]).unwrap();
+	let caller = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+	caller.block_on(async {
+		assert_eq!(
+			node.onchain_payment()
+				.send_to_address_with_broadcast_result(&recipient, 20_000, None, None),
+			Err(NodeError::PaymentSendingFailed)
+		);
+		assert_eq!(snapshot(), before, "fixed send must not persist a prepared transaction");
+		assert_eq!(
+			node.onchain_payment()
+				.send_all_to_address_with_broadcast_result(&recipient, false, None),
+			Err(NodeError::PaymentSendingFailed)
+		);
+		assert_eq!(snapshot(), before, "send-all must not persist a prepared transaction");
+	});
+	let mempool_after: Vec<Txid> = bitcoind.client.call("getrawmempool", &[]).unwrap();
+	assert_eq!(mempool_after, mempool_before, "neither method must submit a transaction");
+	node.stop().unwrap();
+}
+
+#[cfg(not(feature = "uniffi"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn direct_onchain_sends_return_backend_outcome_and_local_txid() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
