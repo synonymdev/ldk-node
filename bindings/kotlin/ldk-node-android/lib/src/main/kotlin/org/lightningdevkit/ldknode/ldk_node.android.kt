@@ -1554,6 +1554,10 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2738,7 +2742,22 @@ internal interface UniffiLib : Library {
         `feeRate`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address_with_broadcast_result(
+        `ptr`: Pointer?,
+        `address`: RustBufferByValue,
+        `retainReserves`: Byte,
+        `feeRate`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     fun uniffi_ldk_node_fn_method_onchainpayment_send_to_address(
+        `ptr`: Pointer?,
+        `address`: RustBufferByValue,
+        `amountSats`: Long,
+        `feeRate`: RustBufferByValue,
+        `utxosToSpend`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_send_to_address_with_broadcast_result(
         `ptr`: Pointer?,
         `address`: RustBufferByValue,
         `amountSats`: Long,
@@ -3506,7 +3525,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address_with_broadcast_result(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_send_to_address(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result(
     ): Short
     fun uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds(
     ): Short
@@ -4153,7 +4176,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address() != 37748.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address_with_broadcast_result() != 45110.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address() != 28826.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result() != 16277.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds() != 43722.toShort()) {
@@ -8626,10 +8655,41 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
     }
 
     @Throws(NodeException::class)
+    override fun `sendAllToAddressWithBroadcastResult`(`address`: Address, `retainReserves`: kotlin.Boolean, `feeRate`: FeeRate?): OnchainSendResult {
+        return FfiConverterTypeOnchainSendResult.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address_with_broadcast_result(
+                    it,
+                    FfiConverterTypeAddress.lower(`address`),
+                    FfiConverterBoolean.lower(`retainReserves`),
+                    FfiConverterOptionalTypeFeeRate.lower(`feeRate`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
     override fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid {
         return FfiConverterTypeTxid.lift(callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_send_to_address(
+                    it,
+                    FfiConverterTypeAddress.lower(`address`),
+                    FfiConverterULong.lower(`amountSats`),
+                    FfiConverterOptionalTypeFeeRate.lower(`feeRate`),
+                    FfiConverterOptionalSequenceTypeSpendableUtxo.lower(`utxosToSpend`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `sendToAddressWithBroadcastResult`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): OnchainSendResult {
+        return FfiConverterTypeOnchainSendResult.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_send_to_address_with_broadcast_result(
                     it,
                     FfiConverterTypeAddress.lower(`address`),
                     FfiConverterULong.lower(`amountSats`),
@@ -12533,6 +12593,74 @@ object FfiConverterTypeOfferAmount : FfiConverterRustBuffer<OfferAmount>{
                 buf.putInt(2)
                 FfiConverterString.write(value.`iso4217Code`, buf)
                 FfiConverterULong.write(value.`amount`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+object FfiConverterTypeOnchainSendResult : FfiConverterRustBuffer<OnchainSendResult>{
+    override fun read(buf: ByteBuffer): OnchainSendResult {
+        return when(buf.getInt()) {
+            1 -> OnchainSendResult.Accepted(
+                FfiConverterTypeTxid.read(buf),
+                )
+            2 -> OnchainSendResult.Rejected(
+                FfiConverterTypeTxid.read(buf),
+                FfiConverterString.read(buf),
+                )
+            3 -> OnchainSendResult.Unknown(
+                FfiConverterTypeTxid.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: OnchainSendResult) = when(value) {
+        is OnchainSendResult.Accepted -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+        }
+        is OnchainSendResult.Rejected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+        is OnchainSendResult.Unknown -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTxid.allocationSize(value.`txid`)
+            )
+        }
+    }
+
+    override fun write(value: OnchainSendResult, buf: ByteBuffer) {
+        when(value) {
+            is OnchainSendResult.Accepted -> {
+                buf.putInt(1)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                Unit
+            }
+            is OnchainSendResult.Rejected -> {
+                buf.putInt(2)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is OnchainSendResult.Unknown -> {
+                buf.putInt(3)
+                FfiConverterTypeTxid.write(value.`txid`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
 use bdk_wallet::event::WalletEvent as BdkWalletEvent;
 use bdk_wallet::{KeychainKind, Update as BdkUpdate};
-use bitcoin::{Script, Txid};
+use bitcoin::{Script, Transaction, Txid};
 use lightning::chain::{BestBlock, Filter};
 use lightning::log_warn;
 use lightning_block_sync::gossip::UtxoSource;
@@ -108,6 +108,20 @@ enum ChainSourceKind {
 	Esplora(EsploraChainSource),
 	Electrum(ElectrumChainSource),
 	Bitcoind(BitcoindChainSource),
+}
+
+/// A single backend response. The caller attaches the locally computed txid.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BroadcastResponse {
+	Accepted,
+	Rejected(String),
+	Unknown,
+}
+
+// Only Bitcoin Core's documented transaction refusal code with the observed non-final
+// message is classified as a rejection. Other RPC/HTTP errors may hide prior delivery.
+fn non_final_rejection(code: i64, message: &str) -> bool {
+	code == -26 && message.trim() == "non-final"
 }
 
 // Check for evicted transactions by comparing unconfirmed txids before and after sync.
@@ -1320,6 +1334,23 @@ impl ChainSource {
 					}
 				}
 			}
+		}
+	}
+
+	/// Submit one user-created transaction directly, without entering the LDK package queue.
+	/// A missing Electrum client is a definite pre-dispatch error; all attempted submissions
+	/// return a response even when the backend result is lost.
+	pub(crate) async fn broadcast_user_transaction(
+		&self, tx: &Transaction,
+	) -> Result<BroadcastResponse, Error> {
+		match &self.kind {
+			ChainSourceKind::Esplora(source) => {
+				Ok(source.broadcast_transaction_with_result(tx).await)
+			},
+			ChainSourceKind::Electrum(source) => source.broadcast_transaction_with_result(tx).await,
+			ChainSourceKind::Bitcoind(source) => {
+				Ok(source.broadcast_transaction_with_result(tx).await)
+			},
 		}
 	}
 }

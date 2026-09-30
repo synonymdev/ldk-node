@@ -27,7 +27,10 @@ use lightning_block_sync::{
 };
 use serde::Serialize;
 
-use super::{periodically_archive_fully_resolved_monitors, WalletSyncStatus};
+use super::{
+	non_final_rejection, periodically_archive_fully_resolved_monitors, BroadcastResponse,
+	WalletSyncStatus,
+};
 use crate::config::{
 	BitcoindRestClientConfig, Config, OnchainWalletAccount, FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS,
 	TX_BROADCAST_TIMEOUT_SECS,
@@ -61,6 +64,21 @@ pub(super) struct BitcoindChainSource {
 	pub(super) config: Arc<Config>,
 	logger: Arc<Logger>,
 	pub(super) node_metrics: Arc<RwLock<NodeMetrics>>,
+}
+
+fn classify_bitcoind_broadcast(expected: Txid, result: std::io::Result<Txid>) -> BroadcastResponse {
+	match result {
+		Ok(actual) if actual == expected => BroadcastResponse::Accepted,
+		Err(error) => {
+			if let Some(rpc) = error.get_ref().and_then(|e| e.downcast_ref::<RpcError>()) {
+				if non_final_rejection(rpc.code, &rpc.message) {
+					return BroadcastResponse::Rejected(rpc.message.clone());
+				}
+			}
+			BroadcastResponse::Unknown
+		},
+		_ => BroadcastResponse::Unknown,
+	}
 }
 
 impl BitcoindChainSource {
@@ -643,46 +661,64 @@ impl BitcoindChainSource {
 		Ok(())
 	}
 
+	pub(crate) async fn broadcast_transaction_with_result(
+		&self, tx: &Transaction,
+	) -> BroadcastResponse {
+		let expected = tx.compute_txid();
+		match tokio::time::timeout(
+			Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
+			self.api_client.broadcast_transaction(tx),
+		)
+		.await
+		{
+			Ok(Ok(actual)) if actual == expected => {
+				log_trace!(self.logger, "Successfully broadcast transaction {}", expected);
+				BroadcastResponse::Accepted
+			},
+			Ok(Ok(actual)) => {
+				log_error!(
+					self.logger,
+					"Broadcast transaction {} returned mismatched txid {}",
+					expected,
+					actual
+				);
+				log_trace!(
+					self.logger,
+					"Failed broadcast transaction bytes: {}",
+					log_bytes!(tx.encode())
+				);
+				BroadcastResponse::Unknown
+			},
+			Ok(Err(error)) => {
+				log_error!(self.logger, "Failed to broadcast transaction {}: {}", expected, error);
+				log_trace!(
+					self.logger,
+					"Failed broadcast transaction bytes: {}",
+					log_bytes!(tx.encode())
+				);
+				classify_bitcoind_broadcast(expected, Err(error))
+			},
+			Err(error) => {
+				log_error!(
+					self.logger,
+					"Failed to broadcast transaction due to timeout {}: {}",
+					expected,
+					error
+				);
+				log_trace!(
+					self.logger,
+					"Failed broadcast transaction bytes: {}",
+					log_bytes!(tx.encode())
+				);
+				BroadcastResponse::Unknown
+			},
+		}
+	}
+
 	pub(crate) async fn process_broadcast_package(&self, package: Vec<Transaction>) {
-		// While it's a bit unclear when we'd be able to lean on Bitcoin Core >v28
-		// features, we should eventually switch to use `submitpackage` via the
-		// `rust-bitcoind-json-rpc` crate rather than just broadcasting individual
-		// transactions.
+		// Preserve package order and the same per-transaction bounded wait for LDK broadcasts.
 		for tx in &package {
-			let txid = tx.compute_txid();
-			let timeout_fut = tokio::time::timeout(
-				Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
-				self.api_client.broadcast_transaction(tx),
-			);
-			match timeout_fut.await {
-				Ok(res) => match res {
-					Ok(id) => {
-						debug_assert_eq!(id, txid);
-						log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
-					},
-					Err(e) => {
-						log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
-						log_trace!(
-							self.logger,
-							"Failed broadcast transaction bytes: {}",
-							log_bytes!(tx.encode())
-						);
-					},
-				},
-				Err(e) => {
-					log_error!(
-						self.logger,
-						"Failed to broadcast transaction due to timeout {}: {}",
-						txid,
-						e
-					);
-					log_trace!(
-						self.logger,
-						"Failed broadcast transaction bytes: {}",
-						log_bytes!(tx.encode())
-					);
-				},
-			}
+			let _ = self.broadcast_transaction_with_result(tx).await;
 		}
 	}
 }
@@ -1614,6 +1650,7 @@ mod tests {
 	use bitcoin::{FeeRate, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
 	use lightning::chain::{BestBlock, Listen};
 	use lightning_block_sync::http::JsonResponse;
+	use lightning_block_sync::rpc::RpcError;
 	use proptest::arbitrary::any;
 	use proptest::collection::vec;
 	use proptest::{prop_assert_eq, prop_compose, proptest};
@@ -1621,14 +1658,37 @@ mod tests {
 
 	use crate::builder::NodeBuilder;
 	use crate::chain::bitcoind::{
-		should_emit_mempool_entry, AccountChainListener, AccountChainListenerOutcome,
-		BitcoindClient, FeeResponse, GetMempoolEntryResponse, GetRawMempoolResponse,
-		GetRawTransactionResponse, MempoolMinFeeResponse, MempoolUpdate,
+		classify_bitcoind_broadcast, should_emit_mempool_entry, AccountChainListener,
+		AccountChainListenerOutcome, BitcoindClient, FeeResponse, GetMempoolEntryResponse,
+		GetRawMempoolResponse, GetRawTransactionResponse, MempoolMinFeeResponse, MempoolUpdate,
 	};
+	use crate::chain::BroadcastResponse;
 	use crate::config::{AddressType, Config, OnchainWalletAccount};
 	use crate::io::test_utils::InMemoryStore;
 	use crate::types::DynStore;
 	use crate::Error;
+
+	#[test]
+	fn bitcoind_broadcast_checks_txid_and_only_classifies_non_final_refusal() {
+		let txid = Txid::from_byte_array([1; 32]);
+		assert_eq!(classify_bitcoind_broadcast(txid, Ok(txid)), BroadcastResponse::Accepted);
+		assert_eq!(
+			classify_bitcoind_broadcast(txid, Ok(Txid::from_byte_array([2; 32]))),
+			BroadcastResponse::Unknown
+		);
+		for (code, message, expected) in [
+			(-26, "non-final", BroadcastResponse::Rejected("non-final".to_owned())),
+			(-25, "non-final", BroadcastResponse::Unknown),
+			(-26, "missing inputs", BroadcastResponse::Unknown),
+		] {
+			let error = std::io::Error::other(RpcError { code, message: message.to_owned() });
+			assert_eq!(classify_bitcoind_broadcast(txid, Err(error)), expected);
+		}
+		assert_eq!(
+			classify_bitcoind_broadcast(txid, Err(std::io::Error::other("timeout"))),
+			BroadcastResponse::Unknown
+		);
+	}
 
 	fn test_node() -> (crate::Node, [u8; 64]) {
 		let seed = [42u8; 64];

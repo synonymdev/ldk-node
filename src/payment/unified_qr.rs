@@ -135,7 +135,9 @@ impl UnifiedQrPayment {
 	/// has an offer and or invoice, it will try to pay the offer first followed by the invoice.
 	/// If they both fail, the on-chain payment will be paid.
 	///
-	/// Returns a `QrPaymentResult` indicating the outcome of the payment. If an error
+	/// Returns a `QrPaymentResult` indicating the locally initiated payment. Its on-chain
+	/// variant contains a locally computed txid after attempting queue admission, without backend acceptance
+	/// assurance. If an error
 	/// occurs, an `Error` is returned detailing the issue encountered.
 	///
 	/// If `route_parameters` are provided they will override the default as well as the
@@ -188,7 +190,8 @@ impl UnifiedQrPayment {
 
 /// Represents the result of a payment made using a [BIP 21] QR code.
 ///
-/// After a successful on-chain transaction, the transaction ID ([`Txid`]) is returned.
+/// For an on-chain attempt, the locally computed transaction ID ([`Txid`]) is returned after
+/// attempting queue admission; it does not establish backend acceptance or confirmation.
 /// For BOLT11 and BOLT12 payments, the corresponding [`PaymentId`] is returned.
 ///
 /// [BIP 21]: https://github.com/bitcoin/bips/blob/master/bip-0021.mediawiki

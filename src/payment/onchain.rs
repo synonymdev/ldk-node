@@ -11,10 +11,12 @@ use std::sync::{Arc, RwLock};
 
 use bitcoin::{Address, Txid};
 
+use crate::chain::{BroadcastResponse, ChainSource};
 use crate::config::{AddressType, Config, OnchainWalletAccount};
 use crate::error::Error;
 use crate::fee_estimator::ConfirmationTarget;
 use crate::logger::{log_info, LdkLogger, Logger};
+use crate::runtime::RuntimeControl;
 use crate::types::{ChannelManager, SpendableUtxo, Wallet};
 use crate::wallet::{CoinSelectionAlgorithm, OnchainSendAmount};
 
@@ -97,6 +99,8 @@ impl From<bdk_wallet::AddressInfo> for AddressInfo {
 ///
 /// [`Node::onchain_payment`]: crate::Node::onchain_payment
 pub struct OnchainPayment {
+	runtime: Arc<RuntimeControl>,
+	chain_source: Arc<ChainSource>,
 	wallet: Arc<Wallet>,
 	channel_manager: Arc<ChannelManager>,
 	config: Arc<Config>,
@@ -104,12 +108,64 @@ pub struct OnchainPayment {
 	logger: Arc<Logger>,
 }
 
+/// Result of one direct backend submission of a locally created on-chain transaction.
+/// A returned txid identifies the attempt; only `Accepted` means backend acknowledgement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnchainSendResult {
+	/// The configured backend acknowledged this transaction, without guaranteeing confirmation.
+	Accepted {
+		/// Locally computed transaction ID acknowledged by the backend.
+		txid: Txid,
+	},
+	/// A recognized refusal response was received; earlier delivery is still possible.
+	Rejected {
+		/// Locally computed transaction ID that received a refusal response.
+		txid: Txid,
+		/// Diagnostic refusal reported by the backend.
+		reason: String,
+	},
+	/// The backend's acceptance is indeterminate. Never infer retry safety from this.
+	Unknown {
+		/// Locally computed transaction ID whose broadcast result is unknown.
+		txid: Txid,
+	},
+}
+
 impl OnchainPayment {
 	pub(crate) fn new(
-		wallet: Arc<Wallet>, channel_manager: Arc<ChannelManager>, config: Arc<Config>,
-		is_running: Arc<RwLock<bool>>, logger: Arc<Logger>,
+		runtime: Arc<RuntimeControl>, chain_source: Arc<ChainSource>, wallet: Arc<Wallet>,
+		channel_manager: Arc<ChannelManager>, config: Arc<Config>, is_running: Arc<RwLock<bool>>,
+		logger: Arc<Logger>,
 	) -> Self {
-		Self { wallet, channel_manager, config, is_running, logger }
+		Self { runtime, chain_source, wallet, channel_manager, config, is_running, logger }
+	}
+
+	fn send_with_broadcast_result(
+		&self, address: &Address, send_amount: OnchainSendAmount, fee_rate: Option<FeeRate>,
+		utxos_to_spend: Option<Vec<bitcoin::OutPoint>>,
+	) -> Result<OnchainSendResult, Error> {
+		if !*self.is_running.read().unwrap() {
+			return Err(Error::NotRunning);
+		}
+		let tx = self.wallet.prepare_send_to_address(
+			address,
+			send_amount,
+			maybe_map_fee_rate_opt!(fee_rate),
+			utxos_to_spend,
+			&self.channel_manager,
+		)?;
+		let txid = tx.compute_txid();
+		let source = Arc::clone(&self.chain_source);
+		// try_block_on can fail only before polling the submission future. Once polled,
+		// every backend failure is carried with the locally computed txid.
+		let response = self
+			.runtime
+			.try_block_on(async move { source.broadcast_user_transaction(&tx).await })??;
+		Ok(match response {
+			BroadcastResponse::Accepted => OnchainSendResult::Accepted { txid },
+			BroadcastResponse::Rejected(reason) => OnchainSendResult::Rejected { txid, reason },
+			BroadcastResponse::Unknown => OnchainSendResult::Unknown { txid },
+		})
 	}
 
 	/// Retrieve a new on-chain/funding address.
@@ -538,6 +594,11 @@ impl OnchainPayment {
 	/// If `fee_rate` is set it will be used on the resulting transaction. Otherwise we'll retrieve
 	/// a reasonable estimate from the configured chain source.
 	///
+	/// This legacy method returns the locally computed txid after attempting to queue the signed
+	/// transaction. Queue admission can fail without changing the returned txid.
+	/// It does not report backend acceptance; use [`Self::send_to_address_with_broadcast_result`] when
+	/// the caller needs that distinction.
+	///
 	/// [`BalanceDetails::total_anchor_channels_reserve_sats`]: crate::BalanceDetails::total_anchor_channels_reserve_sats
 	pub fn send_to_address(
 		&self, address: &bitcoin::Address, amount_sats: u64, fee_rate: Option<FeeRate>,
@@ -578,6 +639,11 @@ impl OnchainPayment {
 	/// If `fee_rate` is set it will be used on the resulting transaction. Otherwise a reasonable
 	/// we'll retrieve an estimate from the configured chain source.
 	///
+	/// This legacy method returns the locally computed txid after attempting to queue the signed
+	/// transaction. Queue admission can fail without changing the returned txid.
+	/// It does not report backend acceptance; use [`Self::send_all_to_address_with_broadcast_result`]
+	/// when the caller needs that distinction.
+	///
 	/// [`calculate_send_all_fee`]: Self::calculate_send_all_fee
 	/// [`BalanceDetails::spendable_onchain_balance_sats`]: crate::balance::BalanceDetails::spendable_onchain_balance_sats
 	pub fn send_all_to_address(
@@ -597,6 +663,41 @@ impl OnchainPayment {
 
 		let fee_rate_opt = maybe_map_fee_rate_opt!(fee_rate);
 		self.wallet.send_to_address(address, send_amount, fee_rate_opt, None, &self.channel_manager)
+	}
+
+	/// Create and submit a fixed-amount on-chain send through one direct backend route.
+	///
+	/// `Err` proves this invocation did not start broadcast. `Rejected` and `Unknown` both
+	/// retain the txid and do not authorize another payment. This does not wait for confirmation.
+	pub fn send_to_address_with_broadcast_result(
+		&self, address: &bitcoin::Address, amount_sats: u64, fee_rate: Option<FeeRate>,
+		utxos_to_spend: Option<Vec<SpendableUtxo>>,
+	) -> Result<OnchainSendResult, Error> {
+		let reserve =
+			crate::total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
+		let amount = OnchainSendAmount::ExactRetainingReserve {
+			amount_sats,
+			cur_anchor_reserve_sats: reserve,
+		};
+		let outpoints = utxos_to_spend.map(|utxos| utxos.into_iter().map(|u| u.outpoint).collect());
+		self.send_with_broadcast_result(address, amount, fee_rate, outpoints)
+	}
+
+	/// Create and submit a send-all transaction through one direct backend route.
+	///
+	/// The reserve behavior matches [`Self::send_all_to_address`]. `Err` is limited to a proven
+	/// pre-dispatch failure. Any attempted submission returns its txid, even if unresolved.
+	pub fn send_all_to_address_with_broadcast_result(
+		&self, address: &bitcoin::Address, retain_reserves: bool, fee_rate: Option<FeeRate>,
+	) -> Result<OnchainSendResult, Error> {
+		let amount = if retain_reserves {
+			let reserve =
+				crate::total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
+			OnchainSendAmount::AllRetainingReserve { cur_anchor_reserve_sats: reserve }
+		} else {
+			OnchainSendAmount::AllDrainingReserve
+		};
+		self.send_with_broadcast_result(address, amount, fee_rate, None)
 	}
 
 	/// Bumps the fee of an existing transaction using Replace-By-Fee (RBF).

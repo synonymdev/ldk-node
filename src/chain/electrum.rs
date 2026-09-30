@@ -27,7 +27,10 @@ use lightning::util::ser::Writeable;
 use lightning_transaction_sync::ElectrumSyncClient;
 use tokio::runtime::Handle;
 
-use super::{periodically_archive_fully_resolved_monitors, WalletSyncStatus};
+use super::{
+	non_final_rejection, periodically_archive_fully_resolved_monitors, BroadcastResponse,
+	WalletSyncStatus,
+};
 use crate::config::{
 	AddressTypeRuntimeConfig, Config, ElectrumSyncConfig, BDK_CLIENT_STOP_GAP,
 	BDK_ELECTRUM_CLIENT_BATCH_SIZE, BDK_WALLET_SYNC_TIMEOUT_SECS,
@@ -45,6 +48,49 @@ use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::NodeMetrics;
 
 const ELECTRUM_CLIENT_NUM_RETRIES: u8 = 3;
+
+fn classify_electrum_broadcast(
+	expected: Txid, result: Result<Txid, electrum_client::Error>,
+) -> BroadcastResponse {
+	match result {
+		Ok(actual) if actual == expected => BroadcastResponse::Accepted,
+		Err(electrum_client::Error::Protocol(response)) => {
+			if let Some(message) = response.as_str() {
+				// Blockstream electrs serializes daemon errors as a string rather than
+				// an Electrum error object. Parse only its sendrawtransaction wrapper.
+				let rpc = message
+					.strip_prefix("sendrawtransaction RPC error: ")
+					.and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok());
+				return match rpc {
+					Some(rpc)
+						if rpc.get("code").and_then(|c| c.as_i64()) == Some(-26)
+							&& rpc
+								.get("message")
+								.and_then(|m| m.as_str())
+								.is_some_and(|m| non_final_rejection(-26, m)) =>
+					{
+						BroadcastResponse::Rejected(message.to_owned())
+					},
+					_ => BroadcastResponse::Unknown,
+				};
+			}
+			let code = response.get("code").and_then(|c| c.as_i64());
+			let message = response.get("message").and_then(|m| m.as_str());
+			match (code, message) {
+				(Some(code), Some(message))
+					if non_final_rejection(code, message)
+						// electrs wraps Bitcoin Core's -26 refusal as Electrum code 2,
+						// retaining the daemon's exact message.
+						|| (code == 2 && message.trim() == "non-final") =>
+				{
+					BroadcastResponse::Rejected(message.to_owned())
+				},
+				_ => BroadcastResponse::Unknown,
+			}
+		},
+		_ => BroadcastResponse::Unknown,
+	}
+}
 
 fn effective_connection_timeout_secs(configured_timeout_secs: u64, logger: &Logger) -> u8 {
 	let requested_timeout = if configured_timeout_secs == 0 {
@@ -534,8 +580,16 @@ impl ElectrumChainSource {
 			};
 
 		for tx in package {
-			electrum_client.broadcast(tx).await;
+			let _ = electrum_client.broadcast(tx).await;
 		}
+	}
+
+	pub(crate) async fn broadcast_transaction_with_result(
+		&self, tx: &Transaction,
+	) -> Result<BroadcastResponse, Error> {
+		let client =
+			self.electrum_runtime_status.read().unwrap().client().ok_or(Error::NotRunning)?;
+		Ok(client.broadcast(tx.clone()).await)
 	}
 
 	pub(super) async fn get_address_balance(&self, address: &bitcoin::Address) -> Option<u64> {
@@ -831,43 +885,73 @@ impl ElectrumRuntimeClient {
 			})
 	}
 
-	async fn broadcast(&self, tx: Transaction) {
-		let electrum_client = Arc::clone(&self.electrum_client);
+	async fn broadcast(&self, tx: Transaction) -> BroadcastResponse {
+		self.broadcast_with_timeout(tx, Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS)).await
+	}
 
-		let txid = tx.compute_txid();
+	async fn broadcast_with_timeout(
+		&self, tx: Transaction, timeout: Duration,
+	) -> BroadcastResponse {
+		let client = Arc::clone(&self.electrum_client);
+		let expected = tx.compute_txid();
 		let tx_bytes = tx.encode();
-
-		let spawn_fut =
-			self.runtime_handle.spawn_blocking(move || electrum_client.transaction_broadcast(&tx));
-		let timeout_fut =
-			tokio::time::timeout(Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS), spawn_fut);
-
-		match timeout_fut.await {
-			Ok(res) => match res {
-				Ok(_) => {
-					log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
-				},
-				Err(e) => {
-					log_error!(self.logger, "Failed to broadcast transaction {}: {}", txid, e);
-					log_trace!(
-						self.logger,
-						"Failed broadcast transaction bytes: {}",
-						log_bytes!(tx_bytes)
-					);
-				},
+		// A timed-out spawn_blocking task may continue on its thread. Its result is unknown.
+		let task = self.runtime_handle.spawn_blocking(move || client.transaction_broadcast(&tx));
+		match tokio::time::timeout(timeout, task).await {
+			Ok(Ok(Ok(actual))) if actual == expected => {
+				log_trace!(self.logger, "Successfully broadcast transaction {}", expected);
+				BroadcastResponse::Accepted
 			},
-			Err(e) => {
+			Ok(Ok(Ok(actual))) => {
 				log_error!(
 					self.logger,
-					"Failed to broadcast transaction due to timeout {}: {}",
-					txid,
-					e
+					"Broadcast transaction {} returned mismatched txid {}",
+					expected,
+					actual
 				);
 				log_trace!(
 					self.logger,
 					"Failed broadcast transaction bytes: {}",
 					log_bytes!(tx_bytes)
 				);
+				BroadcastResponse::Unknown
+			},
+			Ok(Ok(Err(error))) => {
+				log_error!(self.logger, "Failed to broadcast transaction {}: {}", expected, error);
+				log_trace!(
+					self.logger,
+					"Failed broadcast transaction bytes: {}",
+					log_bytes!(tx_bytes)
+				);
+				classify_electrum_broadcast(expected, Err(error))
+			},
+			Ok(Err(error)) => {
+				log_error!(
+					self.logger,
+					"Failed to broadcast transaction {} due to task failure: {}",
+					expected,
+					error
+				);
+				log_trace!(
+					self.logger,
+					"Failed broadcast transaction bytes: {}",
+					log_bytes!(tx_bytes)
+				);
+				BroadcastResponse::Unknown
+			},
+			Err(error) => {
+				log_error!(
+					self.logger,
+					"Failed to broadcast transaction due to timeout {}: {}",
+					expected,
+					error
+				);
+				log_trace!(
+					self.logger,
+					"Failed broadcast transaction bytes: {}",
+					log_bytes!(tx_bytes)
+				);
+				BroadcastResponse::Unknown
 			},
 		}
 	}
@@ -1053,6 +1137,8 @@ impl Filter for ElectrumRuntimeClient {
 
 #[cfg(test)]
 mod tests {
+	use bitcoin::hashes::Hash;
+	use std::io::{BufRead, BufReader, Write};
 	use std::net::TcpListener;
 	use std::panic::{catch_unwind, AssertUnwindSafe};
 	use std::process::Command;
@@ -1064,7 +1150,167 @@ mod tests {
 	use bitcoin::blockdata::constants::genesis_block;
 
 	use super::*;
+	use crate::logger::Logger;
 	use crate::runtime::Runtime;
+
+	#[test]
+	fn electrum_broadcast_unwraps_rpc_result_and_keeps_ambiguous_attempts_unknown() {
+		let txid = Txid::from_byte_array([1; 32]);
+		let other = Txid::from_byte_array([2; 32]);
+		assert_eq!(classify_electrum_broadcast(txid, Ok(txid)), BroadcastResponse::Accepted);
+		assert_eq!(classify_electrum_broadcast(txid, Ok(other)), BroadcastResponse::Unknown);
+		let refusal = electrum_client::Error::Protocol(
+			serde_json::json!({"code": -26, "message": "non-final"}),
+		);
+		assert_eq!(
+			classify_electrum_broadcast(txid, Err(refusal)),
+			BroadcastResponse::Rejected("non-final".to_owned())
+		);
+		let electrs_refusal = electrum_client::Error::Protocol(
+			serde_json::json!({"code": 2, "message": "non-final"}),
+		);
+		assert_eq!(
+			classify_electrum_broadcast(txid, Err(electrs_refusal)),
+			BroadcastResponse::Rejected("non-final".to_owned())
+		);
+		let blockstream_refusal =
+			"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}";
+		assert_eq!(
+			classify_electrum_broadcast(
+				txid,
+				Err(electrum_client::Error::Protocol(serde_json::json!(blockstream_refusal)))
+			),
+			BroadcastResponse::Rejected(blockstream_refusal.to_owned())
+		);
+		for response in [
+			serde_json::json!({"code": 2, "message": "missing inputs"}),
+			serde_json::json!({"code": 2, "message": "Transaction already in block chain"}),
+			serde_json::json!(
+				"sendrawtransaction RPC error: {\"code\":-25,\"message\":\"non-final\"}"
+			),
+			serde_json::json!(
+				"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"missing inputs\"}"
+			),
+			serde_json::json!({"code": -25, "message": "non-final"}),
+			serde_json::json!({"code": -26, "message": "missing inputs"}),
+			serde_json::json!({"code": -26, "message": "already known"}),
+		] {
+			assert_eq!(
+				classify_electrum_broadcast(txid, Err(electrum_client::Error::Protocol(response))),
+				BroadcastResponse::Unknown
+			);
+		}
+		assert_eq!(
+			classify_electrum_broadcast(
+				txid,
+				Err(electrum_client::Error::IOError(std::io::Error::other("lost response")))
+			),
+			BroadcastResponse::Unknown
+		);
+	}
+
+	fn assert_electrum_protocol_refusal(error: serde_json::Value, expected_reason: String) {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let url = format!("tcp://{}", listener.local_addr().unwrap());
+		let server = thread::spawn(move || {
+			let (broadcast_stream, _) = listener.accept().unwrap();
+			let (_sync_stream, _) = listener.accept().unwrap();
+			let mut line = String::new();
+			BufReader::new(broadcast_stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+			let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+			assert_eq!(request["method"], "blockchain.transaction.broadcast");
+			let response = serde_json::json!({
+				"jsonrpc": "2.0",
+				"id": request["id"],
+				"error": error
+			});
+			writeln!(&broadcast_stream, "{}", response).unwrap();
+		});
+
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
+		let client = ElectrumRuntimeClient::new(
+			url,
+			runtime.handle().clone(),
+			Arc::new(Config::default()),
+			logger,
+			1,
+		)
+		.unwrap();
+		let tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![],
+			output: vec![],
+		};
+		assert_eq!(
+			runtime.block_on(client.broadcast(tx)),
+			BroadcastResponse::Rejected(expected_reason)
+		);
+		server.join().unwrap();
+	}
+
+	#[test]
+	fn electrum_protocol_refusal_does_not_become_acceptance_after_join() {
+		assert_electrum_protocol_refusal(
+			serde_json::json!({"code": 2, "message": "non-final"}),
+			"non-final".to_owned(),
+		);
+		let blockstream_refusal =
+			"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}";
+		assert_electrum_protocol_refusal(
+			serde_json::json!(blockstream_refusal),
+			blockstream_refusal.to_owned(),
+		);
+	}
+
+	#[test]
+	fn electrum_timeout_returns_unknown_while_blocking_rpc_remains_in_flight() {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let url = format!("tcp://{}", listener.local_addr().unwrap());
+		let (release_sender, release_receiver) = sync_channel::<()>(0);
+		let (finished_sender, finished_receiver) = sync_channel::<()>(0);
+		let server = thread::spawn(move || {
+			let (mut broadcast_stream, _) = listener.accept().unwrap();
+			let (_sync_stream, _) = listener.accept().unwrap();
+			let mut line = String::new();
+			BufReader::new(broadcast_stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+			let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+			assert_eq!(request["method"], "blockchain.transaction.broadcast");
+			release_receiver.recv().unwrap();
+			let response = serde_json::json!({
+				"jsonrpc": "2.0", "id": request["id"],
+				"result": bitcoin::hashes::sha256d::Hash::hash(&[]).to_string()
+			});
+			writeln!(broadcast_stream, "{}", response).unwrap();
+			finished_sender.send(()).unwrap();
+		});
+
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
+		let client = ElectrumRuntimeClient::new(
+			url,
+			runtime.handle().clone(),
+			Arc::new(Config::default()),
+			logger,
+			1,
+		)
+		.unwrap();
+		let tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![],
+			output: vec![],
+		};
+		assert_eq!(
+			runtime.block_on(client.broadcast_with_timeout(tx, Duration::from_millis(100))),
+			BroadcastResponse::Unknown
+		);
+		assert!(finished_receiver.try_recv().is_err());
+		release_sender.send(()).unwrap();
+		finished_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+		server.join().unwrap();
+	}
 
 	const RUNTIME_SELF_DROP_CHILD_ENV: &str = "LDK_NODE_ELECTRUM_RUNTIME_SELF_DROP_CHILD";
 

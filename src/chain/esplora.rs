@@ -17,7 +17,10 @@ use lightning::log_warn;
 use lightning::util::ser::Writeable;
 use lightning_transaction_sync::EsploraSyncClient;
 
-use super::{periodically_archive_fully_resolved_monitors, WalletSyncStatus};
+use super::{
+	non_final_rejection, periodically_archive_fully_resolved_monitors, BroadcastResponse,
+	WalletSyncStatus,
+};
 use crate::config::{
 	AddressTypeRuntimeConfig, Config, EsploraSyncConfig, BDK_CLIENT_CONCURRENCY,
 	BDK_CLIENT_STOP_GAP, BDK_WALLET_SYNC_TIMEOUT_SECS, DEFAULT_ESPLORA_CLIENT_TIMEOUT_SECS,
@@ -44,6 +47,31 @@ pub(super) struct EsploraChainSource {
 	address_type_runtime_config: Arc<RwLock<AddressTypeRuntimeConfig>>,
 	logger: Arc<Logger>,
 	pub(super) node_metrics: Arc<RwLock<NodeMetrics>>,
+}
+
+fn classify_esplora_broadcast(result: Result<(), esplora_client::Error>) -> BroadcastResponse {
+	match result {
+		Ok(()) => BroadcastResponse::Accepted,
+		Err(esplora_client::Error::HttpResponse { status: 400, message }) => {
+			// Esplora wraps Bitcoin Core's structured sendrawtransaction error in HTTP 400.
+			let rpc = message
+				.strip_prefix("sendrawtransaction RPC error: ")
+				.and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok());
+			match rpc {
+				Some(rpc)
+					if rpc.get("code").and_then(|c| c.as_i64()) == Some(-26)
+						&& rpc
+							.get("message")
+							.and_then(|m| m.as_str())
+							.is_some_and(|m| non_final_rejection(-26, m)) =>
+				{
+					BroadcastResponse::Rejected(message)
+				},
+				_ => BroadcastResponse::Unknown,
+			}
+		},
+		_ => BroadcastResponse::Unknown,
+	}
 }
 
 impl EsploraChainSource {
@@ -479,74 +507,72 @@ impl EsploraChainSource {
 		Ok(())
 	}
 
+	pub(crate) async fn broadcast_transaction_with_result(
+		&self, tx: &Transaction,
+	) -> BroadcastResponse {
+		let txid = tx.compute_txid();
+		match tokio::time::timeout(
+			Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
+			self.esplora_client.broadcast(tx),
+		)
+		.await
+		{
+			Ok(Ok(())) => {
+				log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
+				BroadcastResponse::Accepted
+			},
+			Ok(Err(error)) => {
+				match &error {
+					esplora_client::Error::HttpResponse { status: 400, message } => {
+						// An already-known transaction commonly produces HTTP 400.
+						log_trace!(
+							self.logger,
+							"Failed to broadcast due to HTTP connection error: {}",
+							message
+						);
+					},
+					esplora_client::Error::HttpResponse { status, message } => {
+						log_error!(
+							self.logger,
+							"Failed to broadcast due to HTTP connection error: {} - {}",
+							status,
+							message
+						);
+					},
+					_ => log_error!(
+						self.logger,
+						"Failed to broadcast transaction {}: {}",
+						txid,
+						error
+					),
+				}
+				log_trace!(
+					self.logger,
+					"Failed broadcast transaction bytes: {}",
+					log_bytes!(tx.encode())
+				);
+				classify_esplora_broadcast(Err(error))
+			},
+			Err(error) => {
+				log_error!(
+					self.logger,
+					"Failed to broadcast transaction due to timeout {}: {}",
+					txid,
+					error
+				);
+				log_trace!(
+					self.logger,
+					"Failed broadcast transaction bytes: {}",
+					log_bytes!(tx.encode())
+				);
+				BroadcastResponse::Unknown
+			},
+		}
+	}
+
 	pub(crate) async fn process_broadcast_package(&self, package: Vec<Transaction>) {
 		for tx in &package {
-			let txid = tx.compute_txid();
-			let timeout_fut = tokio::time::timeout(
-				Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS),
-				self.esplora_client.broadcast(tx),
-			);
-			match timeout_fut.await {
-				Ok(res) => match res {
-					Ok(()) => {
-						log_trace!(self.logger, "Successfully broadcast transaction {}", txid);
-					},
-					Err(e) => match e {
-						esplora_client::Error::HttpResponse { status, message } => {
-							if status == 400 {
-								// Log 400 at lesser level, as this often just means bitcoind already knows the
-								// transaction.
-								// FIXME: We can further differentiate here based on the error
-								// message which will be available with rust-esplora-client 0.7 and
-								// later.
-								log_trace!(
-									self.logger,
-									"Failed to broadcast due to HTTP connection error: {}",
-									message
-								);
-							} else {
-								log_error!(
-									self.logger,
-									"Failed to broadcast due to HTTP connection error: {} - {}",
-									status,
-									message
-								);
-							}
-							log_trace!(
-								self.logger,
-								"Failed broadcast transaction bytes: {}",
-								log_bytes!(tx.encode())
-							);
-						},
-						_ => {
-							log_error!(
-								self.logger,
-								"Failed to broadcast transaction {}: {}",
-								txid,
-								e
-							);
-							log_trace!(
-								self.logger,
-								"Failed broadcast transaction bytes: {}",
-								log_bytes!(tx.encode())
-							);
-						},
-					},
-				},
-				Err(e) => {
-					log_error!(
-						self.logger,
-						"Failed to broadcast transaction due to timeout {}: {}",
-						txid,
-						e
-					);
-					log_trace!(
-						self.logger,
-						"Failed broadcast transaction bytes: {}",
-						log_bytes!(tx.encode())
-					);
-				},
-			}
+			let _ = self.broadcast_transaction_with_result(tx).await;
 		}
 	}
 
@@ -582,5 +608,49 @@ impl Filter for EsploraChainSource {
 	}
 	fn register_output(&self, output: WatchedOutput) {
 		self.tx_sync.register_output(output);
+	}
+}
+
+#[cfg(test)]
+mod broadcast_tests {
+	use super::*;
+
+	#[test]
+	fn esplora_broadcast_requires_structured_non_final_refusal() {
+		assert_eq!(classify_esplora_broadcast(Ok(())), BroadcastResponse::Accepted);
+		for (status, message, expected) in [
+			(
+				400,
+				"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}",
+				BroadcastResponse::Rejected(
+					"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}"
+						.to_owned(),
+				),
+			),
+			(400, "non-final", BroadcastResponse::Unknown),
+			(
+				400,
+				"sendrawtransaction RPC error: {\"code\":-25,\"message\":\"non-final\"}",
+				BroadcastResponse::Unknown,
+			),
+			(
+				400,
+				"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"missing inputs\"}",
+				BroadcastResponse::Unknown,
+			),
+			(
+				503,
+				"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}",
+				BroadcastResponse::Unknown,
+			),
+		] {
+			assert_eq!(
+				classify_esplora_broadcast(Err(esplora_client::Error::HttpResponse {
+					status,
+					message: message.to_owned()
+				})),
+				expected
+			);
+		}
 	}
 }

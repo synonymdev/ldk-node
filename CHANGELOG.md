@@ -1,4 +1,4 @@
-# 0.7.0-rc.66 (Synonym Fork)
+# 0.7.0-rc.67 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -6,15 +6,7 @@
 - Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
 - Add keep consumer rules for JNA types UniFFI needs under R8.
 
-# 0.7.0-rc.64 (Synonym Fork)
-
-## Bug Fixes
-
 - The Android AAR now ships targeted R8 consumer keep rules for the UniFFI/JNA FFI surface.
-
-# 0.7.0-rc.63 (Synonym Fork)
-
-## Bug Fixes
 
 - Moved peer persistence to async KV storage so slow writes no longer hold the peer-store lock.
 - Prevented Electrum runtime self-drop crashes and unbounded shutdown waits.
@@ -84,6 +76,7 @@
 
 ## Synonym Fork Additions
 
+- Added explicit accepted, rejected, or unknown broadcast outcomes with transaction IDs for on-chain sends.
 - Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.
   Stale channel-monitor mismatches now fail closed with `BuildError::DangerousValue`.
   Lightning crates come from crates.io `0.2.0` again.

@@ -845,7 +845,11 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address() != 37748:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address_with_broadcast_result() != 45110:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address() != 28826:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result() != 16277:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds() != 43722:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -2397,6 +2401,14 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address.argtypes
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address_with_broadcast_result.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_int8,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address_with_broadcast_result.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2406,6 +2418,15 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address_with_broadcast_result.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address_with_broadcast_result.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_clone_refund.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -3449,9 +3470,15 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_select_utxos_with_algo
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address_with_broadcast_result.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address_with_broadcast_result.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds.restype = ctypes.c_uint16
@@ -6925,7 +6952,11 @@ class OnchainPaymentProtocol(typing.Protocol):
         raise NotImplementedError
     def send_all_to_address(self, address: "Address",retain_reserve: "bool",fee_rate: "typing.Optional[FeeRate]"):
         raise NotImplementedError
+    def send_all_to_address_with_broadcast_result(self, address: "Address",retain_reserves: "bool",fee_rate: "typing.Optional[FeeRate]"):
+        raise NotImplementedError
     def send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]"):
+        raise NotImplementedError
+    def send_to_address_with_broadcast_result(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]"):
         raise NotImplementedError
 
 
@@ -7276,6 +7307,24 @@ class OnchainPayment:
 
 
 
+    def send_all_to_address_with_broadcast_result(self, address: "Address",retain_reserves: "bool",fee_rate: "typing.Optional[FeeRate]") -> "OnchainSendResult":
+        _UniffiConverterTypeAddress.check_lower(address)
+
+        _UniffiConverterBool.check_lower(retain_reserves)
+
+        _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
+
+        return _UniffiConverterTypeOnchainSendResult.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address_with_broadcast_result,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddress.lower(address),
+        _UniffiConverterBool.lower(retain_reserves),
+        _UniffiConverterOptionalTypeFeeRate.lower(fee_rate))
+        )
+
+
+
+
+
     def send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]") -> "Txid":
         _UniffiConverterTypeAddress.check_lower(address)
 
@@ -7287,6 +7336,27 @@ class OnchainPayment:
 
         return _UniffiConverterTypeTxid.lift(
             _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddress.lower(address),
+        _UniffiConverterUInt64.lower(amount_sats),
+        _UniffiConverterOptionalTypeFeeRate.lower(fee_rate),
+        _UniffiConverterOptionalSequenceTypeSpendableUtxo.lower(utxos_to_spend))
+        )
+
+
+
+
+
+    def send_to_address_with_broadcast_result(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]") -> "OnchainSendResult":
+        _UniffiConverterTypeAddress.check_lower(address)
+
+        _UniffiConverterUInt64.check_lower(amount_sats)
+
+        _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
+
+        _UniffiConverterOptionalSequenceTypeSpendableUtxo.check_lower(utxos_to_spend)
+
+        return _UniffiConverterTypeOnchainSendResult.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address_with_broadcast_result,self._uniffi_clone_pointer(),
         _UniffiConverterTypeAddress.lower(address),
         _UniffiConverterUInt64.lower(amount_sats),
         _UniffiConverterOptionalTypeFeeRate.lower(fee_rate),
@@ -14187,6 +14257,137 @@ class _UniffiConverterTypeOfferAmount(_UniffiConverterRustBuffer):
 
 
 
+class OnchainSendResult:
+    def __init__(self):
+        raise RuntimeError("OnchainSendResult cannot be instantiated directly")
+
+    # Each enum variant is a nested class of the enum itself.
+    class ACCEPTED:
+        txid: "Txid"
+
+        def __init__(self,txid: "Txid"):
+            self.txid = txid
+
+        def __str__(self):
+            return "OnchainSendResult.ACCEPTED(txid={})".format(self.txid)
+
+        def __eq__(self, other):
+            if not other.is_accepted():
+                return False
+            if self.txid != other.txid:
+                return False
+            return True
+
+    class REJECTED:
+        txid: "Txid"
+        reason: "str"
+
+        def __init__(self,txid: "Txid", reason: "str"):
+            self.txid = txid
+            self.reason = reason
+
+        def __str__(self):
+            return "OnchainSendResult.REJECTED(txid={}, reason={})".format(self.txid, self.reason)
+
+        def __eq__(self, other):
+            if not other.is_rejected():
+                return False
+            if self.txid != other.txid:
+                return False
+            if self.reason != other.reason:
+                return False
+            return True
+
+    class UNKNOWN:
+        txid: "Txid"
+
+        def __init__(self,txid: "Txid"):
+            self.txid = txid
+
+        def __str__(self):
+            return "OnchainSendResult.UNKNOWN(txid={})".format(self.txid)
+
+        def __eq__(self, other):
+            if not other.is_unknown():
+                return False
+            if self.txid != other.txid:
+                return False
+            return True
+
+
+
+    # For each variant, we have an `is_NAME` method for easily checking
+    # whether an instance is that variant.
+    def is_accepted(self) -> bool:
+        return isinstance(self, OnchainSendResult.ACCEPTED)
+    def is_rejected(self) -> bool:
+        return isinstance(self, OnchainSendResult.REJECTED)
+    def is_unknown(self) -> bool:
+        return isinstance(self, OnchainSendResult.UNKNOWN)
+
+
+# Now, a little trick - we make each nested variant class be a subclass of the main
+# enum class, so that method calls and instance checks etc will work intuitively.
+# We might be able to do this a little more neatly with a metaclass, but this'll do.
+OnchainSendResult.ACCEPTED = type("OnchainSendResult.ACCEPTED", (OnchainSendResult.ACCEPTED, OnchainSendResult,), {})  # type: ignore
+OnchainSendResult.REJECTED = type("OnchainSendResult.REJECTED", (OnchainSendResult.REJECTED, OnchainSendResult,), {})  # type: ignore
+OnchainSendResult.UNKNOWN = type("OnchainSendResult.UNKNOWN", (OnchainSendResult.UNKNOWN, OnchainSendResult,), {})  # type: ignore
+
+
+
+
+class _UniffiConverterTypeOnchainSendResult(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        variant = buf.read_i32()
+        if variant == 1:
+            return OnchainSendResult.ACCEPTED(
+                _UniffiConverterTypeTxid.read(buf),
+            )
+        if variant == 2:
+            return OnchainSendResult.REJECTED(
+                _UniffiConverterTypeTxid.read(buf),
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 3:
+            return OnchainSendResult.UNKNOWN(
+                _UniffiConverterTypeTxid.read(buf),
+            )
+        raise InternalError("Raw enum value doesn't match any cases")
+
+    @staticmethod
+    def check_lower(value):
+        if value.is_accepted():
+            _UniffiConverterTypeTxid.check_lower(value.txid)
+            return
+        if value.is_rejected():
+            _UniffiConverterTypeTxid.check_lower(value.txid)
+            _UniffiConverterString.check_lower(value.reason)
+            return
+        if value.is_unknown():
+            _UniffiConverterTypeTxid.check_lower(value.txid)
+            return
+        raise ValueError(value)
+
+    @staticmethod
+    def write(value, buf):
+        if value.is_accepted():
+            buf.write_i32(1)
+            _UniffiConverterTypeTxid.write(value.txid, buf)
+        if value.is_rejected():
+            buf.write_i32(2)
+            _UniffiConverterTypeTxid.write(value.txid, buf)
+            _UniffiConverterString.write(value.reason, buf)
+        if value.is_unknown():
+            buf.write_i32(3)
+            _UniffiConverterTypeTxid.write(value.txid, buf)
+
+
+
+
+
+
+
 class PaymentDirection(enum.Enum):
     INBOUND = 0
 
@@ -17669,6 +17870,7 @@ __all__ = [
     "Network",
     "NodeError",
     "OfferAmount",
+    "OnchainSendResult",
     "PaymentDirection",
     "PaymentFailureReason",
     "PaymentKind",

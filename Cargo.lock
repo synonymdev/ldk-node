@@ -1901,7 +1901,7 @@ dependencies = [
 
 [[package]]
 name = "ldk-node"
-version = "0.7.0-rc.66"
+version = "0.7.0-rc.67"
 dependencies = [
  "base64 0.22.1",
  "bdk-wallet-aggregate",
