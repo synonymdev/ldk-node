@@ -2424,6 +2424,8 @@ impl ChangeDestinationSource for WalletKeysManager {
 
 #[cfg(test)]
 mod tests {
+	use std::str::FromStr;
+
 	use bdk_wallet_aggregate::UtxoPsbtInfo;
 	use bitcoin::{psbt, OutPoint, TxIn, Weight};
 
@@ -2516,7 +2518,7 @@ mod tests {
 			.assume_checked();
 		let fee_rate = bitcoin::FeeRate::from_sat_per_kwu(250);
 		assert_eq!(
-			checked_payment_target(u64::MAX, recipient.script_pubkey(), None, fee_rate),
+			checked_payment_target(u64::MAX, &recipient.script_pubkey(), None, fee_rate),
 			Err(Error::InsufficientFunds)
 		);
 		let utxo = UtxoPsbtInfo {
@@ -2526,7 +2528,7 @@ mod tests {
 			is_primary: true,
 		};
 		assert_eq!(
-			checked_payment_target(u64::MAX, recipient.script_pubkey(), Some(&[utxo]), fee_rate),
+			checked_payment_target(u64::MAX, &recipient.script_pubkey(), Some(&[utxo]), fee_rate),
 			Err(Error::InsufficientFunds)
 		);
 	}
