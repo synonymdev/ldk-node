@@ -679,6 +679,13 @@ pub(crate) fn default_user_config(config: &Config) -> UserConfig {
 		user_config.accept_forwards_to_priv_channels = false;
 		user_config.channel_handshake_config.announce_for_forwarding = false;
 		user_config.channel_handshake_limits.force_announced_channel_preference = true;
+
+		// A node that can't announce channels only accepts unannounced ones. LDK's default of 10%
+		// of the channel value in flight would cap every single incoming payment far below the
+		// inbound capacity, so we allow the counterparty to use all of it, as we already do for
+		// unannounced channels we open ourselves.
+		user_config.channel_handshake_config.max_inbound_htlc_value_in_flight_percent_of_channel =
+			100;
 	}
 
 	user_config
