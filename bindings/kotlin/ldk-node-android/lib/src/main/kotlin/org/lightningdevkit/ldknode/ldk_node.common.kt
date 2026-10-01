@@ -654,7 +654,13 @@ interface OnchainPaymentInterface {
     fun `sendAllToAddress`(`address`: Address, `retainReserve`: kotlin.Boolean, `feeRate`: FeeRate?): Txid
 
     @Throws(NodeException::class)
+    fun `sendAllToAddressWithBroadcastResult`(`address`: Address, `retainReserves`: kotlin.Boolean, `feeRate`: FeeRate?): OnchainSendResult
+
+    @Throws(NodeException::class)
     fun `sendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): Txid
+
+    @Throws(NodeException::class)
+    fun `sendToAddressWithBroadcastResult`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): OnchainSendResult
 
     companion object
 }
@@ -2042,6 +2048,32 @@ sealed class OfferAmount {
         val `iso4217Code`: kotlin.String,
         val `amount`: kotlin.ULong,
     ) : OfferAmount() {
+    }
+
+}
+
+
+
+
+
+
+@kotlinx.serialization.Serializable
+sealed class OnchainSendResult {
+    @kotlinx.serialization.Serializable
+    data class Accepted(
+        val `txid`: Txid,
+    ) : OnchainSendResult() {
+    }
+    @kotlinx.serialization.Serializable
+    data class Rejected(
+        val `txid`: Txid,
+        val `reason`: kotlin.String,
+    ) : OnchainSendResult() {
+    }
+    @kotlinx.serialization.Serializable
+    data class Unknown(
+        val `txid`: Txid,
+    ) : OnchainSendResult() {
     }
 
 }

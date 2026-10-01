@@ -3395,7 +3395,11 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func sendAllToAddress(address: Address, retainReserve: Bool, feeRate: FeeRate?) throws -> Txid
 
+    func sendAllToAddressWithBroadcastResult(address: Address, retainReserves: Bool, feeRate: FeeRate?) throws -> OnchainSendResult
+
     func sendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> Txid
+
+    func sendToAddressWithBroadcastResult(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> OnchainSendResult
 }
 
 open class OnchainPayment:
@@ -3615,6 +3619,15 @@ open class OnchainPayment:
         })
     }
 
+    open func sendAllToAddressWithBroadcastResult(address: Address, retainReserves: Bool, feeRate: FeeRate?) throws -> OnchainSendResult {
+        return try FfiConverterTypeOnchainSendResult.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_send_all_to_address_with_broadcast_result(self.uniffiClonePointer(),
+                                                                                               FfiConverterTypeAddress.lower(address),
+                                                                                               FfiConverterBool.lower(retainReserves),
+                                                                                               FfiConverterOptionTypeFeeRate.lower(feeRate), $0)
+        })
+    }
+
     open func sendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> Txid {
         return try FfiConverterTypeTxid.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_send_to_address(self.uniffiClonePointer(),
@@ -3622,6 +3635,16 @@ open class OnchainPayment:
                                                                      FfiConverterUInt64.lower(amountSats),
                                                                      FfiConverterOptionTypeFeeRate.lower(feeRate),
                                                                      FfiConverterOptionSequenceTypeSpendableUtxo.lower(utxosToSpend), $0)
+        })
+    }
+
+    open func sendToAddressWithBroadcastResult(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> OnchainSendResult {
+        return try FfiConverterTypeOnchainSendResult.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_send_to_address_with_broadcast_result(self.uniffiClonePointer(),
+                                                                                           FfiConverterTypeAddress.lower(address),
+                                                                                           FfiConverterUInt64.lower(amountSats),
+                                                                                           FfiConverterOptionTypeFeeRate.lower(feeRate),
+                                                                                           FfiConverterOptionSequenceTypeSpendableUtxo.lower(utxosToSpend), $0)
         })
     }
 }
@@ -9808,6 +9831,68 @@ extension OfferAmount: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum OnchainSendResult {
+    case accepted(txid: Txid)
+    case rejected(txid: Txid, reason: String)
+    case unknown(txid: Txid)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOnchainSendResult: FfiConverterRustBuffer {
+    typealias SwiftType = OnchainSendResult
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OnchainSendResult {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        case 1: return try .accepted(txid: FfiConverterTypeTxid.read(from: &buf))
+
+        case 2: return try .rejected(txid: FfiConverterTypeTxid.read(from: &buf), reason: FfiConverterString.read(from: &buf))
+
+        case 3: return try .unknown(txid: FfiConverterTypeTxid.read(from: &buf))
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: OnchainSendResult, into buf: inout [UInt8]) {
+        switch value {
+        case let .accepted(txid):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeTxid.write(txid, into: &buf)
+
+        case let .rejected(txid, reason):
+            writeInt(&buf, Int32(2))
+            FfiConverterTypeTxid.write(txid, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
+
+        case let .unknown(txid):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeTxid.write(txid, into: &buf)
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainSendResult_lift(_ buf: RustBuffer) throws -> OnchainSendResult {
+    return try FfiConverterTypeOnchainSendResult.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainSendResult_lower(_ value: OnchainSendResult) -> RustBuffer {
+    return FfiConverterTypeOnchainSendResult.lower(value)
+}
+
+extension OnchainSendResult: Equatable, Hashable {}
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum PaymentDirection {
     case inbound
     case outbound
@@ -13623,7 +13708,13 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address() != 37748 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_onchainpayment_send_all_to_address_with_broadcast_result() != 45110 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_onchainpayment_send_to_address() != 28826 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result() != 16277 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds() != 43722 {

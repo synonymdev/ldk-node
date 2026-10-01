@@ -1879,6 +1879,24 @@ impl Wallet {
 		&self, address: &Address, send_amount: OnchainSendAmount, fee_rate: Option<FeeRate>,
 		utxos_to_spend: Option<Vec<OutPoint>>, channel_manager: &ChannelManager,
 	) -> Result<Txid, Error> {
+		let tx = self.prepare_send_to_address(
+			address,
+			send_amount,
+			fee_rate,
+			utxos_to_spend,
+			channel_manager,
+		)?;
+		self.broadcaster.broadcast_transactions(&[&tx]);
+		Ok(tx.compute_txid())
+	}
+
+	/// Sign a user transaction and persist wallet changes without dispatching it.
+	/// The caller owns its single broadcast route.
+	#[allow(deprecated)]
+	pub(crate) fn prepare_send_to_address(
+		&self, address: &Address, send_amount: OnchainSendAmount, fee_rate: Option<FeeRate>,
+		utxos_to_spend: Option<Vec<OutPoint>>, channel_manager: &ChannelManager,
+	) -> Result<Transaction, Error> {
 		self.parse_and_validate_address(&address)?;
 
 		// Use the set fee_rate or default to fee estimation.
@@ -1928,8 +1946,6 @@ impl Wallet {
 			tx
 		};
 
-		self.broadcaster.broadcast_transactions(&[&tx]);
-
 		let txid = tx.compute_txid();
 
 		match send_amount {
@@ -1961,7 +1977,7 @@ impl Wallet {
 			},
 		}
 
-		Ok(txid)
+		Ok(tx)
 	}
 
 	pub(crate) fn select_confirmed_utxos(
@@ -2424,6 +2440,8 @@ impl ChangeDestinationSource for WalletKeysManager {
 
 #[cfg(test)]
 mod tests {
+	use std::str::FromStr;
+
 	use bdk_wallet_aggregate::UtxoPsbtInfo;
 	use bitcoin::{psbt, OutPoint, TxIn, Weight};
 
@@ -2516,7 +2534,7 @@ mod tests {
 			.assume_checked();
 		let fee_rate = bitcoin::FeeRate::from_sat_per_kwu(250);
 		assert_eq!(
-			checked_payment_target(u64::MAX, recipient.script_pubkey(), None, fee_rate),
+			checked_payment_target(u64::MAX, &recipient.script_pubkey(), None, fee_rate),
 			Err(Error::InsufficientFunds)
 		);
 		let utxo = UtxoPsbtInfo {
@@ -2526,7 +2544,7 @@ mod tests {
 			is_primary: true,
 		};
 		assert_eq!(
-			checked_payment_target(u64::MAX, recipient.script_pubkey(), Some(&[utxo]), fee_rate),
+			checked_payment_target(u64::MAX, &recipient.script_pubkey(), Some(&[utxo]), fee_rate),
 			Err(Error::InsufficientFunds)
 		);
 	}

@@ -15,6 +15,8 @@ use bitcoin::address::NetworkUnchecked;
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
 use bitcoin::{Address, Amount, ScriptBuf, Txid};
+#[cfg(not(feature = "uniffi"))]
+use common::logging::MockLogFacadeLogger;
 use common::logging::{init_log_logger, validate_log_entry, MultiNodeLogger, TestLogWriter};
 use common::{
 	api_fee_rate, bump_fee_and_broadcast, distribute_funds_unconfirmed, do_channel_full_cycle,
@@ -31,7 +33,8 @@ use ldk_node::payment::{
 	ConfirmationStatus, PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus,
 	QrPaymentResult,
 };
-use ldk_node::{Builder, DynStore, Event, NodeError};
+use ldk_node::{Builder, DynStore, Event, NodeError, OnchainSendResult};
+
 use lightning::ln::channelmanager::PaymentId;
 use lightning::routing::gossip::{NodeAlias, NodeId};
 use lightning::routing::router::RouteParametersConfig;
@@ -39,6 +42,218 @@ use lightning_invoice::{Bolt11InvoiceDescription, Description};
 use lightning_types::payment::{PaymentHash, PaymentPreimage};
 use log::LevelFilter;
 
+#[cfg(not(feature = "uniffi"))]
+#[test]
+fn direct_onchain_current_thread_rejects_before_wallet_preparation() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let config = random_config(false);
+	let store: Arc<DynStore> =
+		Arc::new(TestSyncStore::new(config.node_config.storage_dir_path.clone().into()));
+	let mut builder = Builder::from_config(config.node_config);
+	builder.set_chain_source_esplora(
+		format!("http://{}", electrsd.esplora_url.as_ref().unwrap()),
+		Some(EsploraSyncConfig { background_sync_config: None }),
+	);
+	// Build/start outside Tokio, then move the caller into a current-thread runtime.
+	let node = builder.build_with_store(Arc::clone(&store)).unwrap();
+	node.start().unwrap();
+	let funding_address = node.onchain_payment().new_address().unwrap();
+	let funding_runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+	funding_runtime.block_on(premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![funding_address],
+		Amount::from_sat(100_000),
+	));
+	node.sync_wallets().unwrap();
+	let recipient: Address<NetworkUnchecked> =
+		bitcoind.client.get_new_address(None, None).unwrap().0.parse().unwrap();
+	let recipient = recipient.assume_checked();
+	let snapshot = || {
+		["indexer", "tx_graph"].map(|key| {
+			lightning::util::persist::KVStoreSync::read(&*store, "bdk_wallet", "native_segwit", key)
+				.unwrap()
+		})
+	};
+	let before = snapshot();
+	let mempool_before: Vec<Txid> = bitcoind.client.call("getrawmempool", &[]).unwrap();
+	let caller = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+	caller.block_on(async {
+		assert_eq!(
+			node.onchain_payment()
+				.send_to_address_with_broadcast_result(&recipient, 20_000, None, None),
+			Err(NodeError::PaymentSendingFailed)
+		);
+		assert_eq!(snapshot(), before, "fixed send must not persist a prepared transaction");
+		assert_eq!(
+			node.onchain_payment()
+				.send_all_to_address_with_broadcast_result(&recipient, false, None),
+			Err(NodeError::PaymentSendingFailed)
+		);
+		assert_eq!(snapshot(), before, "send-all must not persist a prepared transaction");
+	});
+	let mempool_after: Vec<Txid> = bitcoind.client.call("getrawmempool", &[]).unwrap();
+	assert_eq!(mempool_after, mempool_before, "neither method must submit a transaction");
+	node.stop().unwrap();
+}
+
+#[cfg(not(feature = "uniffi"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn direct_onchain_sends_return_backend_outcome_and_local_txid() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	for chain_source in [
+		TestChainSource::Esplora(&electrsd),
+		TestChainSource::Electrum(&electrsd),
+		TestChainSource::BitcoindRpcSync(&bitcoind),
+	] {
+		let logs = Arc::new(MockLogFacadeLogger::new());
+		let mut config = random_config(false);
+		config.log_writer = TestLogWriter::Custom(logs.clone());
+		let node = setup_node(&chain_source, config, None);
+		let recipient: Address<NetworkUnchecked> =
+			bitcoind.client.get_new_address(None, None).unwrap().0.parse().unwrap();
+		let recipient = recipient.assume_checked();
+		let funding_address = node.onchain_payment().new_address().unwrap();
+		premine_and_distribute_funds(
+			&bitcoind.client,
+			&electrsd.client,
+			vec![funding_address],
+			Amount::from_sat(100_000),
+		)
+		.await;
+		node.sync_wallets().unwrap();
+
+		assert_eq!(
+			node.onchain_payment()
+				.send_to_address_with_broadcast_result(&recipient, 200_000, None, None,),
+			Err(NodeError::InsufficientFunds)
+		);
+		let fixed = node
+			.onchain_payment()
+			.send_to_address_with_broadcast_result(&recipient, 20_000, None, None)
+			.unwrap();
+		let fixed_txid = match fixed {
+			OnchainSendResult::Accepted { txid } => txid,
+			other => panic!("expected backend acknowledgement for fixed send: {other:?}"),
+		};
+		wait_for_tx(&electrsd.client, fixed_txid).await;
+		tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+		assert_eq!(
+			logs.retrieve_logs()
+				.iter()
+				.filter(|line| {
+					line.contains(&format!("Successfully broadcast transaction {fixed_txid}"))
+						|| line.contains(&format!("Failed to broadcast transaction {fixed_txid}"))
+				})
+				.count(),
+			1,
+			"direct fixed send must use one backend submission"
+		);
+		assert!(!logs
+			.retrieve_logs()
+			.iter()
+			.any(|line| { line.contains("Failed to broadcast due to HTTP connection error") }));
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 1).await;
+		node.sync_wallets().unwrap();
+
+		let all = node
+			.onchain_payment()
+			.send_all_to_address_with_broadcast_result(&recipient, false, None)
+			.unwrap();
+		let all_txid = match all {
+			OnchainSendResult::Accepted { txid } => txid,
+			other => panic!("expected backend acknowledgement for send-all: {other:?}"),
+		};
+		assert_ne!(fixed_txid, all_txid);
+		wait_for_tx(&electrsd.client, all_txid).await;
+		tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+		assert_eq!(
+			logs.retrieve_logs()
+				.iter()
+				.filter(|line| {
+					line.contains(&format!("Successfully broadcast transaction {all_txid}"))
+						|| line.contains(&format!("Failed to broadcast transaction {all_txid}"))
+				})
+				.count(),
+			1,
+			"direct send-all must use one backend submission"
+		);
+		assert!(!logs
+			.retrieve_logs()
+			.iter()
+			.any(|line| { line.contains("Failed to broadcast due to HTTP connection error") }));
+		node.stop().unwrap();
+		assert_eq!(
+			node.onchain_payment()
+				.send_to_address_with_broadcast_result(&recipient, 1_000, None, None,),
+			Err(NodeError::NotRunning),
+		);
+	}
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn legacy_onchain_send_returns_txid_without_backend_acceptance() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Electrum(&electrsd);
+	let node = setup_node(&chain_source, random_config(false), None);
+	let funding_address = node.onchain_payment().new_address().unwrap();
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![funding_address],
+		Amount::from_sat(100_000),
+	)
+	.await;
+	node.sync_wallets().unwrap();
+	let recipient: Address<NetworkUnchecked> =
+		bitcoind.client.get_new_address(None, None).unwrap().0.parse().unwrap();
+	let recipient = recipient.assume_checked();
+	drop(chain_source);
+	drop(electrsd);
+
+	// The legacy method queues locally and returns a txid even with no Electrum server.
+	let txid = node.onchain_payment().send_to_address(&recipient, 20_000, None, None).unwrap();
+	assert!(bitcoind
+		.client
+		.call::<serde_json::Value>("getmempoolentry", &[serde_json::json!(txid.to_string())],)
+		.is_err());
+	node.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn direct_onchain_send_keeps_txid_when_electrum_reply_is_lost() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Electrum(&electrsd);
+	let node = setup_node(&chain_source, random_config(false), None);
+	let funding_address = node.onchain_payment().new_address().unwrap();
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![funding_address],
+		Amount::from_sat(100_000),
+	)
+	.await;
+	node.sync_wallets().unwrap();
+	let recipient: Address<NetworkUnchecked> =
+		bitcoind.client.get_new_address(None, None).unwrap().0.parse().unwrap();
+	let recipient = recipient.assume_checked();
+	drop(chain_source);
+	drop(electrsd);
+
+	let result = node
+		.onchain_payment()
+		.send_to_address_with_broadcast_result(&recipient, 20_000, None, None)
+		.unwrap();
+	let txid = match result {
+		OnchainSendResult::Unknown { txid } => txid,
+		other => panic!("expected an unknown submission with its local txid: {other:?}"),
+	};
+	assert!(bitcoind
+		.client
+		.call::<serde_json::Value>("getmempoolentry", &[serde_json::json!(txid.to_string())],)
+		.is_err());
+	node.stop().unwrap();
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn channel_full_cycle() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();

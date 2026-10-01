@@ -60,6 +60,23 @@ LDK Node currently comes with a decidedly opinionated set of design choices:
 - Gossip data may be sourced via Lightning's peer-to-peer network or the [Rapid Gossip Sync](https://docs.rs/lightning-rapid-gossip-sync/*/lightning_rapid_gossip_sync/) protocol.
 - Entropy for the Lightning and on-chain wallets may be sourced from raw bytes or a [BIP39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) mnemonic. In addition, LDK Node offers the means to generate and persist the entropy bytes to disk.
 
+### On-chain send results
+
+`OnchainPayment::send_to_address_with_broadcast_result` and
+`send_all_to_address_with_broadcast_result` submit a signed transaction directly to the
+configured chain source. They return `Accepted { txid }` only when that backend acknowledges
+the submitted transaction. `Rejected { txid, reason }` records a recognized refusal response;
+`Unknown { txid }` covers a lost or ambiguous result. Both retain the locally computed txid.
+Neither a refusal nor an unknown result proves the transaction was never delivered, so callers
+must not create a replacement payment from either result. Backend acknowledgement is not
+confirmation or guaranteed network propagation. An `Err` from these methods means this call did
+not initiate broadcast.
+
+The existing `send_to_address` and `send_all_to_address` methods still return a local txid after
+attempting queue admission, even if admission fails. Their returned txid gives no backend
+acceptance assurance. The on-chain variant of
+`UnifiedQrPayment::send` has the same queueing semantics.
+
 ## Language Support
 LDK Node itself is written in [Rust][rust] and may therefore be natively added as a library dependency to any `std` Rust program. However, beyond its Rust API it also offers language bindings for [Swift][swift], [Kotlin][kotlin], and [Python][python] based on the [UniFFI](https://github.com/mozilla/uniffi-rs/). Moreover, [Flutter bindings][flutter_bindings] are also available.
 
