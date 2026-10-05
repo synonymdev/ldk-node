@@ -1,4 +1,4 @@
-# 0.7.0-rc.68 (Synonym Fork)
+# 0.7.0-rc.69 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -76,6 +76,7 @@
 
 ## Synonym Fork Additions
 
+- Added signed on-chain payment preparation so apps can persist transaction receipts before broadcast and constrain recovery to the original amount and inputs.
 - Added explicit accepted, rejected, or unknown broadcast outcomes with transaction IDs for on-chain sends.
 - Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.
   Stale channel-monitor mismatches now fail closed with `BuildError::DangerousValue`.

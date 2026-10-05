@@ -7,9 +7,10 @@
 
 //! Holds a payment handler allowing to send and receive on-chain payments.
 
-use std::sync::{Arc, RwLock};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, RwLock};
 
-use bitcoin::{Address, Txid};
+use bitcoin::{Address, OutPoint, Transaction, Txid};
 
 use crate::chain::{BroadcastResponse, ChainSource};
 use crate::config::{AddressType, Config, OnchainWalletAccount};
@@ -131,6 +132,95 @@ pub enum OnchainSendResult {
 	},
 }
 
+fn check_send_context(is_running: &RwLock<bool>) -> Result<(), Error> {
+	if !*is_running.read().unwrap() {
+		return Err(Error::NotRunning);
+	}
+	// Synchronous broadcast cannot block a current-thread Tokio runtime.
+	if tokio::runtime::Handle::try_current()
+		.is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread)
+	{
+		return Err(Error::PaymentSendingFailed);
+	}
+	Ok(())
+}
+
+fn validate_selected_outpoints(outpoints: &[OutPoint]) -> Result<(), Error> {
+	if outpoints.is_empty() || outpoints.iter().collect::<HashSet<_>>().len() != outpoints.len() {
+		return Err(Error::WalletOperationFailed);
+	}
+	Ok(())
+}
+
+fn validate_signed_inputs(tx: &Transaction, outpoints: &[OutPoint]) -> Result<(), Error> {
+	validate_selected_outpoints(outpoints)?;
+	let signed: HashSet<_> = tx.input.iter().map(|input| input.previous_output).collect();
+	if tx.input.len() != outpoints.len() || signed != outpoints.iter().copied().collect() {
+		return Err(Error::OnchainTxCreationFailed);
+	}
+	Ok(())
+}
+
+/// An in-memory signed candidate that has not been submitted by preparation.
+///
+/// Persist its actual txid, inputs and recipient amount under the original wallet/payment
+/// identity before calling [`Self::broadcast`]. Dropping this object does not broadcast.
+/// It does not persist a transaction journal or restore signed transactions after restart.
+pub struct PreparedOnchainSend {
+	tx: Transaction,
+	recipient_amount_sats: u64,
+	runtime: Arc<RuntimeControl>,
+	chain_source: Arc<ChainSource>,
+	is_running: Arc<RwLock<bool>>,
+	result: Mutex<Option<Result<OnchainSendResult, Error>>>,
+}
+
+impl PreparedOnchainSend {
+	/// Return the actual signed candidate's locally computed transaction ID.
+	pub fn txid(&self) -> Txid {
+		self.tx.compute_txid()
+	}
+
+	/// Return the actual signed input outpoints, independent of caller-supplied value hints.
+	pub fn inputs(&self) -> Vec<OutPoint> {
+		self.tx.input.iter().map(|input| input.previous_output).collect()
+	}
+
+	/// Return the sum of signed outputs paying the requested recipient script.
+	pub fn recipient_amount_sats(&self) -> u64 {
+		self.recipient_amount_sats
+	}
+
+	/// Submit this exact candidate through the configured backend once.
+	///
+	/// Calls on the same object are serialized and return its cached result. The backend's
+	/// transport may retry the same bytes. `Err` proves this invocation did not dispatch;
+	/// neither `Rejected` nor `Unknown` authorizes clearing the original payment guard.
+	/// The caller must durably record candidate provenance before its first call.
+	pub fn broadcast(&self) -> Result<OnchainSendResult, Error> {
+		let mut cached = self.result.lock().unwrap();
+		if let Some(result) = cached.as_ref() {
+			return result.clone();
+		}
+		check_send_context(&self.is_running)?;
+		let source = Arc::clone(&self.chain_source);
+		let tx = self.tx.clone();
+		let result = self
+			.runtime
+			.try_block_on(async move { source.broadcast_user_transaction(&tx).await })
+			.and_then(|response| response)
+			.map(|response| match response {
+				BroadcastResponse::Accepted => OnchainSendResult::Accepted { txid: self.txid() },
+				BroadcastResponse::Rejected(reason) => {
+					OnchainSendResult::Rejected { txid: self.txid(), reason }
+				},
+				BroadcastResponse::Unknown => OnchainSendResult::Unknown { txid: self.txid() },
+			});
+		*cached = Some(result.clone());
+		result
+	}
+}
+
 impl OnchainPayment {
 	pub(crate) fn new(
 		runtime: Arc<RuntimeControl>, chain_source: Arc<ChainSource>, wallet: Arc<Wallet>,
@@ -140,39 +230,48 @@ impl OnchainPayment {
 		Self { runtime, chain_source, wallet, channel_manager, config, is_running, logger }
 	}
 
-	fn send_with_broadcast_result(
+	fn prepare_send(
 		&self, address: &Address, send_amount: OnchainSendAmount, fee_rate: Option<FeeRate>,
-		utxos_to_spend: Option<Vec<bitcoin::OutPoint>>,
-	) -> Result<OnchainSendResult, Error> {
-		if !*self.is_running.read().unwrap() {
-			return Err(Error::NotRunning);
-		}
-		// A synchronous backend wait cannot run inside a current-thread Tokio runtime.
-		// Reject before preparing, signing, or persisting a transaction.
-		if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
-			handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread
-		}) {
-			return Err(Error::PaymentSendingFailed);
+		utxos_to_spend: Option<Vec<OutPoint>>,
+	) -> Result<Arc<PreparedOnchainSend>, Error> {
+		check_send_context(&self.is_running)?;
+		if let Some(outpoints) = &utxos_to_spend {
+			validate_selected_outpoints(outpoints)?;
 		}
 		let tx = self.wallet.prepare_send_to_address(
 			address,
 			send_amount,
 			maybe_map_fee_rate_opt!(fee_rate),
-			utxos_to_spend,
+			utxos_to_spend.clone(),
 			&self.channel_manager,
 		)?;
-		let txid = tx.compute_txid();
-		let source = Arc::clone(&self.chain_source);
-		// try_block_on can fail only before polling the submission future. Once polled,
-		// every backend failure is carried with the locally computed txid.
-		let response = self
-			.runtime
-			.try_block_on(async move { source.broadcast_user_transaction(&tx).await })??;
-		Ok(match response {
-			BroadcastResponse::Accepted => OnchainSendResult::Accepted { txid },
-			BroadcastResponse::Rejected(reason) => OnchainSendResult::Rejected { txid, reason },
-			BroadcastResponse::Unknown => OnchainSendResult::Unknown { txid },
-		})
+		if let Some(outpoints) = &utxos_to_spend {
+			validate_signed_inputs(&tx, outpoints)?;
+		}
+		let actual_inputs: Vec<_> = tx.input.iter().map(|input| input.previous_output).collect();
+		validate_selected_outpoints(&actual_inputs).map_err(|_| Error::OnchainTxCreationFailed)?;
+		let recipient_script = address.script_pubkey();
+		let recipient_amount_sats = tx
+			.output
+			.iter()
+			.filter(|output| output.script_pubkey == recipient_script)
+			.try_fold(0u64, |total, output| total.checked_add(output.value.to_sat()))
+			.ok_or(Error::OnchainTxCreationFailed)?;
+		Ok(Arc::new(PreparedOnchainSend {
+			tx,
+			recipient_amount_sats,
+			runtime: Arc::clone(&self.runtime),
+			chain_source: Arc::clone(&self.chain_source),
+			is_running: Arc::clone(&self.is_running),
+			result: Mutex::new(None),
+		}))
+	}
+
+	fn send_with_broadcast_result(
+		&self, address: &Address, send_amount: OnchainSendAmount, fee_rate: Option<FeeRate>,
+		utxos_to_spend: Option<Vec<OutPoint>>,
+	) -> Result<OnchainSendResult, Error> {
+		self.prepare_send(address, send_amount, fee_rate, utxos_to_spend)?.broadcast()
 	}
 
 	/// Retrieve a new on-chain/funding address.
@@ -709,6 +808,54 @@ impl OnchainPayment {
 		self.send_with_broadcast_result(address, amount, fee_rate, None)
 	}
 
+	/// Prepare a fixed-amount candidate without backend submission.
+	///
+	/// With explicit inputs, requires a nonempty unique wallet-unspent set and verifies the
+	/// signed transaction spends exactly that set. None permits initial automatic selection.
+	/// Persist the actual candidate receipt under the original payment identity before broadcast.
+	/// Recovery must pass the ORIGINAL input set and recipient amount, never fresh selection.
+	/// If the signed recipient-script output sum differs from `amount_sats` (for example,
+	/// when the recipient aliases change), returns `OnchainTxCreationFailed` before dispatch.
+	pub fn prepare_send_to_address(
+		&self, address: &Address, amount_sats: u64, fee_rate: Option<FeeRate>,
+		utxos_to_spend: Option<Vec<SpendableUtxo>>,
+	) -> Result<Arc<PreparedOnchainSend>, Error> {
+		let reserve =
+			crate::total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
+		let prepared = self.prepare_send(
+			address,
+			OnchainSendAmount::ExactRetainingReserve {
+				amount_sats,
+				cur_anchor_reserve_sats: reserve,
+			},
+			fee_rate,
+			utxos_to_spend.map(|utxos| utxos.into_iter().map(|u| u.outpoint).collect()),
+		)?;
+		// Reject a recipient/change alias rather than hand the caller a different fixed amount.
+		if prepared.recipient_amount_sats() != amount_sats {
+			return Err(Error::OnchainTxCreationFailed);
+		}
+		Ok(prepared)
+	}
+
+	/// Prepare an initial send-all candidate with the existing drain/reserve behavior.
+	///
+	/// This does not dispatch. Persist its actual signed inputs, txid and recipient amount
+	/// under the original payment identity before broadcast. Recovery successors must use
+	/// fixed preparation with that ORIGINAL amount and exact input set, never another drain.
+	pub fn prepare_send_all_to_address(
+		&self, address: &Address, retain_reserves: bool, fee_rate: Option<FeeRate>,
+	) -> Result<Arc<PreparedOnchainSend>, Error> {
+		let amount = if retain_reserves {
+			let reserve =
+				crate::total_anchor_channels_reserve_sats(&self.channel_manager, &self.config);
+			OnchainSendAmount::AllRetainingReserve { cur_anchor_reserve_sats: reserve }
+		} else {
+			OnchainSendAmount::AllDrainingReserve
+		};
+		self.prepare_send(address, amount, fee_rate, None)
+	}
+
 	/// Bumps the fee of an existing transaction using Replace-By-Fee (RBF).
 	///
 	/// This allows a previously sent transaction to be replaced with a new version
@@ -832,6 +979,381 @@ impl OnchainPayment {
 		#[cfg(feature = "uniffi")]
 		{
 			Ok(Arc::new(fee_rate))
+		}
+	}
+}
+
+#[cfg(all(test, not(feature = "uniffi")))]
+mod prepared_send_tests {
+	use super::*;
+	use bitcoin::hashes::Hash;
+	use bitcoin::{absolute, transaction, Amount, Network, TxIn, TxOut};
+	use std::io::{Read, Write};
+	use std::net::TcpListener;
+	use std::time::Duration;
+
+	struct Fixture {
+		node: crate::Node,
+		listener: TcpListener,
+	}
+
+	impl Fixture {
+		fn new() -> Self {
+			let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+			listener.set_nonblocking(true).unwrap();
+			let dir = std::env::temp_dir().join(format!("ldk-prepared-{}", rand::random::<u64>()));
+			let config = Config {
+				storage_dir_path: dir.to_str().unwrap().to_owned(),
+				network: Network::Regtest,
+				include_untrusted_pending_in_spendable: true,
+				..Default::default()
+			};
+			let mut builder = crate::Builder::from_config(config);
+			builder.set_chain_source_esplora(
+				format!("http://{}", listener.local_addr().unwrap()),
+				Some(crate::config::EsploraSyncConfig { background_sync_config: None }),
+			);
+			let node = builder.build().unwrap();
+			// Exercise signing and direct dispatch without starting any background sync tasks.
+			*node.is_running.write().unwrap() = true;
+			let address = node.onchain_payment().new_address().unwrap();
+			let funding = Transaction {
+				version: transaction::Version::TWO,
+				lock_time: absolute::LockTime::ZERO,
+				input: vec![TxIn {
+					previous_output: OutPoint { txid: Txid::from_byte_array([42; 32]), vout: 0 },
+					..Default::default()
+				}],
+				output: [100_000, 200_000]
+					.into_iter()
+					.map(|value| TxOut {
+						value: Amount::from_sat(value),
+						script_pubkey: address.script_pubkey(),
+					})
+					.collect(),
+			};
+			node.wallet.apply_mempool_txs(vec![(funding, 1)], vec![]).unwrap();
+			Self { node, listener }
+		}
+
+		fn recipient(&self) -> Address {
+			// An external script distinct from this fixture's wallet/change addresses.
+			Address::p2wsh(&bitcoin::ScriptBuf::new(), Network::Regtest)
+		}
+
+		fn assert_no_dispatch(&self) {
+			assert_eq!(self.listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+		}
+	}
+
+	impl Drop for Fixture {
+		fn drop(&mut self) {
+			*self.node.is_running.write().unwrap() = false;
+		}
+	}
+
+	fn fee() -> Option<FeeRate> {
+		Some(bitcoin::FeeRate::from_sat_per_vb_u32(2))
+	}
+
+	#[test]
+	fn prepared_receipt_and_fixed_successors_use_exact_original_inputs() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let original = payment.list_spendable_outputs().unwrap()[..1].to_vec();
+		let prepared = payment
+			.prepare_send_to_address(&f.recipient(), 50_000, fee(), Some(original.clone()))
+			.unwrap();
+		assert_eq!(prepared.inputs(), vec![original[0].outpoint]);
+		assert_eq!(prepared.txid(), prepared.tx.compute_txid());
+		assert_eq!(prepared.recipient_amount_sats(), 50_000);
+		assert!(prepared.tx.input.iter().all(|input| !input.witness.is_empty()));
+		let successor = payment
+			.prepare_send_to_address(
+				&f.recipient(),
+				prepared.recipient_amount_sats(),
+				Some(bitcoin::FeeRate::from_sat_per_vb_u32(3)),
+				Some(original),
+			)
+			.unwrap();
+		assert_eq!(successor.inputs(), prepared.inputs());
+		assert_eq!(successor.recipient_amount_sats(), prepared.recipient_amount_sats());
+		assert_ne!(successor.txid(), prepared.txid());
+		// Signing did not insert either outgoing transaction or consume the original inputs.
+		assert_eq!(payment.list_spendable_outputs().unwrap().len(), 2);
+		drop(prepared);
+		drop(successor);
+		f.assert_no_dispatch();
+	}
+
+	#[test]
+	fn prepared_initial_max_preserves_native_drain_and_reserve_amounts() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let address = f.recipient();
+		for retain_reserves in [false, true] {
+			let prepared =
+				payment.prepare_send_all_to_address(&address, retain_reserves, fee()).unwrap();
+			let legacy = payment
+				.wallet
+				.prepare_send_to_address(
+					&address,
+					OnchainSendAmount::AllDrainingReserve,
+					fee(),
+					None,
+					&payment.channel_manager,
+				)
+				.unwrap();
+			assert_eq!(prepared.tx.output, legacy.output);
+			assert_eq!(
+				prepared.inputs().into_iter().collect::<HashSet<_>>(),
+				legacy.input.iter().map(|i| i.previous_output).collect()
+			);
+			assert_eq!(prepared.inputs().len(), 2);
+			assert_eq!(prepared.recipient_amount_sats(), legacy.output[0].value.to_sat());
+			let original_inputs = prepared
+				.inputs()
+				.into_iter()
+				.map(|outpoint| SpendableUtxo { outpoint, value_sats: 0 })
+				.collect();
+			let recovery = payment
+				.prepare_send_to_address(
+					&address,
+					prepared.recipient_amount_sats(),
+					fee(),
+					Some(original_inputs),
+				)
+				.unwrap();
+			assert_eq!(
+				recovery.inputs().into_iter().collect::<HashSet<_>>(),
+				prepared.inputs().into_iter().collect()
+			);
+			assert_eq!(recovery.recipient_amount_sats(), prepared.recipient_amount_sats());
+		}
+		// Cover the same retained-reserve branch with a nonzero reserve, without channel fixtures.
+		let amount = OnchainSendAmount::AllRetainingReserve { cur_anchor_reserve_sats: 20_000 };
+		let legacy = payment
+			.wallet
+			.prepare_send_to_address(&address, amount, fee(), None, &payment.channel_manager)
+			.unwrap();
+		let prepared = payment.prepare_send(&address, amount, fee(), None).unwrap();
+		let recipient_value: u64 = legacy
+			.output
+			.iter()
+			.filter(|out| out.script_pubkey == address.script_pubkey())
+			.map(|out| out.value.to_sat())
+			.sum();
+		assert_eq!(prepared.recipient_amount_sats(), recipient_value);
+		assert_eq!(prepared.inputs().len(), legacy.input.len());
+		assert!(
+			prepared
+				.tx
+				.output
+				.iter()
+				.filter(|out| out.script_pubkey != address.script_pubkey())
+				.map(|out| out.value.to_sat())
+				.sum::<u64>()
+				>= 20_000
+		);
+		// A Max receipt leaves no fee headroom in its original inputs. Even if new
+		// wallet funds arrive, recovery must not add them or reduce the merchant amount.
+		let original_max = payment.prepare_send_all_to_address(&address, false, fee()).unwrap();
+		let original_amount = original_max.recipient_amount_sats();
+		let original_inputs: Vec<_> = original_max
+			.inputs()
+			.into_iter()
+			.map(|outpoint| SpendableUtxo { outpoint, value_sats: 0 })
+			.collect();
+		let additional_address = payment.new_address().unwrap();
+		let additional_funding = Transaction {
+			version: transaction::Version::TWO,
+			lock_time: absolute::LockTime::ZERO,
+			input: vec![TxIn {
+				previous_output: OutPoint { txid: Txid::from_byte_array([43; 32]), vout: 0 },
+				..Default::default()
+			}],
+			output: vec![TxOut {
+				value: Amount::from_sat(1_000_000),
+				script_pubkey: additional_address.script_pubkey(),
+			}],
+		};
+		payment.wallet.apply_mempool_txs(vec![(additional_funding, 3)], vec![]).unwrap();
+		assert_eq!(payment.list_spendable_outputs().unwrap().len(), 3);
+		let higher_fee = Some(bitcoin::FeeRate::from_sat_per_vb_u32(3));
+		assert_eq!(
+			payment
+				.prepare_send_to_address(
+					&address,
+					original_amount,
+					higher_fee,
+					Some(original_inputs)
+				)
+				.err(),
+			Some(Error::InsufficientFunds)
+		);
+		// Fresh automatic selection could pay it, proving the explicit set did not fall back.
+		let unconstrained =
+			payment.prepare_send_to_address(&address, original_amount, higher_fee, None).unwrap();
+		assert_eq!(unconstrained.recipient_amount_sats(), original_amount);
+		assert!(unconstrained.inputs().iter().any(|input| !original_max.inputs().contains(input)));
+		assert_eq!(original_max.recipient_amount_sats(), original_amount);
+		f.assert_no_dispatch();
+	}
+
+	#[test]
+	fn prepared_fixed_rejects_recipient_change_alias_amount_mismatch() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let change_script = payment.wallet.get_drain_script().unwrap();
+		let recipient = Address::from_script(&change_script, Network::Regtest).unwrap();
+		assert_eq!(
+			payment.prepare_send_to_address(&recipient, 50_000, fee(), None).err(),
+			Some(Error::OnchainTxCreationFailed)
+		);
+		f.assert_no_dispatch();
+	}
+
+	#[test]
+	fn prepared_invalid_inputs_fail_before_dispatch_without_auto_fallback() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let original = payment.list_spendable_outputs().unwrap()[0].clone();
+		for inputs in [
+			vec![],
+			vec![original.clone(), original.clone()],
+			vec![SpendableUtxo {
+				outpoint: OutPoint { txid: Txid::from_byte_array([99; 32]), vout: 0 },
+				value_sats: 1_000_000,
+			}],
+		] {
+			assert!(payment
+				.prepare_send_to_address(&f.recipient(), 50_000, fee(), Some(inputs))
+				.is_err());
+		}
+		let mut fake_hint = original.clone();
+		fake_hint.value_sats = u64::MAX;
+		assert!(payment
+			.prepare_send_to_address(&f.recipient(), 250_000, fee(), Some(vec![fake_hint]))
+			.is_err());
+		let mut tx = payment
+			.prepare_send_to_address(&f.recipient(), 50_000, fee(), Some(vec![original.clone()]))
+			.unwrap()
+			.tx
+			.clone();
+		// Positive wallet observation of a spend invalidates the original input even though
+		// another wallet UTXO could fund the payment; manual selection must never fall back.
+		payment.wallet.apply_mempool_txs(vec![(tx.clone(), 2)], vec![]).unwrap();
+		assert!(payment
+			.prepare_send_to_address(&f.recipient(), 50_000, fee(), Some(vec![original.clone()]))
+			.is_err());
+		tx.input[0].previous_output = OutPoint::null();
+		assert_eq!(
+			validate_signed_inputs(&tx, &[original.outpoint]),
+			Err(Error::OnchainTxCreationFailed)
+		);
+		f.assert_no_dispatch();
+	}
+
+	#[test]
+	fn prepared_context_errors_precede_preparation_and_dispatch() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let prepared =
+			payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+		let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+		runtime.block_on(async {
+			assert_eq!(
+				payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).err(),
+				Some(Error::PaymentSendingFailed)
+			);
+			assert_eq!(
+				payment.prepare_send_all_to_address(&f.recipient(), false, fee()).err(),
+				Some(Error::PaymentSendingFailed)
+			);
+			assert_eq!(prepared.broadcast(), Err(Error::PaymentSendingFailed));
+		});
+		*f.node.is_running.write().unwrap() = false;
+		assert_eq!(prepared.broadcast(), Err(Error::NotRunning));
+		assert_eq!(
+			payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).err(),
+			Some(Error::NotRunning)
+		);
+		f.assert_no_dispatch();
+	}
+
+	#[test]
+	fn prepared_broadcast_serializes_callers_and_caches_each_backend_result() {
+		for (status, body_kind) in [(200, "accepted"), (400, "rejected"), (200, "unknown")] {
+			let f = Fixture::new();
+			let prepared = f
+				.node
+				.onchain_payment()
+				.prepare_send_to_address(&f.recipient(), 50_000, fee(), None)
+				.unwrap();
+			f.assert_no_dispatch();
+			let listener = f.listener.try_clone().unwrap();
+			listener.set_nonblocking(false).unwrap();
+			let expected_body = bitcoin::consensus::encode::serialize_hex(&prepared.tx);
+			let txid = prepared.txid();
+			let server = std::thread::spawn(move || {
+				let (mut stream, _) = listener.accept().unwrap();
+				stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+				let mut request = Vec::new();
+				let header_end = loop {
+					let mut byte = [0u8; 1];
+					stream.read_exact(&mut byte).unwrap();
+					request.push(byte[0]);
+					if request.ends_with(b"\r\n\r\n") {
+						break request.len();
+					}
+				};
+				let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+				assert!(headers.starts_with("POST /tx HTTP/1.1"));
+				let len: usize = headers
+					.lines()
+					.find_map(|line| {
+						line.to_ascii_lowercase()
+							.strip_prefix("content-length: ")
+							.map(str::to_owned)
+					})
+					.unwrap()
+					.parse()
+					.unwrap();
+				let mut bytes = vec![0u8; len];
+				stream.read_exact(&mut bytes).unwrap();
+				assert_eq!(String::from_utf8(bytes).unwrap(), expected_body);
+				let body = match body_kind {
+					"accepted" => txid.to_string(),
+					"rejected" => {
+						"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}"
+							.to_owned()
+					},
+					_ => "malformed".to_owned(),
+				};
+				write!(
+					stream,
+					"HTTP/1.1 {} result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+					status,
+					body.len(),
+					body
+				)
+				.unwrap();
+			});
+			let other = Arc::clone(&prepared);
+			let concurrent = std::thread::spawn(move || other.broadcast());
+			let result = prepared.broadcast().unwrap();
+			assert_eq!(concurrent.join().unwrap().unwrap(), result);
+			assert_eq!(prepared.broadcast().unwrap(), result);
+			assert!(match body_kind {
+				"accepted" =>
+					matches!(result, OnchainSendResult::Accepted { txid: id } if id == txid),
+				"rejected" =>
+					matches!(result, OnchainSendResult::Rejected { txid: id, .. } if id == txid),
+				_ => matches!(result, OnchainSendResult::Unknown { txid: id } if id == txid),
+			});
+			server.join().unwrap();
+			f.listener.set_nonblocking(true).unwrap();
+			f.assert_no_dispatch();
 		}
 	}
 }

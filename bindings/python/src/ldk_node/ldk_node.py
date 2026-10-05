@@ -837,6 +837,10 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_all_to_address() != 24606:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_to_address() != 30767:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to_account() != 53588:
@@ -850,6 +854,14 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address() != 28826:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result() != 16277:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_preparedonchainsend_broadcast() != 61032:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_preparedonchainsend_inputs() != 15567:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats() != 47776:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_preparedonchainsend_txid() != 17819:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds() != 43722:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -2369,6 +2381,23 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type.ar
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_new_address_info_for_type.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_prepare_send_all_to_address.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_int8,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_prepare_send_all_to_address.restype = ctypes.c_void_p
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_prepare_send_to_address.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_prepare_send_to_address.restype = ctypes.c_void_p
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2427,6 +2456,36 @@ _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address_with_broadca
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_send_to_address_with_broadcast_result.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_clone_preparedonchainsend.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_clone_preparedonchainsend.restype = ctypes.c_void_p
+_UniffiLib.uniffi_ldk_node_fn_free_preparedonchainsend.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_free_preparedonchainsend.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_broadcast.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_broadcast.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_inputs.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_inputs.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_recipient_amount_sats.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_recipient_amount_sats.restype = ctypes.c_uint64
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_txid.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_txid.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_ldk_node_fn_clone_refund.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -3458,6 +3517,12 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_a
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_all_to_address.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_all_to_address.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_to_address.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_to_address.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to.restype = ctypes.c_uint16
@@ -3479,6 +3544,18 @@ _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address.restyp
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_broadcast.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_broadcast.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_inputs.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_inputs.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_txid.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_txid.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds.restype = ctypes.c_uint16
@@ -6944,6 +7021,10 @@ class OnchainPaymentProtocol(typing.Protocol):
         raise NotImplementedError
     def new_address_info_for_type(self, address_type: "AddressType"):
         raise NotImplementedError
+    def prepare_send_all_to_address(self, address: "Address",retain_reserves: "bool",fee_rate: "typing.Optional[FeeRate]"):
+        raise NotImplementedError
+    def prepare_send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]"):
+        raise NotImplementedError
     def reveal_receive_addresses_to(self, address_type: "AddressType",index: "int"):
         raise NotImplementedError
     def reveal_receive_addresses_to_account(self, address_type: "AddressType",account_index: "int",index: "int"):
@@ -7237,6 +7318,45 @@ class OnchainPayment:
 
 
 
+    def prepare_send_all_to_address(self, address: "Address",retain_reserves: "bool",fee_rate: "typing.Optional[FeeRate]") -> "PreparedOnchainSend":
+        _UniffiConverterTypeAddress.check_lower(address)
+
+        _UniffiConverterBool.check_lower(retain_reserves)
+
+        _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
+
+        return _UniffiConverterTypePreparedOnchainSend.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_prepare_send_all_to_address,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddress.lower(address),
+        _UniffiConverterBool.lower(retain_reserves),
+        _UniffiConverterOptionalTypeFeeRate.lower(fee_rate))
+        )
+
+
+
+
+
+    def prepare_send_to_address(self, address: "Address",amount_sats: "int",fee_rate: "typing.Optional[FeeRate]",utxos_to_spend: "typing.Optional[typing.List[SpendableUtxo]]") -> "PreparedOnchainSend":
+        _UniffiConverterTypeAddress.check_lower(address)
+
+        _UniffiConverterUInt64.check_lower(amount_sats)
+
+        _UniffiConverterOptionalTypeFeeRate.check_lower(fee_rate)
+
+        _UniffiConverterOptionalSequenceTypeSpendableUtxo.check_lower(utxos_to_spend)
+
+        return _UniffiConverterTypePreparedOnchainSend.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_onchainpayment_prepare_send_to_address,self._uniffi_clone_pointer(),
+        _UniffiConverterTypeAddress.lower(address),
+        _UniffiConverterUInt64.lower(amount_sats),
+        _UniffiConverterOptionalTypeFeeRate.lower(fee_rate),
+        _UniffiConverterOptionalSequenceTypeSpendableUtxo.lower(utxos_to_spend))
+        )
+
+
+
+
+
     def reveal_receive_addresses_to(self, address_type: "AddressType",index: "int") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
 
@@ -7394,6 +7514,109 @@ class _UniffiConverterTypeOnchainPayment:
 
     @classmethod
     def write(cls, value: OnchainPaymentProtocol, buf: _UniffiRustBuffer):
+        buf.write_u64(cls.lower(value))
+
+
+
+class PreparedOnchainSendProtocol(typing.Protocol):
+    def broadcast(self, ):
+        raise NotImplementedError
+    def inputs(self, ):
+        raise NotImplementedError
+    def recipient_amount_sats(self, ):
+        raise NotImplementedError
+    def txid(self, ):
+        raise NotImplementedError
+
+
+class PreparedOnchainSend:
+    _pointer: ctypes.c_void_p
+
+    def __init__(self, *args, **kwargs):
+        raise ValueError("This class has no default constructor")
+
+    def __del__(self):
+        # In case of partial initialization of instances.
+        pointer = getattr(self, "_pointer", None)
+        if pointer is not None:
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_free_preparedonchainsend, pointer)
+
+    def _uniffi_clone_pointer(self):
+        return _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_clone_preparedonchainsend, self._pointer)
+
+    # Used by alternative constructors or any methods which return this type.
+    @classmethod
+    def _make_instance_(cls, pointer):
+        # Lightly yucky way to bypass the usual __init__ logic
+        # and just create a new instance with the required pointer.
+        inst = cls.__new__(cls)
+        inst._pointer = pointer
+        return inst
+
+
+    def broadcast(self, ) -> "OnchainSendResult":
+        return _UniffiConverterTypeOnchainSendResult.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeNodeError,_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_broadcast,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
+    def inputs(self, ) -> "typing.List[OutPoint]":
+        return _UniffiConverterSequenceTypeOutPoint.lift(
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_inputs,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
+    def recipient_amount_sats(self, ) -> "int":
+        return _UniffiConverterUInt64.lift(
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_recipient_amount_sats,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
+    def txid(self, ) -> "Txid":
+        return _UniffiConverterTypeTxid.lift(
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_txid,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
+
+class _UniffiConverterTypePreparedOnchainSend:
+
+    @staticmethod
+    def lift(value: int):
+        return PreparedOnchainSend._make_instance_(value)
+
+    @staticmethod
+    def check_lower(value: PreparedOnchainSend):
+        if not isinstance(value, PreparedOnchainSend):
+            raise TypeError("Expected PreparedOnchainSend instance, {} found".format(type(value).__name__))
+
+    @staticmethod
+    def lower(value: PreparedOnchainSendProtocol):
+        if not isinstance(value, PreparedOnchainSend):
+            raise TypeError("Expected PreparedOnchainSend instance, {} found".format(type(value).__name__))
+        return value._uniffi_clone_pointer()
+
+    @classmethod
+    def read(cls, buf: _UniffiRustBuffer):
+        ptr = buf.read_u64()
+        if ptr == 0:
+            raise InternalError("Raw pointer value was null")
+        return cls.lift(ptr)
+
+    @classmethod
+    def write(cls, value: PreparedOnchainSendProtocol, buf: _UniffiRustBuffer):
         buf.write_u64(cls.lower(value))
 
 
@@ -16866,6 +17089,31 @@ class _UniffiConverterSequenceTypeOnchainWalletAccountConfig(_UniffiConverterRus
 
 
 
+class _UniffiConverterSequenceTypeOutPoint(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiConverterTypeOutPoint.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiConverterTypeOutPoint.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiConverterTypeOutPoint.read(buf) for i in range(count)
+        ]
+
+
+
 class _UniffiConverterSequenceTypePaymentDetails(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -17939,6 +18187,7 @@ __all__ = [
     "Node",
     "Offer",
     "OnchainPayment",
+    "PreparedOnchainSend",
     "Refund",
     "SpontaneousPayment",
     "UnifiedQrPayment",
