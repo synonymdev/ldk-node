@@ -216,7 +216,9 @@ impl PreparedOnchainSend {
 				},
 				BroadcastResponse::Unknown => OnchainSendResult::Unknown { txid: self.txid() },
 			});
-		*cached = Some(result.clone());
+		if result.is_ok() {
+			*cached = Some(result.clone());
+		}
 		result
 	}
 }
@@ -833,6 +835,7 @@ impl OnchainPayment {
 		)?;
 		// Reject a recipient/change alias rather than hand the caller a different fixed amount.
 		if prepared.recipient_amount_sats() != amount_sats {
+			self.wallet.cancel_tx(&prepared.tx)?;
 			return Err(Error::OnchainTxCreationFailed);
 		}
 		Ok(prepared)
@@ -1206,10 +1209,13 @@ mod prepared_send_tests {
 		let payment = f.node.onchain_payment();
 		let change_script = payment.wallet.get_drain_script().unwrap();
 		let recipient = Address::from_script(&change_script, Network::Regtest).unwrap();
-		assert_eq!(
-			payment.prepare_send_to_address(&recipient, 50_000, fee(), None).err(),
-			Some(Error::OnchainTxCreationFailed)
-		);
+		for _ in 0..3 {
+			assert_eq!(
+				payment.prepare_send_to_address(&recipient, 50_000, fee(), None).err(),
+				Some(Error::OnchainTxCreationFailed)
+			);
+		}
+		assert_eq!(payment.wallet.get_new_internal_address().unwrap(), recipient);
 		f.assert_no_dispatch();
 	}
 
@@ -1285,11 +1291,29 @@ mod prepared_send_tests {
 	fn prepared_broadcast_serializes_callers_and_caches_each_backend_result() {
 		for (status, body_kind) in [(200, "accepted"), (400, "rejected"), (200, "unknown")] {
 			let f = Fixture::new();
-			let prepared = f
+			let mut prepared = f
 				.node
 				.onchain_payment()
 				.prepare_send_to_address(&f.recipient(), 50_000, fee(), None)
 				.unwrap();
+			// Model the shutdown race: running preflight passes, but Electrum has no client.
+			let mut builder = crate::Builder::new();
+			let electrum_dir = std::env::temp_dir()
+				.join(format!("ldk-prepared-electrum-{}", rand::random::<u64>()));
+			builder.set_storage_dir_path(electrum_dir.to_str().unwrap().to_owned());
+			builder.set_chain_source_electrum("tcp://127.0.0.1:1".to_owned(), None);
+			let stopped_electrum = builder.build().unwrap();
+			let candidate = Arc::get_mut(&mut prepared).unwrap();
+			let original_source = Arc::clone(&candidate.chain_source);
+			candidate.chain_source = Arc::clone(&stopped_electrum.chain_source);
+			assert_eq!(candidate.broadcast(), Err(Error::NotRunning));
+			assert!(candidate.result.lock().unwrap().is_none());
+			// Restore backend availability without replacing the signed candidate or its cache.
+			candidate.chain_source = original_source;
+			drop(stopped_electrum);
+			if electrum_dir.exists() {
+				std::fs::remove_dir_all(electrum_dir).unwrap();
+			}
 			f.assert_no_dispatch();
 			let listener = f.listener.try_clone().unwrap();
 			listener.set_nonblocking(false).unwrap();
