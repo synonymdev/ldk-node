@@ -1,4 +1,4 @@
-# 0.7.0-rc.69 (Synonym Fork)
+# 0.7.0-rc.70 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -75,6 +75,8 @@
   to prevent silent data loss.
 
 ## Synonym Fork Additions
+
+- Keep prepared payments retryable after definite pre-dispatch failure and release unused change addresses when discarding invalid fixed-amount candidates.
 
 - Added signed on-chain payment preparation so apps can persist transaction receipts before broadcast and constrain recovery to the original amount and inputs.
 - Added explicit accepted, rejected, or unknown broadcast outcomes with transaction IDs for on-chain sends.
