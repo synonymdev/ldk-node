@@ -1558,6 +1558,22 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2714,6 +2730,21 @@ internal interface UniffiLib : Library {
         `addressType`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_onchainpayment_prepare_send_all_to_address(
+        `ptr`: Pointer?,
+        `address`: RustBufferByValue,
+        `retainReserves`: Byte,
+        `feeRate`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    fun uniffi_ldk_node_fn_method_onchainpayment_prepare_send_to_address(
+        `ptr`: Pointer?,
+        `address`: RustBufferByValue,
+        `amountSats`: Long,
+        `feeRate`: RustBufferByValue,
+        `utxosToSpend`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
     fun uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(
         `ptr`: Pointer?,
         `addressType`: RustBufferByValue,
@@ -2763,6 +2794,34 @@ internal interface UniffiLib : Library {
         `amountSats`: Long,
         `feeRate`: RustBufferByValue,
         `utxosToSpend`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_clone_preparedonchainsend(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    fun uniffi_ldk_node_fn_free_preparedonchainsend(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_ldk_node_fn_method_preparedonchainsend_broadcast(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_preparedonchainsend_inputs(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long
+    fun uniffi_ldk_node_fn_method_preparedonchainsend_recipient_amount_sats(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long
+    fun uniffi_ldk_node_fn_method_preparedonchainsend_txid(
+        `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     fun uniffi_ldk_node_fn_clone_refund(
@@ -3517,6 +3576,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type(
     ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_all_to_address(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_to_address(
+    ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to_account(
@@ -3530,6 +3593,16 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_onchainpayment_send_to_address(
     ): Short
     fun uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_preparedonchainsend_broadcast(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_preparedonchainsend_inputs(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_preparedonchainsend_txid(
     ): Short
     fun uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds(
     ): Short
@@ -4164,6 +4237,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_all_to_address() != 24606.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_to_address() != 30767.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -4183,6 +4262,21 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result() != 16277.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_preparedonchainsend_broadcast() != 61032.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_preparedonchainsend_inputs() != 15567.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats() != 3319.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats() != 47776.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_preparedonchainsend_txid() != 17819.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds() != 43722.toShort()) {
@@ -8595,6 +8689,37 @@ open class OnchainPayment: Disposable, OnchainPaymentInterface {
     }
 
     @Throws(NodeException::class)
+    override fun `prepareSendAllToAddress`(`address`: Address, `retainReserves`: kotlin.Boolean, `feeRate`: FeeRate?): PreparedOnchainSend {
+        return FfiConverterTypePreparedOnchainSend.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_prepare_send_all_to_address(
+                    it,
+                    FfiConverterTypeAddress.lower(`address`),
+                    FfiConverterBoolean.lower(`retainReserves`),
+                    FfiConverterOptionalTypeFeeRate.lower(`feeRate`),
+                    uniffiRustCallStatus,
+                )
+            }!!
+        })
+    }
+
+    @Throws(NodeException::class)
+    override fun `prepareSendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): PreparedOnchainSend {
+        return FfiConverterTypePreparedOnchainSend.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_onchainpayment_prepare_send_to_address(
+                    it,
+                    FfiConverterTypeAddress.lower(`address`),
+                    FfiConverterULong.lower(`amountSats`),
+                    FfiConverterOptionalTypeFeeRate.lower(`feeRate`),
+                    FfiConverterOptionalSequenceTypeSpendableUtxo.lower(`utxosToSpend`),
+                    uniffiRustCallStatus,
+                )
+            }!!
+        })
+    }
+
+    @Throws(NodeException::class)
     override fun `revealReceiveAddressesTo`(`addressType`: AddressType, `index`: kotlin.UInt) {
         callWithPointer {
             uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
@@ -8734,6 +8859,194 @@ object FfiConverterTypeOnchainPayment: FfiConverter<OnchainPayment, Pointer> {
     override fun allocationSize(value: OnchainPayment) = 8UL
 
     override fun write(value: OnchainPayment, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(lower(value).toLong())
+    }
+}
+
+
+
+open class PreparedOnchainSend: Disposable, PreparedOnchainSendInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(null))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed: kotlinx.atomicfu.AtomicBoolean = kotlinx.atomicfu.atomic(false)
+    private val callCounter: kotlinx.atomicfu.AtomicLong = kotlinx.atomicfu.atomic(1L)
+
+    private val lock = kotlinx.atomicfu.locks.ReentrantLock()
+
+    private fun <T> synchronized(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    override fun close() {
+        synchronized { this.destroy() }
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.value
+            if (c == 0L) {
+                throw IllegalStateException("${this::class::simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this::class::simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiPointerDestroyer(private val pointer: Pointer?) : Disposable {
+        override fun destroy() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_ldk_node_fn_free_preparedonchainsend(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall { status ->
+            UniffiLib.INSTANCE.uniffi_ldk_node_fn_clone_preparedonchainsend(pointer!!, status)
+        }!!
+    }
+
+
+    @Throws(NodeException::class)
+    override fun `broadcast`(): OnchainSendResult {
+        return FfiConverterTypeOnchainSendResult.lift(callWithPointer {
+            uniffiRustCallWithError(NodeExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_preparedonchainsend_broadcast(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    override fun `inputs`(): List<OutPoint> {
+        return FfiConverterSequenceTypeOutPoint.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_preparedonchainsend_inputs(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    override fun `miningFeeSats`(): kotlin.ULong {
+        return FfiConverterULong.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    override fun `recipientAmountSats`(): kotlin.ULong {
+        return FfiConverterULong.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_preparedonchainsend_recipient_amount_sats(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    override fun `txid`(): Txid {
+        return FfiConverterTypeTxid.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_preparedonchainsend_txid(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+
+
+
+
+
+
+    companion object
+
+}
+
+
+
+
+
+object FfiConverterTypePreparedOnchainSend: FfiConverter<PreparedOnchainSend, Pointer> {
+
+    override fun lower(value: PreparedOnchainSend): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): PreparedOnchainSend {
+        return PreparedOnchainSend(value)
+    }
+
+    override fun read(buf: ByteBuffer): PreparedOnchainSend {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(buf.getLong().toPointer())
+    }
+
+    override fun allocationSize(value: PreparedOnchainSend) = 8UL
+
+    override fun write(value: PreparedOnchainSend, buf: ByteBuffer) {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(lower(value).toLong())
@@ -14658,6 +14971,31 @@ object FfiConverterSequenceTypeOnchainWalletAccountConfig: FfiConverterRustBuffe
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeOnchainWalletAccountConfig.write(it, buf)
+        }
+    }
+}
+
+
+
+
+object FfiConverterSequenceTypeOutPoint: FfiConverterRustBuffer<List<OutPoint>> {
+    override fun read(buf: ByteBuffer): List<OutPoint> {
+        val len = buf.getInt()
+        return List<OutPoint>(len) {
+            FfiConverterTypeOutPoint.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<OutPoint>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeOutPoint.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<OutPoint>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeOutPoint.write(it, buf)
         }
     }
 }

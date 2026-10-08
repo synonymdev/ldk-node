@@ -3387,6 +3387,10 @@ public protocol OnchainPaymentProtocol: AnyObject {
 
     func newAddressInfoForType(addressType: AddressType) throws -> AddressInfo
 
+    func prepareSendAllToAddress(address: Address, retainReserves: Bool, feeRate: FeeRate?) throws -> PreparedOnchainSend
+
+    func prepareSendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> PreparedOnchainSend
+
     func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws
 
     func revealReceiveAddressesToAccount(addressType: AddressType, accountIndex: UInt32, index: UInt32) throws
@@ -3583,6 +3587,25 @@ open class OnchainPayment:
         })
     }
 
+    open func prepareSendAllToAddress(address: Address, retainReserves: Bool, feeRate: FeeRate?) throws -> PreparedOnchainSend {
+        return try FfiConverterTypePreparedOnchainSend.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_prepare_send_all_to_address(self.uniffiClonePointer(),
+                                                                                 FfiConverterTypeAddress.lower(address),
+                                                                                 FfiConverterBool.lower(retainReserves),
+                                                                                 FfiConverterOptionTypeFeeRate.lower(feeRate), $0)
+        })
+    }
+
+    open func prepareSendToAddress(address: Address, amountSats: UInt64, feeRate: FeeRate?, utxosToSpend: [SpendableUtxo]?) throws -> PreparedOnchainSend {
+        return try FfiConverterTypePreparedOnchainSend.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_onchainpayment_prepare_send_to_address(self.uniffiClonePointer(),
+                                                                             FfiConverterTypeAddress.lower(address),
+                                                                             FfiConverterUInt64.lower(amountSats),
+                                                                             FfiConverterOptionTypeFeeRate.lower(feeRate),
+                                                                             FfiConverterOptionSequenceTypeSpendableUtxo.lower(utxosToSpend), $0)
+        })
+    }
+
     open func revealReceiveAddressesTo(addressType: AddressType, index: UInt32) throws {
         try rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_onchainpayment_reveal_receive_addresses_to(self.uniffiClonePointer(),
@@ -3694,6 +3717,145 @@ public func FfiConverterTypeOnchainPayment_lift(_ pointer: UnsafeMutableRawPoint
 #endif
 public func FfiConverterTypeOnchainPayment_lower(_ value: OnchainPayment) -> UnsafeMutableRawPointer {
     return FfiConverterTypeOnchainPayment.lower(value)
+}
+
+public protocol PreparedOnchainSendProtocol: AnyObject {
+    func broadcast() throws -> OnchainSendResult
+
+    func inputs() -> [OutPoint]
+
+    func miningFeeSats() -> UInt64
+
+    func recipientAmountSats() -> UInt64
+
+    func txid() -> Txid
+}
+
+open class PreparedOnchainSend:
+    PreparedOnchainSendProtocol
+{
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    public required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public init(noPointer _: NoPointer) {
+        pointer = nil
+    }
+
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_ldk_node_fn_clone_preparedonchainsend(self.pointer, $0) }
+    }
+
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_ldk_node_fn_free_preparedonchainsend(pointer, $0) }
+    }
+
+    open func broadcast() throws -> OnchainSendResult {
+        return try FfiConverterTypeOnchainSendResult.lift(rustCallWithError(FfiConverterTypeNodeError.lift) {
+            uniffi_ldk_node_fn_method_preparedonchainsend_broadcast(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func inputs() -> [OutPoint] {
+        return try! FfiConverterSequenceTypeOutPoint.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_preparedonchainsend_inputs(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func miningFeeSats() -> UInt64 {
+        return try! FfiConverterUInt64.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func recipientAmountSats() -> UInt64 {
+        return try! FfiConverterUInt64.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_preparedonchainsend_recipient_amount_sats(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func txid() -> Txid {
+        return try! FfiConverterTypeTxid.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_preparedonchainsend_txid(self.uniffiClonePointer(), $0)
+        })
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePreparedOnchainSend: FfiConverter {
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = PreparedOnchainSend
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> PreparedOnchainSend {
+        return PreparedOnchainSend(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: PreparedOnchainSend) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PreparedOnchainSend {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if ptr == nil {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: PreparedOnchainSend, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypePreparedOnchainSend_lift(_ pointer: UnsafeMutableRawPointer) throws -> PreparedOnchainSend {
+    return try FfiConverterTypePreparedOnchainSend.lift(pointer)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypePreparedOnchainSend_lower(_ value: PreparedOnchainSend) -> UnsafeMutableRawPointer {
+    return FfiConverterTypePreparedOnchainSend.lower(value)
 }
 
 public protocol RefundProtocol: AnyObject {
@@ -11829,6 +11991,31 @@ private struct FfiConverterSequenceTypeOnchainWalletAccountConfig: FfiConverterR
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterSequenceTypeOutPoint: FfiConverterRustBuffer {
+    typealias SwiftType = [OutPoint]
+
+    static func write(_ value: [OutPoint], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOutPoint.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OutPoint] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OutPoint]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeOutPoint.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceTypePaymentDetails: FfiConverterRustBuffer {
     typealias SwiftType = [PaymentDetails]
 
@@ -13696,6 +13883,12 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_onchainpayment_new_address_info_for_type() != 62171 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_all_to_address() != 24606 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_onchainpayment_prepare_send_to_address() != 30767 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_onchainpayment_reveal_receive_addresses_to() != 44189 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13715,6 +13908,21 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_onchainpayment_send_to_address_with_broadcast_result() != 16277 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_preparedonchainsend_broadcast() != 61032 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_preparedonchainsend_inputs() != 15567 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats() != 3319 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats() != 47776 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_preparedonchainsend_txid() != 17819 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_refund_absolute_expiry_seconds() != 43722 {

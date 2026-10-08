@@ -1,4 +1,4 @@
-# 0.7.0-rc.68 (Synonym Fork)
+# 0.7.0-rc.71 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -76,6 +76,11 @@
 
 ## Synonym Fork Additions
 
+- Expose the exact prepared transaction fee so applications can validate the approved total before broadcast.
+- Prevent concurrent prepared payment broadcasts from blocking Tokio worker progress.
+- Release unused change reservations when the last never-submitted prepared payment handle is dropped.
+- Keep prepared payments retryable after definite pre-dispatch failure and release unused change addresses when discarding invalid fixed-amount candidates.
+- Added signed on-chain payment preparation so apps can persist transaction receipts before broadcast and constrain recovery to the original amount and inputs.
 - Added explicit accepted, rejected, or unknown broadcast outcomes with transaction IDs for on-chain sends.
 - Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.
   Stale channel-monitor mismatches now fail closed with `BuildError::DangerousValue`.

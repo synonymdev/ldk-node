@@ -1318,6 +1318,15 @@ impl Wallet {
 		})
 	}
 
+	pub(crate) fn transaction_fee_sats(&self, tx: &Transaction) -> Result<u64, Error> {
+		self.inner
+			.lock()
+			.unwrap()
+			.calculate_tx_fee(tx)
+			.map(|fee| fee.to_sat())
+			.map_err(|_| Error::WalletOperationFailed)
+	}
+
 	pub(crate) fn cancel_tx(&self, tx: &Transaction) -> Result<(), Error> {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		locked_wallet.cancel_tx(tx).map_err(|e| {

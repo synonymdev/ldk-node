@@ -642,6 +642,12 @@ interface OnchainPaymentInterface {
     fun `newAddressInfoForType`(`addressType`: AddressType): AddressInfo
 
     @Throws(NodeException::class)
+    fun `prepareSendAllToAddress`(`address`: Address, `retainReserves`: kotlin.Boolean, `feeRate`: FeeRate?): PreparedOnchainSend
+
+    @Throws(NodeException::class)
+    fun `prepareSendToAddress`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): PreparedOnchainSend
+
+    @Throws(NodeException::class)
     fun `revealReceiveAddressesTo`(`addressType`: AddressType, `index`: kotlin.UInt)
 
     @Throws(NodeException::class)
@@ -661,6 +667,25 @@ interface OnchainPaymentInterface {
 
     @Throws(NodeException::class)
     fun `sendToAddressWithBroadcastResult`(`address`: Address, `amountSats`: kotlin.ULong, `feeRate`: FeeRate?, `utxosToSpend`: List<SpendableUtxo>?): OnchainSendResult
+
+    companion object
+}
+
+
+
+
+interface PreparedOnchainSendInterface {
+
+    @Throws(NodeException::class)
+    fun `broadcast`(): OnchainSendResult
+
+    fun `inputs`(): List<OutPoint>
+
+    fun `miningFeeSats`(): kotlin.ULong
+
+    fun `recipientAmountSats`(): kotlin.ULong
+
+    fun `txid`(): Txid
 
     companion object
 }
@@ -2295,6 +2320,8 @@ enum class WordCount {
     WORDS24;
     companion object
 }
+
+
 
 
 

@@ -391,6 +391,10 @@ interface OnchainPayment {
     [Throws=NodeError]
     OnchainSendResult send_all_to_address_with_broadcast_result([ByRef]Address address, boolean retain_reserves, FeeRate? fee_rate);
     [Throws=NodeError]
+    PreparedOnchainSend prepare_send_to_address([ByRef]Address address, u64 amount_sats, FeeRate? fee_rate, sequence<SpendableUtxo>? utxos_to_spend);
+    [Throws=NodeError]
+    PreparedOnchainSend prepare_send_all_to_address([ByRef]Address address, boolean retain_reserves, FeeRate? fee_rate);
+    [Throws=NodeError]
     Txid bump_fee_by_rbf([ByRef]Txid txid, FeeRate fee_rate);
     [Throws=NodeError]
     Txid accelerate_by_cpfp([ByRef]Txid txid, FeeRate? fee_rate, Address? destination_address);
@@ -1122,3 +1126,12 @@ typedef string LSPS1OrderId;
 
 [Custom]
 typedef string LSPSDateTime;
+
+interface PreparedOnchainSend {
+    Txid txid();
+    sequence<OutPoint> inputs();
+    u64 recipient_amount_sats();
+    u64 mining_fee_sats();
+    [Throws=NodeError]
+    OnchainSendResult broadcast();
+};
