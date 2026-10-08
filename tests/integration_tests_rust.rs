@@ -3588,3 +3588,65 @@ async fn electrum_connection_timeout_above_max_is_capped() {
 	node.sync_wallets().unwrap();
 	node.stop().unwrap();
 }
+
+// A node that cannot announce channels (no node alias, as in the mobile apps) only accepts
+// unannounced channels. It must let the counterparty put the whole channel value in flight
+// instead of LDK's default of 10%, otherwise a single payment above that limit cannot be
+// received even though the channel has the capacity.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn inbound_htlc_in_flight_limit_for_unannounced_node() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+
+	let config_a = random_config(true);
+	let node_a = setup_node(&chain_source, config_a, None);
+
+	let mut config_b = random_config(true);
+	config_b.node_config.node_alias = None;
+	let node_b = setup_node(&chain_source, config_b, None);
+
+	let addr_a = node_a.onchain_payment().new_address().unwrap();
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![addr_a],
+		Amount::from_sat(2_000_000),
+	)
+	.await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+
+	let channel_value_sat = 1_000_000;
+	open_channel(&node_a, &node_b, channel_value_sat, false, &electrsd).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+	expect_channel_ready_event!(node_a, node_b.node_id());
+	expect_channel_ready_event!(node_b, node_a.node_id());
+
+	let description =
+		Bolt11InvoiceDescription::Direct(Description::new(String::from("inbound")).unwrap());
+
+	// 9% of the channel value is below LDK's default limit and always worked.
+	let below_limit_msat = channel_value_sat * 1000 * 9 / 100;
+	let invoice = node_b
+		.bolt11_payment()
+		.receive(below_limit_msat, &description.clone().into(), 9217)
+		.unwrap();
+	let payment_id = node_a.bolt11_payment().send(&invoice, None).unwrap();
+	expect_payment_successful_event!(node_a, Some(payment_id), None);
+	expect_payment_received_event!(node_b, below_limit_msat);
+
+	// 20% of the channel value used to fail because node B advertised a 10% in-flight limit.
+	let above_limit_msat = channel_value_sat * 1000 * 20 / 100;
+	let invoice = node_b
+		.bolt11_payment()
+		.receive(above_limit_msat, &description.clone().into(), 9217)
+		.unwrap();
+	let payment_id = node_a
+		.bolt11_payment()
+		.send(&invoice, None)
+		.expect("a payment above 10% of the channel value must be routable");
+	expect_payment_successful_event!(node_a, Some(payment_id), None);
+	expect_payment_received_event!(node_b, above_limit_msat);
+}
