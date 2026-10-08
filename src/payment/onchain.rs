@@ -8,6 +8,7 @@
 //! Holds a payment handler allowing to send and receive on-chain payments.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use bitcoin::{Address, OutPoint, Transaction, Txid};
@@ -164,10 +165,13 @@ fn validate_signed_inputs(tx: &Transaction, outpoints: &[OutPoint]) -> Result<()
 /// An in-memory signed candidate that has not been submitted by preparation.
 ///
 /// Persist its actual txid, inputs and recipient amount under the original wallet/payment
-/// identity before calling [`Self::broadcast`]. Dropping this object does not broadcast.
+/// identity before calling [`Self::broadcast`]. Dropping the last handle before submission
+/// releases its unused change reservation and never broadcasts.
 /// It does not persist a transaction journal or restore signed transactions after restart.
 pub struct PreparedOnchainSend {
 	tx: Transaction,
+	wallet: Arc<Wallet>,
+	submission_started: AtomicBool,
 	recipient_amount_sats: u64,
 	runtime: Arc<RuntimeControl>,
 	chain_source: Arc<ChainSource>,
@@ -212,9 +216,13 @@ impl PreparedOnchainSend {
 			check_send_context(&self.is_running)?;
 			let source = Arc::clone(&self.chain_source);
 			let tx = self.tx.clone();
+			let submission_started = &self.submission_started;
 			let result = self
 				.runtime
-				.try_block_on(async move { source.broadcast_user_transaction(&tx).await })
+				.try_block_on(async move {
+					submission_started.store(true, Ordering::Release);
+					source.broadcast_user_transaction(&tx).await
+				})
 				.and_then(|response| response)
 				.map(|response| match response {
 					BroadcastResponse::Accepted => {
@@ -230,6 +238,15 @@ impl PreparedOnchainSend {
 			}
 			result
 		})
+	}
+}
+
+impl Drop for PreparedOnchainSend {
+	fn drop(&mut self) {
+		// A submitted candidate may still settle even after rejection or response loss.
+		if !self.submission_started.load(Ordering::Acquire) {
+			let _ = self.wallet.cancel_tx(&self.tx);
+		}
 	}
 }
 
@@ -271,6 +288,8 @@ impl OnchainPayment {
 			.ok_or(Error::OnchainTxCreationFailed)?;
 		Ok(Arc::new(PreparedOnchainSend {
 			tx,
+			wallet: Arc::clone(&self.wallet),
+			submission_started: AtomicBool::new(false),
 			recipient_amount_sats,
 			runtime: Arc::clone(&self.runtime),
 			chain_source: Arc::clone(&self.chain_source),
@@ -1100,6 +1119,34 @@ mod prepared_send_tests {
 	}
 
 	#[test]
+	fn dropped_unsigned_preparations_release_only_the_last_handles_change() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let first = payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+		let change = first
+			.tx
+			.output
+			.iter()
+			.find(|output| output.script_pubkey != f.recipient().script_pubkey())
+			.unwrap()
+			.script_pubkey
+			.clone();
+		let last_handle = Arc::clone(&first);
+		drop(first);
+		let second = payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+		assert!(second.tx.output.iter().all(|output| output.script_pubkey != change));
+		drop(second);
+		drop(last_handle);
+		for _ in 0..25 {
+			let next =
+				payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+			assert!(next.tx.output.iter().any(|output| output.script_pubkey == change));
+			drop(next);
+		}
+		f.assert_no_dispatch();
+	}
+
+	#[test]
 	fn prepared_initial_max_preserves_native_drain_and_reserve_amounts() {
 		let f = Fixture::new();
 		let payment = f.node.onchain_payment();
@@ -1397,6 +1444,21 @@ mod prepared_send_tests {
 				_ => matches!(result, OnchainSendResult::Unknown { txid: id } if id == txid),
 			});
 			server.join().unwrap();
+			let reserved_change = prepared
+				.tx
+				.output
+				.iter()
+				.find(|output| output.script_pubkey != f.recipient().script_pubkey())
+				.unwrap()
+				.script_pubkey
+				.clone();
+			drop(prepared);
+			let next = f
+				.node
+				.onchain_payment()
+				.prepare_send_to_address(&f.recipient(), 50_000, fee(), None)
+				.unwrap();
+			assert!(next.tx.output.iter().all(|output| output.script_pubkey != reserved_change));
 			f.listener.set_nonblocking(true).unwrap();
 			f.assert_no_dispatch();
 		}
