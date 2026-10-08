@@ -76,8 +76,8 @@
 
 ## Synonym Fork Additions
 
+- Prevent concurrent prepared payment broadcasts from blocking Tokio worker progress.
 - Keep prepared payments retryable after definite pre-dispatch failure and release unused change addresses when discarding invalid fixed-amount candidates.
-
 - Added signed on-chain payment preparation so apps can persist transaction receipts before broadcast and constrain recovery to the original amount and inputs.
 - Added explicit accepted, rejected, or unknown broadcast outcomes with transaction IDs for on-chain sends.
 - Removed `set_accept_stale_channel_monitors` and the patched Synonym `rust-lightning` branch.

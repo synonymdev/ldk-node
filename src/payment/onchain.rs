@@ -198,28 +198,38 @@ impl PreparedOnchainSend {
 	/// neither `Rejected` nor `Unknown` authorizes clearing the original payment guard.
 	/// The caller must durably record candidate provenance before its first call.
 	pub fn broadcast(&self) -> Result<OnchainSendResult, Error> {
-		let mut cached = self.result.lock().unwrap();
-		if let Some(result) = cached.as_ref() {
-			return result.clone();
+		if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+			handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread
+		}) {
+			return Err(Error::PaymentSendingFailed);
 		}
-		check_send_context(&self.is_running)?;
-		let source = Arc::clone(&self.chain_source);
-		let tx = self.tx.clone();
-		let result = self
-			.runtime
-			.try_block_on(async move { source.broadcast_user_transaction(&tx).await })
-			.and_then(|response| response)
-			.map(|response| match response {
-				BroadcastResponse::Accepted => OnchainSendResult::Accepted { txid: self.txid() },
-				BroadcastResponse::Rejected(reason) => {
-					OnchainSendResult::Rejected { txid: self.txid(), reason }
-				},
-				BroadcastResponse::Unknown => OnchainSendResult::Unknown { txid: self.txid() },
-			});
-		if result.is_ok() {
-			*cached = Some(result.clone());
-		}
-		result
+		// Yield the Tokio worker before waiting for another caller's submission lock.
+		tokio::task::block_in_place(|| {
+			let mut cached = self.result.lock().unwrap();
+			if let Some(result) = cached.as_ref() {
+				return result.clone();
+			}
+			check_send_context(&self.is_running)?;
+			let source = Arc::clone(&self.chain_source);
+			let tx = self.tx.clone();
+			let result = self
+				.runtime
+				.try_block_on(async move { source.broadcast_user_transaction(&tx).await })
+				.and_then(|response| response)
+				.map(|response| match response {
+					BroadcastResponse::Accepted => {
+						OnchainSendResult::Accepted { txid: self.txid() }
+					},
+					BroadcastResponse::Rejected(reason) => {
+						OnchainSendResult::Rejected { txid: self.txid(), reason }
+					},
+					BroadcastResponse::Unknown => OnchainSendResult::Unknown { txid: self.txid() },
+				});
+			if result.is_ok() {
+				*cached = Some(result.clone());
+			}
+			result
+		})
 	}
 }
 
@@ -1354,6 +1364,7 @@ mod prepared_send_tests {
 					},
 					_ => "malformed".to_owned(),
 				};
+				std::thread::sleep(Duration::from_millis(100));
 				write!(
 					stream,
 					"HTTP/1.1 {} result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1363,10 +1374,20 @@ mod prepared_send_tests {
 				)
 				.unwrap();
 			});
-			let other = Arc::clone(&prepared);
-			let concurrent = std::thread::spawn(move || other.broadcast());
-			let result = prepared.broadcast().unwrap();
-			assert_eq!(concurrent.join().unwrap().unwrap(), result);
+			let runtime = tokio::runtime::Builder::new_multi_thread()
+				.worker_threads(1)
+				.enable_all()
+				.build()
+				.unwrap();
+			let first = Arc::clone(&prepared);
+			let second = Arc::clone(&prepared);
+			let result = runtime.block_on(async move {
+				let first = tokio::spawn(async move { first.broadcast() });
+				let second = tokio::spawn(async move { second.broadcast() });
+				let result = first.await.unwrap().unwrap();
+				assert_eq!(second.await.unwrap().unwrap(), result);
+				result
+			});
 			assert_eq!(prepared.broadcast().unwrap(), result);
 			assert!(match body_kind {
 				"accepted" =>
