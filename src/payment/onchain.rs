@@ -173,6 +173,7 @@ pub struct PreparedOnchainSend {
 	wallet: Arc<Wallet>,
 	submission_started: AtomicBool,
 	recipient_amount_sats: u64,
+	mining_fee_sats: u64,
 	runtime: Arc<RuntimeControl>,
 	chain_source: Arc<ChainSource>,
 	is_running: Arc<RwLock<bool>>,
@@ -193,6 +194,12 @@ impl PreparedOnchainSend {
 	/// Return the sum of signed outputs paying the requested recipient script.
 	pub fn recipient_amount_sats(&self) -> u64 {
 		self.recipient_amount_sats
+	}
+
+	/// Return the exact signed transaction fee, calculated from the wallet's input values.
+	/// This value is available before submission so callers can bound total wallet spend.
+	pub fn mining_fee_sats(&self) -> u64 {
+		self.mining_fee_sats
 	}
 
 	/// Submit this exact candidate through the configured backend once.
@@ -286,11 +293,19 @@ impl OnchainPayment {
 			.filter(|output| output.script_pubkey == recipient_script)
 			.try_fold(0u64, |total, output| total.checked_add(output.value.to_sat()))
 			.ok_or(Error::OnchainTxCreationFailed)?;
+		let mining_fee_sats = match self.wallet.transaction_fee_sats(&tx) {
+			Ok(fee) => fee,
+			Err(error) => {
+				let _ = self.wallet.cancel_tx(&tx);
+				return Err(error);
+			},
+		};
 		Ok(Arc::new(PreparedOnchainSend {
 			tx,
 			wallet: Arc::clone(&self.wallet),
 			submission_started: AtomicBool::new(false),
 			recipient_amount_sats,
+			mining_fee_sats,
 			runtime: Arc::clone(&self.runtime),
 			chain_source: Arc::clone(&self.chain_source),
 			is_running: Arc::clone(&self.is_running),
@@ -845,6 +860,8 @@ impl OnchainPayment {
 	/// signed transaction spends exactly that set. None permits initial automatic selection.
 	/// Persist the actual candidate receipt under the original payment identity before broadcast.
 	/// Recovery must pass the ORIGINAL input set and recipient amount, never fresh selection.
+	/// Construction can still fail at the original fee if a preceding Max drain spent
+	/// untrusted funds or reserves excluded by fixed-amount spendable policy.
 	/// If the signed recipient-script output sum differs from `amount_sats` (for example,
 	/// when the recipient aliases change), returns `OnchainTxCreationFailed` before dispatch.
 	pub fn prepare_send_to_address(
@@ -1099,6 +1116,14 @@ mod prepared_send_tests {
 		assert_eq!(prepared.inputs(), vec![original[0].outpoint]);
 		assert_eq!(prepared.txid(), prepared.tx.compute_txid());
 		assert_eq!(prepared.recipient_amount_sats(), 50_000);
+		let input_total: u64 = prepared
+			.inputs()
+			.iter()
+			.map(|input| if input.vout == 0 { 100_000 } else { 200_000 })
+			.sum();
+		let output_total: u64 = prepared.tx.output.iter().map(|output| output.value.to_sat()).sum();
+		assert_eq!(prepared.mining_fee_sats(), input_total - output_total);
+		assert!(prepared.mining_fee_sats() > 0);
 		assert!(prepared.tx.input.iter().all(|input| !input.witness.is_empty()));
 		let successor = payment
 			.prepare_send_to_address(

@@ -1131,6 +1131,7 @@ interface PreparedOnchainSend {
     Txid txid();
     sequence<OutPoint> inputs();
     u64 recipient_amount_sats();
+    u64 mining_fee_sats();
     [Throws=NodeError]
     OnchainSendResult broadcast();
 };

@@ -1,4 +1,4 @@
-# 0.7.0-rc.70 (Synonym Fork)
+# 0.7.0-rc.71 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -76,6 +76,7 @@
 
 ## Synonym Fork Additions
 
+- Expose the exact prepared transaction fee so applications can validate the approved total before broadcast.
 - Prevent concurrent prepared payment broadcasts from blocking Tokio worker progress.
 - Release unused change reservations when the last never-submitted prepared payment handle is dropped.
 - Keep prepared payments retryable after definite pre-dispatch failure and release unused change addresses when discarding invalid fixed-amount candidates.

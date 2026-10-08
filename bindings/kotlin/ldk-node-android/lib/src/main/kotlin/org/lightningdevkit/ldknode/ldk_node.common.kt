@@ -681,6 +681,8 @@ interface PreparedOnchainSendInterface {
 
     fun `inputs`(): List<OutPoint>
 
+    fun `miningFeeSats`(): kotlin.ULong
+
     fun `recipientAmountSats`(): kotlin.ULong
 
     fun `txid`(): Txid

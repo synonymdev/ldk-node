@@ -3724,6 +3724,8 @@ public protocol PreparedOnchainSendProtocol: AnyObject {
 
     func inputs() -> [OutPoint]
 
+    func miningFeeSats() -> UInt64
+
     func recipientAmountSats() -> UInt64
 
     func txid() -> Txid
@@ -3787,6 +3789,12 @@ open class PreparedOnchainSend:
     open func inputs() -> [OutPoint] {
         return try! FfiConverterSequenceTypeOutPoint.lift(try! rustCall {
             uniffi_ldk_node_fn_method_preparedonchainsend_inputs(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func miningFeeSats() -> UInt64 {
+        return try! FfiConverterUInt64.lift(try! rustCall {
+            uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats(self.uniffiClonePointer(), $0)
         })
     }
 
@@ -13906,6 +13914,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_preparedonchainsend_inputs() != 15567 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats() != 3319 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats() != 47776 {

@@ -859,6 +859,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_preparedonchainsend_inputs() != 15567:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats() != 3319:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats() != 47776:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_preparedonchainsend_txid() != 17819:
@@ -2476,6 +2478,11 @@ _UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_inputs.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_inputs.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats.restype = ctypes.c_uint64
 _UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_recipient_amount_sats.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -3550,6 +3557,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_broadcast.restype
 _UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_inputs.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_inputs.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats.restype = ctypes.c_uint16
@@ -7523,6 +7533,8 @@ class PreparedOnchainSendProtocol(typing.Protocol):
         raise NotImplementedError
     def inputs(self, ):
         raise NotImplementedError
+    def mining_fee_sats(self, ):
+        raise NotImplementedError
     def recipient_amount_sats(self, ):
         raise NotImplementedError
     def txid(self, ):
@@ -7566,6 +7578,15 @@ class PreparedOnchainSend:
     def inputs(self, ) -> "typing.List[OutPoint]":
         return _UniffiConverterSequenceTypeOutPoint.lift(
             _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_inputs,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
+    def mining_fee_sats(self, ) -> "int":
+        return _UniffiConverterUInt64.lift(
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats,self._uniffi_clone_pointer(),)
         )
 
 

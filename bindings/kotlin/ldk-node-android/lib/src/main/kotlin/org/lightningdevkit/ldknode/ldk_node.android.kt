@@ -1572,6 +1572,8 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2810,6 +2812,10 @@ internal interface UniffiLib : Library {
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long
     fun uniffi_ldk_node_fn_method_preparedonchainsend_recipient_amount_sats(
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -3592,6 +3598,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_preparedonchainsend_inputs(
     ): Short
+    fun uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats(
+    ): Short
     fun uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats(
     ): Short
     fun uniffi_ldk_node_checksum_method_preparedonchainsend_txid(
@@ -4260,6 +4268,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_preparedonchainsend_inputs() != 15567.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_preparedonchainsend_mining_fee_sats() != 3319.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_preparedonchainsend_recipient_amount_sats() != 47776.toShort()) {
@@ -8963,6 +8974,17 @@ open class PreparedOnchainSend: Disposable, PreparedOnchainSendInterface {
         return FfiConverterSequenceTypeOutPoint.lift(callWithPointer {
             uniffiRustCall { uniffiRustCallStatus ->
                 UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_preparedonchainsend_inputs(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+    override fun `miningFeeSats`(): kotlin.ULong {
+        return FfiConverterULong.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_preparedonchainsend_mining_fee_sats(
                     it,
                     uniffiRustCallStatus,
                 )
