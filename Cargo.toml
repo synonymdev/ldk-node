@@ -33,7 +33,7 @@ panic = 'abort'     # Abort on panic
 default = []
 
 [dependencies]
-lightning = { version = "0.2.0", features = ["std"] }
+lightning = { version = "0.2.7", features = ["std"] }
 lightning-types = { version = "0.3.0" }
 lightning-invoice = { version = "0.34.0", features = ["std"] }
 lightning-net-tokio = { version = "0.2.0" }
@@ -41,8 +41,8 @@ lightning-persister = { version = "0.2.0", features = ["tokio"] }
 lightning-background-processor = { version = "0.2.0" }
 lightning-rapid-gossip-sync = { version = "0.2.0" }
 lightning-block-sync = { version = "0.2.0", features = ["rest-client", "rpc-client", "tokio"] }
-lightning-transaction-sync = { version = "0.2.0", features = ["esplora-async-https", "time", "electrum-rustls-ring"] }
-lightning-liquidity = { version = "0.2.0", features = ["std"] }
+lightning-transaction-sync = { version = "0.2.7", features = ["esplora-async-https", "time", "electrum-rustls-ring"] }
+lightning-liquidity = { version = "0.2.7", features = ["std"] }
 lightning-macros = { version = "0.2.0" }
 
 bdk_chain = { version = "0.23.0", default-features = false, features = ["std"] }
