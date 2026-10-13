@@ -3468,6 +3468,30 @@ mod tests {
 		assert!(!signed.input[1].witness.is_empty(), "own Taproot input is signed");
 	}
 
+	#[test]
+	fn signing_rejects_a_psbt_with_excess_input_maps() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		let funding_tx = fund_wallet(&mut wallet, Amount::from_sat(100_000), 7);
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
+			input: vec![TxIn {
+				previous_output: OutPoint { txid: funding_tx.compute_txid(), vout: 0 },
+				..Default::default()
+			}],
+			output: vec![TxOut {
+				value: Amount::from_sat(90_000),
+				script_pubkey: recipient_script(),
+			}],
+		};
+		let mut psbt = bitcoin::psbt::Psbt::from_unsigned_tx(tx).unwrap();
+		psbt.inputs.push(bitcoin::psbt::Input::default());
+		assert_eq!(aggregate.sign_psbt_all(psbt), Err(Error::OnchainTxSigningFailed));
+	}
+
 	// An input one of our wallets owns but cannot sign must still fail, so a send never goes
 	// out with one of our own inputs unsigned.
 	#[test]

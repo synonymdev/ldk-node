@@ -48,6 +48,10 @@ where
 	K: Eq + Hash + Copy + Debug,
 	P: WalletPersister,
 {
+	if psbt.inputs.len() > psbt.unsigned_tx.input.len() {
+		log::error!("PSBT has more input maps than transaction inputs");
+		return Err(Error::OnchainTxSigningFailed);
+	}
 	populate_psbt_inputs_from_wallets(&mut psbt, wallets);
 	let owned: Vec<bool> =
 		(0..psbt.inputs.len()).map(|i| is_owned_input(&psbt, i, wallets)).collect();
