@@ -3385,4 +3385,116 @@ mod tests {
 		assert!(tips.contains(&(block1_a.block_hash(), 1)));
 		assert!(tips.contains(&(block1_b.block_hash(), 1)));
 	}
+
+	// Repro: LDK hands the wallet PSBTs that also spend inputs it does not own (the splice
+	// shared funding input, the anchor output, an HTLC output) and signs those itself after
+	// the wallet returns. The wallet must sign its own inputs and leave the others alone.
+	#[test]
+	fn repro_signing_leaves_a_foreign_input_unsigned() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		let funding_tx = fund_wallet(&mut wallet, Amount::from_sat(100_000), 7);
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let own = TxIn {
+			previous_output: OutPoint { txid: funding_tx.compute_txid(), vout: 0 },
+			..Default::default()
+		};
+		let foreign = TxIn {
+			previous_output: OutPoint { txid: Txid::from_byte_array([9; 32]), vout: 1 },
+			..Default::default()
+		};
+		let out = TxOut { value: Amount::from_sat(90_000), script_pubkey: recipient_script() };
+		let only_own = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
+			input: vec![own.clone()],
+			output: vec![out.clone()],
+		};
+		let with_foreign = Transaction { input: vec![own, foreign], ..only_own.clone() };
+
+		assert!(aggregate.sign_owned_inputs(only_own).is_ok(), "control: wallet-only tx signs");
+		let r = aggregate.sign_owned_inputs(with_foreign);
+		assert!(r.is_ok(), "tx with one foreign input: {:?}", r.err());
+		let signed = r.unwrap();
+		assert!(!signed.input[0].witness.is_empty(), "own input is signed");
+		assert!(signed.input[1].witness.is_empty(), "foreign input is left for LDK");
+	}
+
+	// An input one of our wallets owns but cannot sign must still fail, so a send never goes
+	// out with one of our own inputs unsigned.
+	#[test]
+	fn signing_fails_when_an_owned_input_stays_unsigned() {
+		let mut persister = NoopPersister;
+		let mut signer = create_empty_wallet(&mut persister);
+		let funding_tx = fund_wallet(&mut signer, Amount::from_sat(100_000), 7);
+		let mut watch_only = Wallet::create(
+			signer.public_descriptor(KeychainKind::External).to_string(),
+			signer.public_descriptor(KeychainKind::Internal).to_string(),
+		)
+		.network(Network::Regtest)
+		.create_wallet(&mut persister)
+		.unwrap();
+		watch_only.reveal_next_address(KeychainKind::External);
+		watch_only.apply_unconfirmed_txs([(funding_tx.clone(), 0)]);
+		let mut aggregate = AggregateWallet::<u8, _>::new(watch_only, persister, 0, vec![]);
+
+		let own = TxIn {
+			previous_output: OutPoint { txid: funding_tx.compute_txid(), vout: 0 },
+			..Default::default()
+		};
+		let foreign = TxIn {
+			previous_output: OutPoint { txid: Txid::from_byte_array([9; 32]), vout: 1 },
+			..Default::default()
+		};
+		let tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
+			input: vec![own, foreign],
+			output: vec![TxOut {
+				value: Amount::from_sat(90_000),
+				script_pubkey: recipient_script(),
+			}],
+		};
+		assert_eq!(aggregate.sign_owned_inputs(tx), Err(Error::OnchainTxSigningFailed));
+	}
+
+	// Repro, LDK-shaped: BumpTransactionEventHandler builds the anchor/HTLC PSBT with the foreign
+	// input first, sets its witness_utxo, and calls WalletSource::sign_psbt (-> sign_psbt_all).
+	#[test]
+	fn repro_sign_psbt_all_signs_own_input_beside_ldk_shaped_foreign_input() {
+		let mut persister = NoopPersister;
+		let mut wallet = create_empty_wallet(&mut persister);
+		let funding_tx = fund_wallet(&mut wallet, Amount::from_sat(100_000), 7);
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let anchor = TxIn {
+			previous_output: OutPoint { txid: Txid::from_byte_array([9; 32]), vout: 1 },
+			..Default::default()
+		};
+		let own = TxIn {
+			previous_output: OutPoint { txid: funding_tx.compute_txid(), vout: 0 },
+			..Default::default()
+		};
+		let tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
+			input: vec![anchor, own],
+			output: vec![TxOut {
+				value: Amount::from_sat(90_000),
+				script_pubkey: recipient_script(),
+			}],
+		};
+		let mut psbt = bitcoin::psbt::Psbt::from_unsigned_tx(tx).unwrap();
+		psbt.inputs[0].witness_utxo = Some(TxOut {
+			value: Amount::from_sat(330),
+			script_pubkey: ScriptBuf::new_p2wsh(&bitcoin::WScriptHash::from_byte_array([1; 32])),
+		});
+		psbt.inputs[1].witness_utxo = Some(funding_tx.output[0].clone());
+		let r = aggregate.sign_psbt_all(psbt);
+		assert!(r.is_ok(), "LDK-shaped PSBT with a foreign anchor input: {:?}", r.err());
+		let signed = r.unwrap();
+		assert!(signed.input[0].witness.is_empty(), "foreign anchor input is left for LDK");
+		assert!(!signed.input[1].witness.is_empty(), "own input is signed");
+	}
 }
