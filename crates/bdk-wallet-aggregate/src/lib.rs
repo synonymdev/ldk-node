@@ -3421,6 +3421,53 @@ mod tests {
 		assert!(signed.input[1].witness.is_empty(), "foreign input is left for LDK");
 	}
 
+	// Taproot signing commits to every input's prevout, so a Taproot wallet signs its own input
+	// beside a foreign one once the caller sets the foreign input's witness_utxo, as the splice
+	// handler does for the channel funding input.
+	#[test]
+	fn taproot_wallet_signs_own_input_beside_a_foreign_input_with_known_prevout() {
+		let mut persister = NoopPersister;
+		let xprv = test_xprv();
+		let mut wallet = PersistedWallet::create(
+			&mut persister,
+			Wallet::create(
+				bdk_wallet::template::Bip86(xprv, KeychainKind::External),
+				bdk_wallet::template::Bip86(xprv, KeychainKind::Internal),
+			)
+			.network(Network::Regtest),
+		)
+		.unwrap();
+		let funding_tx = fund_wallet(&mut wallet, Amount::from_sat(100_000), 7);
+		assert!(funding_tx.output[0].script_pubkey.is_p2tr());
+		let mut aggregate = AggregateWallet::<u8, _>::new(wallet, persister, 0, vec![]);
+
+		let shared = TxIn {
+			previous_output: OutPoint { txid: Txid::from_byte_array([9; 32]), vout: 1 },
+			..Default::default()
+		};
+		let own = TxIn {
+			previous_output: OutPoint { txid: funding_tx.compute_txid(), vout: 0 },
+			..Default::default()
+		};
+		let tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
+			input: vec![shared, own],
+			output: vec![TxOut {
+				value: Amount::from_sat(4_090_000),
+				script_pubkey: recipient_script(),
+			}],
+		};
+		let mut psbt = bitcoin::psbt::Psbt::from_unsigned_tx(tx).unwrap();
+		psbt.inputs[0].witness_utxo = Some(TxOut {
+			value: Amount::from_sat(4_000_000),
+			script_pubkey: p2wsh_recipient_script(),
+		});
+		let signed = aggregate.sign_psbt_all(psbt).unwrap();
+		assert!(signed.input[0].witness.is_empty(), "shared input is left for LDK");
+		assert!(!signed.input[1].witness.is_empty(), "own Taproot input is signed");
+	}
+
 	// An input one of our wallets owns but cannot sign must still fail, so a send never goes
 	// out with one of our own inputs unsigned.
 	#[test]

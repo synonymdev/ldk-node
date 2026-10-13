@@ -27,7 +27,7 @@ use common::{
 	random_listening_addresses, setup_bitcoind_and_electrsd, setup_builder, setup_node,
 	setup_node_for_async_payments, setup_two_nodes, wait_for_tx, TestChainSource, TestSyncStore,
 };
-use ldk_node::config::{AsyncPaymentsRole, ElectrumSyncConfig, EsploraSyncConfig};
+use ldk_node::config::{AddressType, AsyncPaymentsRole, ElectrumSyncConfig, EsploraSyncConfig};
 use ldk_node::liquidity::LSPS2ServiceConfig;
 use ldk_node::payment::{
 	ConfirmationStatus, PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus,
@@ -1478,6 +1478,51 @@ async fn splice_channel() {
 		node_a.list_balances().total_lightning_balance_sats,
 		4_000_000 - closing_transaction_fee_sat - anchor_output_sat - splice_out_fee_sat
 	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn splice_in_from_taproot_wallet() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let node_a = setup_node(&chain_source, random_config(true), None);
+	let mut config_b = random_config(true);
+	config_b.node_config.address_type = AddressType::Taproot;
+	let node_b = setup_node(&chain_source, config_b, None);
+
+	let address_a = node_a.onchain_payment().new_address().unwrap();
+	let address_b = node_b.onchain_payment().new_address().unwrap();
+	assert!(address_b.script_pubkey().is_p2tr());
+	let premine_amount_sat = 5_000_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![address_a, address_b],
+		Amount::from_sat(premine_amount_sat),
+	)
+	.await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+
+	open_channel(&node_a, &node_b, 4_000_000, false, &electrsd).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+	expect_channel_ready_event!(node_a, node_b.node_id());
+	let user_channel_id_b = expect_channel_ready_event!(node_b, node_a.node_id());
+
+	// Node B's splice-in spends its Taproot UTXOs beside the channel funding output.
+	node_b.splice_in(&user_channel_id_b, node_a.node_id(), 4_000_000).unwrap();
+	expect_splice_pending_event!(node_a, node_b.node_id());
+	expect_splice_pending_event!(node_b, node_a.node_id());
+
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+	expect_channel_ready_event!(node_a, node_b.node_id());
+	expect_channel_ready_event!(node_b, node_a.node_id());
+
+	assert_eq!(node_b.list_balances().total_lightning_balance_sats, 4_000_000);
+	assert!(node_b.list_balances().total_onchain_balance_sats < premine_amount_sat - 4_000_000);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

@@ -2036,7 +2036,18 @@ impl Wallet {
 				locked_wallet
 					.tx_details(txin.previous_output.txid)
 					.map(|tx_details| tx_details.tx.deref().clone())
-					.map(|prevtx| FundingTxInput::new_p2wpkh(prevtx, txin.previous_output.vout))
+					.map(|prevtx| {
+						let vout = txin.previous_output.vout;
+						let is_p2tr = prevtx
+							.output
+							.get(vout as usize)
+							.is_some_and(|txout| txout.script_pubkey.is_p2tr());
+						if is_p2tr {
+							FundingTxInput::new_p2tr_key_spend(prevtx, vout)
+						} else {
+							FundingTxInput::new_p2wpkh(prevtx, vout)
+						}
+					})
 			})
 			.collect::<Result<Vec<_>, ()>>();
 
@@ -2157,11 +2168,25 @@ impl Wallet {
 		})
 	}
 
-	pub(crate) fn sign_owned_inputs(&self, unsigned_tx: Transaction) -> Result<Transaction, ()> {
-		let mut locked_wallet = self.inner.lock().unwrap();
-		locked_wallet.sign_owned_inputs(unsigned_tx).map_err(|e| {
-			log_error!(self.logger, "Failed to sign transaction: {}", e);
-		})
+	/// Signs the inputs of `unsigned_tx` our wallets own and leaves the others unsigned.
+	///
+	/// `known_prevouts` gives the outputs spent by inputs our wallets do not know, such as the
+	/// channel funding output a splice spends. Taproot signing commits to every input's prevout,
+	/// so a Taproot wallet cannot sign its own inputs unless all of them are known.
+	pub(crate) fn sign_owned_inputs(
+		&self, unsigned_tx: Transaction, known_prevouts: &[(OutPoint, TxOut)],
+	) -> Result<Transaction, ()> {
+		let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).map_err(|e| {
+			log_error!(self.logger, "Failed to create PSBT from unsigned tx: {}", e);
+		})?;
+		for (txin, psbt_input) in psbt.unsigned_tx.input.iter().zip(psbt.inputs.iter_mut()) {
+			if let Some((_, txout)) =
+				known_prevouts.iter().find(|(outpoint, _)| *outpoint == txin.previous_output)
+			{
+				psbt_input.witness_utxo = Some(txout.clone());
+			}
+		}
+		self.sign_psbt_inner(psbt)
 	}
 
 	fn sign_psbt_inner(&self, psbt: Psbt) -> Result<Transaction, ()> {

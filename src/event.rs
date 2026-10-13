@@ -1181,6 +1181,23 @@ where
 		}
 	}
 
+	/// The channel funding output a splice of `channel_id` spends as its shared input, which no
+	/// wallet of ours knows.
+	fn channel_funding_prevout(&self, channel_id: &ChannelId) -> Vec<(OutPoint, TxOut)> {
+		self.channel_manager
+			.list_channels()
+			.into_iter()
+			.find(|channel| channel.channel_id == *channel_id)
+			.and_then(|channel| {
+				let outpoint = channel.funding_txo?.into_bitcoin_outpoint();
+				let script_pubkey = channel.funding_redeem_script?.to_p2wsh();
+				let value = Amount::from_sat(channel.channel_value_satoshis);
+				Some((outpoint, TxOut { value, script_pubkey }))
+			})
+			.into_iter()
+			.collect()
+	}
+
 	pub async fn handle_event(&self, event: LdkEvent) -> Result<(), ReplayEvent> {
 		match event {
 			LdkEvent::FundingGenerationReady {
@@ -2390,7 +2407,10 @@ where
 				counterparty_node_id,
 				unsigned_transaction,
 				..
-			} => match self.wallet.sign_owned_inputs(unsigned_transaction) {
+			} => match self
+				.wallet
+				.sign_owned_inputs(unsigned_transaction, &self.channel_funding_prevout(&channel_id))
+			{
 				Ok(partially_signed_tx) => {
 					match self.channel_manager.funding_transaction_signed(
 						&channel_id,
