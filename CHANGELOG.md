@@ -1,7 +1,8 @@
-# 0.7.0-rc.71 (Synonym Fork)
+# 0.7.0-rc.72 (Synonym Fork)
 
 ## Bug Fixes
 
+- Bump `lightning`, `lightning-liquidity` and `lightning-transaction-sync` to 0.2.7, which fixes a counterparty-exploitable funds-theft vulnerability (lightningdevkit/rust-lightning#5057) and an Electrum sync denial of service (lightningdevkit/rust-lightning#4867).
 - Prevent native SIGABRT crashes when stopping and rebuilding the node by making runtime teardown deterministic.
 - Keep exported payment and liquidity handles from calling into a shutting-down runtime, refuse restart while detached work is still live, and stop Electrum confirm gating from blocking or panicking shutdown.
 - Add keep consumer rules for JNA types UniFFI needs under R8.
