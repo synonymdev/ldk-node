@@ -37,6 +37,10 @@ where
 }
 
 /// Sign a PSBT using every wallet that owns at least one of its inputs.
+///
+/// Inputs none of our wallets own (for example the channel funding input of a
+/// splice, an anchor or an HTLC output) are left unsigned for the caller to
+/// sign. Fails if an input one of our wallets owns remains unsigned.
 pub fn sign_psbt_all_wallets<K, P>(
 	mut psbt: Psbt, wallets: &mut HashMap<K, PersistedWallet<P>>,
 ) -> Result<Transaction, Error>
@@ -44,7 +48,13 @@ where
 	K: Eq + Hash + Copy + Debug,
 	P: WalletPersister,
 {
+	if psbt.inputs.len() > psbt.unsigned_tx.input.len() {
+		log::error!("PSBT has more input maps than transaction inputs");
+		return Err(Error::OnchainTxSigningFailed);
+	}
 	populate_psbt_inputs_from_wallets(&mut psbt, wallets);
+	let owned: Vec<bool> =
+		(0..psbt.inputs.len()).map(|i| is_owned_input(&psbt, i, wallets)).collect();
 
 	#[allow(deprecated)]
 	let sign_options = SignOptions { trust_witness_utxo: true, ..Default::default() };
@@ -62,8 +72,11 @@ where
 		}
 	}
 
-	if psbt.inputs.iter().any(|input| !is_finalized(input)) {
-		log::error!("At least one PSBT input remains unsigned");
+	if let Some(i) = (0..psbt.inputs.len()).find(|&i| owned[i] && !is_finalized(&psbt.inputs[i])) {
+		log::error!(
+			"PSBT input {:?} owned by one of our wallets remains unsigned",
+			psbt.unsigned_tx.input[i].previous_output
+		);
 		return Err(Error::OnchainTxSigningFailed);
 	}
 
@@ -81,6 +94,26 @@ where
 			Err(Error::OnchainTxSigningFailed)
 		},
 	}
+}
+
+/// Whether one of our wallets owns the output spent by PSBT input `index`.
+fn is_owned_input<K, P>(psbt: &Psbt, index: usize, wallets: &HashMap<K, PersistedWallet<P>>) -> bool
+where
+	K: Eq + Hash + Copy + Debug,
+	P: WalletPersister,
+{
+	let outpoint = psbt.unsigned_tx.input[index].previous_output;
+	let input = &psbt.inputs[index];
+	let prevout = input.witness_utxo.clone().or_else(|| {
+		input
+			.non_witness_utxo
+			.as_ref()
+			.and_then(|tx| tx.output.get(outpoint.vout as usize).cloned())
+	});
+	wallets.values().any(|wallet| {
+		wallet.get_utxo(outpoint).is_some()
+			|| prevout.as_ref().is_some_and(|txout| wallet.is_mine(txout.script_pubkey.clone()))
+	})
 }
 
 fn is_finalized(input: &psbt::Input) -> bool {
