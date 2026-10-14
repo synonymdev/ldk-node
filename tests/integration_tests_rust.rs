@@ -1526,6 +1526,87 @@ async fn splice_in_from_taproot_wallet() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn force_close_claims_pending_htlc_on_chain() {
+	do_force_close_claims_pending_htlc_on_chain(AddressType::NativeSegwit).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn force_close_claims_pending_htlc_on_chain_taproot() {
+	do_force_close_claims_pending_htlc_on_chain(AddressType::Taproot).await;
+}
+
+// Node B force-closes an untrusted anchor channel while an inbound HTLC is pending, then claims
+// it on-chain. The HTLC-success transaction needs fee inputs from B's wallet beside the HTLC
+// input it does not own.
+async fn do_force_close_claims_pending_htlc_on_chain(address_type_b: AddressType) {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let chain_source = TestChainSource::Esplora(&electrsd);
+	let node_a = setup_node(&chain_source, random_config(true), None);
+	let mut config_b = random_config(true);
+	config_b.node_config.address_type = address_type_b;
+	let node_b = setup_node(&chain_source, config_b, None);
+
+	let address_a = node_a.onchain_payment().new_address().unwrap();
+	let address_b = node_b.onchain_payment().new_address().unwrap();
+	let premine_amount_sat = 5_000_000;
+	premine_and_distribute_funds(
+		&bitcoind.client,
+		&electrsd.client,
+		vec![address_a, address_b],
+		Amount::from_sat(premine_amount_sat),
+	)
+	.await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+
+	open_channel(&node_a, &node_b, 4_000_000, false, &electrsd).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+	node_a.sync_wallets().unwrap();
+	node_b.sync_wallets().unwrap();
+	expect_channel_ready_event!(node_a, node_b.node_id());
+	let user_channel_id_b = expect_channel_ready_event!(node_b, node_a.node_id());
+
+	let htlc_amount_msat = 100_000_000;
+	let preimage = PaymentPreimage([44u8; 32]);
+	let payment_hash: PaymentHash = preimage.into();
+	let description =
+		Bolt11InvoiceDescription::Direct(Description::new(String::from("htlc")).unwrap()).into();
+	let invoice = node_b
+		.bolt11_payment()
+		.receive_for_hash(htlc_amount_msat, &description, 3600, payment_hash)
+		.unwrap();
+	let payment_id = node_a.bolt11_payment().send(&invoice, None).unwrap();
+	let claimable_amount_msat =
+		expect_payment_claimable_event!(node_b, payment_id, payment_hash, htlc_amount_msat);
+
+	node_b.force_close_channel(&user_channel_id_b, node_a.node_id(), None).unwrap();
+	expect_event!(node_a, ChannelClosed);
+	expect_event!(node_b, ChannelClosed);
+	node_b.bolt11_payment().claim_for_hash(payment_hash, claimable_amount_msat, preimage).unwrap();
+	expect_payment_received_event!(node_b, claimable_amount_msat);
+
+	// The HTLC output reaches B's wallet once the HTLC-success transaction confirms, its CSV delay
+	// passes and the sweep confirms.
+	let onchain_before_sat = node_b.list_balances().total_onchain_balance_sats;
+	let expected_sat = onchain_before_sat + htlc_amount_msat / 1000 - 20_000;
+	let mut claimed = false;
+	for _ in 0..40 {
+		generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
+		node_a.sync_wallets().unwrap();
+		node_b.sync_wallets().unwrap();
+		let balances = node_b.list_balances();
+		if balances.spendable_onchain_balance_sats >= expected_sat
+			&& balances.lightning_balances.is_empty()
+		{
+			claimed = true;
+			break;
+		}
+	}
+	assert!(claimed, "HTLC was not claimed on-chain: {:?}", node_b.list_balances());
+	expect_payment_successful_event!(node_a, Some(payment_id), None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn simple_bolt12_send_receive() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
