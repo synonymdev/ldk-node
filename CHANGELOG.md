@@ -1,7 +1,8 @@
-# 0.7.0-rc.74 (Synonym Fork)
+# 0.7.0-rc.75 (Synonym Fork)
 
 ## Bug Fixes
 
+- Reconnect the shared Electrum connection after the server drops it, so wallet sync, fee updates and broadcasts recover without a node restart (for example after a mobile app returns from the background), and retry a failed broadcast once on the new connection.
 - Fixed on-chain HTLC claims, anchor fee bumps and splices failing to sign when the transaction also spends inputs the on-chain wallet does not own.
 - Fixed splicing from a Taproot primary wallet.
 - Bump `lightning`, `lightning-liquidity` and `lightning-transaction-sync` to 0.2.7, which fixes a counterparty-exploitable funds-theft vulnerability (lightningdevkit/rust-lightning#5057) and an Electrum sync denial of service (lightningdevkit/rust-lightning#4867).
