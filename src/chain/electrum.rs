@@ -27,6 +27,7 @@ use lightning::log_warn;
 use lightning::util::ser::Writeable;
 use lightning_transaction_sync::ElectrumSyncClient;
 use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
 
 use super::{
 	non_final_rejection, periodically_archive_fully_resolved_monitors, BroadcastResponse,
@@ -736,9 +737,8 @@ struct ElectrumRuntimeClient {
 	// electrum-client only reconnects a `Client` once no other call holds it, and a call left
 	// waiting on a dropped connection can hold it forever. A call that finds the connection
 	// broken therefore replaces the whole client instead of relying on that internal reconnect.
-	main_client: RwLock<Arc<MainElectrumClient>>,
-	server_url: String,
-	electrum_config: ElectrumConfig,
+	main_client: Arc<RwLock<Arc<MainElectrumClient>>>,
+	connect_main: Arc<dyn Fn() -> Result<MainElectrumClient, ElectrumError> + Send + Sync>,
 	tx_sync: Arc<ElectrumSyncClient<Arc<Logger>>>,
 	runtime_handle: Handle,
 	config: Arc<Config>,
@@ -783,10 +783,11 @@ impl ElectrumRuntimeClient {
 				},
 			)?,
 		);
+		let connect_main =
+			Arc::new(move || MainElectrumClient::connect(&server_url, &electrum_config));
 		Ok(Self {
-			main_client: RwLock::new(Arc::new(main_client)),
-			server_url,
-			electrum_config,
+			main_client: Arc::new(RwLock::new(Arc::new(main_client))),
+			connect_main,
 			tx_sync,
 			runtime_handle,
 			config,
@@ -803,34 +804,37 @@ impl ElectrumRuntimeClient {
 		Arc::clone(&self.main_client.read().unwrap())
 	}
 
-	/// Replaces `failed` with a client on a new connection, unless another caller already did.
-	/// Returns whether the current client differs from `failed`.
-	async fn reconnect_main_client(&self, failed: &Arc<MainElectrumClient>) -> bool {
-		if !Arc::ptr_eq(&self.main_client(), failed) {
-			return true;
-		}
-		let (server_url, electrum_config) = (self.server_url.clone(), self.electrum_config.clone());
-		let connected = self
-			.runtime_handle
-			.spawn_blocking(move || MainElectrumClient::connect(&server_url, &electrum_config))
-			.await;
-		let fresh = match connected {
-			Ok(Ok(fresh)) => fresh,
-			Ok(Err(e)) => {
-				log_error!(self.logger, "Failed to reconnect to Electrum server: {}", e);
-				return false;
-			},
-			Err(e) => {
-				log_error!(self.logger, "Failed to reconnect to Electrum server: {}", e);
-				return false;
-			},
-		};
-		let mut current = self.main_client.write().unwrap();
-		if Arc::ptr_eq(&current, failed) {
-			*current = Arc::new(fresh);
-			log_info!(self.logger, "Reconnected to Electrum server after a failed call.");
-		}
-		true
+	/// Starts replacing `failed` with a client on a new connection, unless another caller already
+	/// did. The task reports whether the current client differs from `failed`. Callers never wait
+	/// past their own deadline for it: a dropped handle keeps reconnecting in the background.
+	fn reconnect_main_client(&self, failed: &Arc<MainElectrumClient>) -> JoinHandle<bool> {
+		let (main_client, connect_main, logger, failed) = (
+			Arc::clone(&self.main_client),
+			Arc::clone(&self.connect_main),
+			Arc::clone(&self.logger),
+			Arc::clone(failed),
+		);
+		self.runtime_handle.spawn_blocking(move || {
+			let is_current = || Arc::ptr_eq(&main_client.read().unwrap(), &failed);
+			if !is_current() {
+				return true;
+			}
+			match connect_main() {
+				Ok(fresh) => {
+					let mut current = main_client.write().unwrap();
+					if Arc::ptr_eq(&current, &failed) {
+						*current = Arc::new(fresh);
+						log_info!(logger, "Reconnected to Electrum server after a failed call.");
+					}
+					true
+				},
+				Err(e) => {
+					log_error!(logger, "Failed to reconnect to Electrum server: {}", e);
+					// A concurrent caller may have installed a working client meanwhile.
+					!is_current()
+				},
+			}
+		})
 	}
 
 	fn wrap_confirmables(
@@ -861,7 +865,7 @@ impl ElectrumRuntimeClient {
 			},
 			Ok(Err(e)) => {
 				if electrum_connection_broken(&e) {
-					self.reconnect_main_client(&main_client).await;
+					let _ = self.reconnect_main_client(&main_client);
 				}
 				None
 			},
@@ -936,7 +940,7 @@ impl ElectrumRuntimeClient {
 			Err(e) => {
 				log_error!(self.logger, "Sync of on-chain wallet failed: {}", e);
 				if electrum_connection_broken(&e) {
-					self.reconnect_main_client(&main_client).await;
+					let _ = self.reconnect_main_client(&main_client);
 				}
 				Err(Error::WalletOperationFailed)
 			},
@@ -972,7 +976,7 @@ impl ElectrumRuntimeClient {
 			Err(e) => {
 				log_error!(self.logger, "Incremental sync of on-chain wallet failed: {}", e);
 				if electrum_connection_broken(&e) {
-					self.reconnect_main_client(&main_client).await;
+					let _ = self.reconnect_main_client(&main_client);
 				}
 				Err(Error::WalletOperationFailed)
 			},
@@ -986,6 +990,8 @@ impl ElectrumRuntimeClient {
 	async fn broadcast_with_timeout(
 		&self, tx: Transaction, timeout: Duration,
 	) -> BroadcastResponse {
+		// The reconnect and the retry share the original deadline.
+		let deadline = tokio::time::Instant::now() + timeout;
 		let main_client = self.main_client();
 		match self.broadcast_on(&main_client, &tx, timeout).await {
 			BroadcastAttempt::Answered(response) => return response,
@@ -993,13 +999,18 @@ impl ElectrumRuntimeClient {
 			BroadcastAttempt::TimedOut => return BroadcastResponse::Unknown,
 			BroadcastAttempt::ConnectionBroken => {},
 		}
-		if !self.reconnect_main_client(&main_client).await {
+		let reconnect = self.reconnect_main_client(&main_client);
+		if !matches!(tokio::time::timeout_at(deadline, reconnect).await, Ok(Ok(true))) {
+			return BroadcastResponse::Unknown;
+		}
+		let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+		if remaining.is_zero() {
 			return BroadcastResponse::Unknown;
 		}
 		// Resubmitting the same transaction is idempotent, so one more attempt on a fresh
 		// connection is safe whatever happened to the first one.
 		log_info!(self.logger, "Retrying broadcast of {} on a new connection", tx.compute_txid());
-		match self.broadcast_on(&self.main_client(), &tx, timeout).await {
+		match self.broadcast_on(&self.main_client(), &tx, remaining).await {
 			BroadcastAttempt::Answered(response) => response,
 			BroadcastAttempt::ConnectionBroken | BroadcastAttempt::TimedOut => {
 				BroadcastResponse::Unknown
@@ -1113,7 +1124,7 @@ impl ElectrumRuntimeClient {
 			Ok(Ok(Err(e))) => {
 				log_error!(self.logger, "Failed to retrieve fee rate estimates: {}", e);
 				if electrum_connection_broken(&e) {
-					self.reconnect_main_client(&main_client).await;
+					let _ = self.reconnect_main_client(&main_client);
 				}
 				return Err(Error::FeerateEstimationUpdateFailed);
 			},
@@ -1556,30 +1567,24 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn electrum_broadcast_succeeds_after_the_server_dropped_a_connection_with_queued_calls() {
-		let server = FakeElectrumServer::start();
-		let logger = Arc::new(Logger::new_log_facade());
-		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
-		let client = Arc::new(
-			ElectrumRuntimeClient::new(
-				server.url.clone(),
-				runtime.handle().clone(),
-				Arc::new(Config::default()),
-				logger,
-				2,
-			)
-			.unwrap(),
-		);
-		let tx = spendable_test_tx();
-		assert_eq!(runtime.block_on(client.broadcast(tx.clone())), BroadcastResponse::Accepted);
+	fn test_runtime_client(
+		server: &FakeElectrumServer, runtime: &Runtime, logger: Arc<Logger>,
+	) -> ElectrumRuntimeClient {
+		ElectrumRuntimeClient::new(
+			server.url.clone(),
+			runtime.handle().clone(),
+			Arc::new(Config::default()),
+			logger,
+			2,
+		)
+		.unwrap()
+	}
 
-		// Two calls share the connection when the server drops it, as wallet sync and fee
-		// updates do when the app returns from the background. One reads the end of stream;
-		// the other, still waiting for its response, is never woken and never returns. Both go
-		// straight to electrum-client, so nothing rebuilds the stale connection before the
-		// broadcast below finds it broken.
-		let stale = client.main_client();
+	/// Two calls share the connection when the server drops it, as wallet sync and fee updates do
+	/// when the app returns from the background. One reads the end of stream; the other, still
+	/// waiting for its response, is never woken and never returns. Both go straight to
+	/// electrum-client, so nothing rebuilds the stale connection before the next call.
+	fn drop_connection_with_queued_call(server: &FakeElectrumServer, stale: &MainElectrumClient) {
 		let next_event = || server.received.recv_timeout(Duration::from_secs(10)).unwrap();
 		server.hang_up.store(true, Ordering::SeqCst);
 		let stale_electrum = Arc::clone(&stale.electrum_client);
@@ -1595,6 +1600,18 @@ mod tests {
 			"one queued call must still be waiting"
 		);
 		server.hang_up.store(false, Ordering::SeqCst);
+	}
+
+	#[test]
+	fn electrum_broadcast_succeeds_after_the_server_dropped_a_connection_with_queued_calls() {
+		let server = FakeElectrumServer::start();
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
+		let client = test_runtime_client(&server, &runtime, logger);
+		let tx = spendable_test_tx();
+		assert_eq!(runtime.block_on(client.broadcast(tx.clone())), BroadcastResponse::Accepted);
+		let stale = client.main_client();
+		drop_connection_with_queued_call(&server, &stale);
 
 		// The broadcast fails on the stale connection, reconnects and succeeds on the retry.
 		let before = server.broadcasts.load(Ordering::SeqCst);
@@ -1602,6 +1619,33 @@ mod tests {
 		assert_eq!(runtime.block_on(client.broadcast(tx)), BroadcastResponse::Accepted);
 		assert!(!Arc::ptr_eq(&client.main_client(), &stale));
 		assert_eq!(server.broadcasts.load(Ordering::SeqCst), before + 1);
+	}
+
+	#[test]
+	fn electrum_calls_keep_their_deadline_while_a_reconnect_stalls() {
+		let server = FakeElectrumServer::start();
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
+		let mut client = test_runtime_client(&server, &runtime, logger);
+		client.connect_main = Arc::new(|| {
+			thread::sleep(Duration::from_secs(5));
+			Err(ElectrumError::Message("stalled".to_owned()))
+		});
+		let stale = client.main_client();
+		drop_connection_with_queued_call(&server, &stale);
+
+		// A fee update returns its failure without waiting for the reconnect it starts.
+		let started = Instant::now();
+		assert!(runtime.block_on(client.get_fee_rate_cache_update()).is_err());
+		assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+
+		// The broadcast's reconnect and retry stay within its original timeout.
+		let started = Instant::now();
+		let response = runtime
+			.block_on(client.broadcast_with_timeout(spendable_test_tx(), Duration::from_secs(1)));
+		assert_eq!(response, BroadcastResponse::Unknown);
+		assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+		assert!(Arc::ptr_eq(&client.main_client(), &stale));
 	}
 
 	#[test]
