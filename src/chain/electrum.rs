@@ -1442,9 +1442,9 @@ mod tests {
 	}
 
 	/// Answers broadcasts with the transaction's txid and every other call with an empty result.
-	/// While `hang_up` is set, it reports each request's method on `received`, never answers the
-	/// first one, trickles answers to the rest so another caller can queue a request between the
-	/// waiting reader's reads, and closes the connection once a balance request arrives.
+	/// While `hang_up` is set, it reports each request's method on `received` and answers none,
+	/// sends stray replies so another caller can queue a request between the waiting reader's
+	/// reads, and closes the connection once a balance request arrives.
 	struct FakeElectrumServer {
 		url: String,
 		hang_up: Arc<AtomicBool>,
@@ -1481,7 +1481,7 @@ mod tests {
 		) {
 			let mut writer = stream.try_clone().unwrap();
 			let mut reader = BufReader::new(stream.try_clone().unwrap());
-			let mut unanswered = 0;
+			let ticking = Arc::new(AtomicBool::new(false));
 			loop {
 				let mut line = String::new();
 				if reader.read_line(&mut line).unwrap_or(0) == 0 {
@@ -1492,21 +1492,26 @@ mod tests {
 					let method = request["method"].as_str().unwrap_or_default().to_owned();
 					let _ = received.send(method.clone());
 					if method == "blockchain.scripthash.get_balance" {
+						ticking.store(false, Ordering::SeqCst);
+						thread::sleep(Duration::from_millis(50));
 						// End of stream first, then a reset for the requests left unread.
 						let _ = stream.shutdown(std::net::Shutdown::Write);
 						thread::sleep(Duration::from_millis(200));
 						let _ = received.send("closed".to_owned());
 						return;
 					}
-					unanswered += 1;
-					if unanswered > 1 {
-						let mut writer = stream.try_clone().unwrap();
-						let response = serde_json::json!({
-							"jsonrpc": "2.0", "id": request["id"], "result": 0.00001
-						});
+					if !ticking.swap(true, Ordering::SeqCst) {
+						// Replies nobody waits for wake the reader again and again, so another
+						// caller gets a turn to write its request onto the shared stream.
+						let (mut writer, ticking) =
+							(stream.try_clone().unwrap(), Arc::clone(&ticking));
 						thread::spawn(move || {
-							thread::sleep(Duration::from_millis(50 * unanswered));
-							let _ = writeln!(writer, "{}", response);
+							let stray = serde_json::json!({ "jsonrpc": "2.0", "id": 999_999, "result": null });
+							while ticking.load(Ordering::SeqCst)
+								&& writeln!(writer, "{}", stray).is_ok()
+							{
+								thread::sleep(Duration::from_millis(10));
+							}
 						});
 					}
 					continue;
@@ -1569,27 +1574,33 @@ mod tests {
 		let tx = spendable_test_tx();
 		assert_eq!(runtime.block_on(client.broadcast(tx.clone())), BroadcastResponse::Accepted);
 
-		// A fee update and a balance lookup share the connection when the server drops it, as
-		// wallet sync and fee updates do when the app returns from the background. The caller
-		// still waiting for its response is never woken and never returns.
+		// Two calls share the connection when the server drops it, as wallet sync and fee
+		// updates do when the app returns from the background. One reads the end of stream;
+		// the other, still waiting for its response, is never woken and never returns. Both go
+		// straight to electrum-client, so nothing rebuilds the stale connection before the
+		// broadcast below finds it broken.
+		let stale = client.main_client();
+		let next_event = || server.received.recv_timeout(Duration::from_secs(10)).unwrap();
 		server.hang_up.store(true, Ordering::SeqCst);
-		let (fee_client, fee_handle) = (Arc::clone(&client), runtime.handle().clone());
-		let fee_update =
-			thread::spawn(move || fee_handle.block_on(fee_client.get_fee_rate_cache_update()));
-		assert_eq!(server.received.recv().unwrap(), "blockchain.estimatefee");
-		let (balance_client, balance_handle) = (Arc::clone(&client), runtime.handle().clone());
-		let address = bitcoin::Address::p2wsh(&ScriptBuf::new(), Network::Regtest);
-		let balance = thread::spawn(move || {
-			balance_handle.block_on(balance_client.get_address_balance(&address))
-		});
-		while server.received.recv().unwrap() != "closed" {}
-		assert!(fee_update.join().unwrap().is_err());
+		let stale_electrum = Arc::clone(&stale.electrum_client);
+		let fee_update = thread::spawn(move || stale_electrum.batch_estimate_fee(1..=10));
+		assert_eq!(next_event(), "blockchain.estimatefee");
+		let stale_electrum = Arc::clone(&stale.electrum_client);
+		let balance = thread::spawn(move || stale_electrum.script_get_balance(&ScriptBuf::new()));
+		while next_event() != "closed" {}
 		thread::sleep(Duration::from_millis(100));
-		assert!(!balance.is_finished(), "the queued call must still be waiting");
+		// Whichever call became the waiter is stuck for good, and holds the stale client.
+		assert!(
+			!(fee_update.is_finished() && balance.is_finished()),
+			"one queued call must still be waiting"
+		);
 		server.hang_up.store(false, Ordering::SeqCst);
 
+		// The broadcast fails on the stale connection, reconnects and succeeds on the retry.
 		let before = server.broadcasts.load(Ordering::SeqCst);
+		assert!(Arc::ptr_eq(&client.main_client(), &stale));
 		assert_eq!(runtime.block_on(client.broadcast(tx)), BroadcastResponse::Accepted);
+		assert!(!Arc::ptr_eq(&client.main_client(), &stale));
 		assert_eq!(server.broadcasts.load(Ordering::SeqCst), before + 1);
 	}
 
