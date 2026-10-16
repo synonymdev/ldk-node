@@ -19,7 +19,8 @@ use bdk_electrum::BdkElectrumClient;
 use bdk_wallet::{KeychainKind as BdkKeyChainKind, Update as BdkUpdate};
 use bitcoin::{FeeRate, Network, Script, ScriptBuf, Transaction, Txid};
 use electrum_client::{
-	Batch, Client as ElectrumClient, ConfigBuilder as ElectrumConfigBuilder, ElectrumApi,
+	Batch, Client as ElectrumClient, Config as ElectrumConfig,
+	ConfigBuilder as ElectrumConfigBuilder, ElectrumApi, Error as ElectrumError,
 };
 use lightning::chain::{Confirm, Filter, WatchedOutput};
 use lightning::log_warn;
@@ -89,6 +90,30 @@ fn classify_electrum_broadcast(
 			}
 		},
 		_ => BroadcastResponse::Unknown,
+	}
+}
+
+enum BroadcastAttempt {
+	/// The server answered, or the answer is already classified.
+	Answered(BroadcastResponse),
+	/// The connection broke before an answer.
+	ConnectionBroken,
+	/// No answer within the broadcast timeout while the call may still be in flight.
+	TimedOut,
+}
+
+// The connection is gone: the request could not be written, or the server closed or reset it.
+// Timeouts are left alone, since a slow but healthy connection only gets slower when rebuilt.
+fn electrum_connection_broken(error: &ElectrumError) -> bool {
+	let lost = |kind: std::io::ErrorKind| {
+		!matches!(kind, std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)
+	};
+	match error {
+		ElectrumError::IOError(e) => lost(e.kind()),
+		ElectrumError::SharedIOError(e) => lost(e.kind()),
+		ElectrumError::JSON(e) => e.is_eof(),
+		ElectrumError::AllAttemptsErrored(errors) => errors.iter().any(electrum_connection_broken),
+		_ => false,
 	}
 }
 
@@ -692,9 +717,28 @@ impl ElectrumRuntimeStatus {
 	}
 }
 
-struct ElectrumRuntimeClient {
+/// The connection shared by wallet sync, fee updates, balance lookups and broadcasts.
+struct MainElectrumClient {
 	electrum_client: Arc<ElectrumClient>,
 	bdk_electrum_client: Arc<BdkElectrumClient<Arc<ElectrumClient>>>,
+}
+
+impl MainElectrumClient {
+	fn connect(server_url: &str, electrum_config: &ElectrumConfig) -> Result<Self, ElectrumError> {
+		let electrum_client =
+			Arc::new(ElectrumClient::from_config(server_url, electrum_config.clone())?);
+		let bdk_electrum_client = Arc::new(BdkElectrumClient::new(Arc::clone(&electrum_client)));
+		Ok(Self { electrum_client, bdk_electrum_client })
+	}
+}
+
+struct ElectrumRuntimeClient {
+	// electrum-client only reconnects a `Client` once no other call holds it, and a call left
+	// waiting on a dropped connection can hold it forever. A call that finds the connection
+	// broken therefore replaces the whole client instead of relying on that internal reconnect.
+	main_client: RwLock<Arc<MainElectrumClient>>,
+	server_url: String,
+	electrum_config: ElectrumConfig,
 	tx_sync: Arc<ElectrumSyncClient<Arc<Logger>>>,
 	runtime_handle: Handle,
 	config: Arc<Config>,
@@ -716,22 +760,21 @@ impl ElectrumRuntimeClient {
 			.timeout(Some(timeout))
 			.build();
 
-		let electrum_client = Arc::new(
-			ElectrumClient::from_config(&server_url, electrum_config.clone()).map_err(|e| {
+		let main_client =
+			MainElectrumClient::connect(&server_url, &electrum_config).map_err(|e| {
 				log_error!(logger, "Failed to connect to Electrum server: {}", e);
 				Error::ConnectionFailed
-			})?,
-		);
-		let bdk_electrum_client = Arc::new(BdkElectrumClient::new(Arc::clone(&electrum_client)));
+			})?;
 
 		// The LDK tx-sync client needs its own TCP connection, configured with the same
 		// timeout so that its blocking reads are bounded and Tokio's blocking thread pool
 		// is not exhausted by threads stuck on dead sockets.
-		let ldk_electrum_client =
-			Arc::new(ElectrumClient::from_config(&server_url, electrum_config).map_err(|e| {
+		let ldk_electrum_client = Arc::new(
+			ElectrumClient::from_config(&server_url, electrum_config.clone()).map_err(|e| {
 				log_error!(logger, "Failed to connect to Electrum server for tx sync: {}", e);
 				Error::ConnectionFailed
-			})?);
+			})?,
+		);
 		let tx_sync = Arc::new(
 			ElectrumSyncClient::from_client(ldk_electrum_client, Arc::clone(&logger)).map_err(
 				|e| {
@@ -741,8 +784,9 @@ impl ElectrumRuntimeClient {
 			)?,
 		);
 		Ok(Self {
-			electrum_client,
-			bdk_electrum_client,
+			main_client: RwLock::new(Arc::new(main_client)),
+			server_url,
+			electrum_config,
 			tx_sync,
 			runtime_handle,
 			config,
@@ -753,6 +797,40 @@ impl ElectrumRuntimeClient {
 
 	fn begin_shutdown(&self) {
 		self.confirm_gate.deactivate();
+	}
+
+	fn main_client(&self) -> Arc<MainElectrumClient> {
+		Arc::clone(&self.main_client.read().unwrap())
+	}
+
+	/// Replaces `failed` with a client on a new connection, unless another caller already did.
+	/// Returns whether the current client differs from `failed`.
+	async fn reconnect_main_client(&self, failed: &Arc<MainElectrumClient>) -> bool {
+		if !Arc::ptr_eq(&self.main_client(), failed) {
+			return true;
+		}
+		let (server_url, electrum_config) = (self.server_url.clone(), self.electrum_config.clone());
+		let connected = self
+			.runtime_handle
+			.spawn_blocking(move || MainElectrumClient::connect(&server_url, &electrum_config))
+			.await;
+		let fresh = match connected {
+			Ok(Ok(fresh)) => fresh,
+			Ok(Err(e)) => {
+				log_error!(self.logger, "Failed to reconnect to Electrum server: {}", e);
+				return false;
+			},
+			Err(e) => {
+				log_error!(self.logger, "Failed to reconnect to Electrum server: {}", e);
+				return false;
+			},
+		};
+		let mut current = self.main_client.write().unwrap();
+		if Arc::ptr_eq(&current, failed) {
+			*current = Arc::new(fresh);
+			log_info!(self.logger, "Reconnected to Electrum server after a failed call.");
+		}
+		true
 	}
 
 	fn wrap_confirmables(
@@ -768,15 +846,11 @@ impl ElectrumRuntimeClient {
 		use electrum_client::ElectrumApi;
 
 		let script = address.script_pubkey();
-		let electrum_client = Arc::clone(&self.electrum_client);
-		let script_clone = script.clone();
+		let main_client = self.main_client();
+		let electrum_client = Arc::clone(&main_client.electrum_client);
 		let balance_result = self
 			.runtime_handle
-			.spawn_blocking(move || {
-				electrum_client
-					.script_get_balance(&script_clone)
-					.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)))
-			})
+			.spawn_blocking(move || electrum_client.script_get_balance(&script))
 			.await;
 
 		match balance_result {
@@ -785,7 +859,13 @@ impl ElectrumRuntimeClient {
 				let unconfirmed = balance.unconfirmed.max(0) as u64;
 				Some(confirmed + unconfirmed)
 			},
-			_ => None,
+			Ok(Err(e)) => {
+				if electrum_connection_broken(&e) {
+					self.reconnect_main_client(&main_client).await;
+				}
+				None
+			},
+			Err(_) => None,
 		}
 	}
 
@@ -832,7 +912,8 @@ impl ElectrumRuntimeClient {
 		cached_txs: impl IntoIterator<Item = impl Into<Arc<Transaction>>>,
 		settings: FullScanSettings, timeout: Duration,
 	) -> Result<BdkFullScanResponse<BdkKeyChainKind>, Error> {
-		let bdk_electrum_client = Arc::clone(&self.bdk_electrum_client);
+		let main_client = self.main_client();
+		let bdk_electrum_client = Arc::clone(&main_client.bdk_electrum_client);
 		bdk_electrum_client.populate_tx_cache(cached_txs);
 
 		let spawn_fut = self.runtime_handle.spawn_blocking(move || {
@@ -840,20 +921,26 @@ impl ElectrumRuntimeClient {
 		});
 		let wallet_sync_timeout_fut = tokio::time::timeout(timeout, spawn_fut);
 
-		wallet_sync_timeout_fut
-			.await
-			.map_err(|e| {
+		let result = match wallet_sync_timeout_fut.await {
+			Err(e) => {
 				log_error!(self.logger, "Sync of on-chain wallet timed out: {}", e);
-				Error::WalletOperationTimeout
-			})?
-			.map_err(|e| {
+				return Err(Error::WalletOperationTimeout);
+			},
+			Ok(result) => result.map_err(|e| {
 				log_error!(self.logger, "Sync of on-chain wallet failed: {}", e);
 				Error::WalletOperationFailed
-			})?
-			.map_err(|e| {
+			})?,
+		};
+		match result {
+			Ok(update) => Ok(update),
+			Err(e) => {
 				log_error!(self.logger, "Sync of on-chain wallet failed: {}", e);
-				Error::WalletOperationFailed
-			})
+				if electrum_connection_broken(&e) {
+					self.reconnect_main_client(&main_client).await;
+				}
+				Err(Error::WalletOperationFailed)
+			},
+		}
 	}
 
 	async fn get_incremental_sync_wallet_update(
@@ -861,7 +948,8 @@ impl ElectrumRuntimeClient {
 		cached_txs: impl IntoIterator<Item = impl Into<Arc<Transaction>>>, batch_size: usize,
 		timeout: Duration,
 	) -> Result<BdkSyncResponse, Error> {
-		let bdk_electrum_client = Arc::clone(&self.bdk_electrum_client);
+		let main_client = self.main_client();
+		let bdk_electrum_client = Arc::clone(&main_client.bdk_electrum_client);
 		bdk_electrum_client.populate_tx_cache(cached_txs);
 
 		let spawn_fut = self
@@ -869,20 +957,26 @@ impl ElectrumRuntimeClient {
 			.spawn_blocking(move || bdk_electrum_client.sync(request, batch_size, true));
 		let wallet_sync_timeout_fut = tokio::time::timeout(timeout, spawn_fut);
 
-		wallet_sync_timeout_fut
-			.await
-			.map_err(|e| {
+		let result = match wallet_sync_timeout_fut.await {
+			Err(e) => {
 				log_error!(self.logger, "Incremental sync of on-chain wallet timed out: {}", e);
-				Error::WalletOperationTimeout
-			})?
-			.map_err(|e| {
+				return Err(Error::WalletOperationTimeout);
+			},
+			Ok(result) => result.map_err(|e| {
 				log_error!(self.logger, "Incremental sync of on-chain wallet failed: {}", e);
 				Error::WalletOperationFailed
-			})?
-			.map_err(|e| {
+			})?,
+		};
+		match result {
+			Ok(update) => Ok(update),
+			Err(e) => {
 				log_error!(self.logger, "Incremental sync of on-chain wallet failed: {}", e);
-				Error::WalletOperationFailed
-			})
+				if electrum_connection_broken(&e) {
+					self.reconnect_main_client(&main_client).await;
+				}
+				Err(Error::WalletOperationFailed)
+			},
+		}
 	}
 
 	async fn broadcast(&self, tx: Transaction) -> BroadcastResponse {
@@ -892,15 +986,41 @@ impl ElectrumRuntimeClient {
 	async fn broadcast_with_timeout(
 		&self, tx: Transaction, timeout: Duration,
 	) -> BroadcastResponse {
-		let client = Arc::clone(&self.electrum_client);
+		let main_client = self.main_client();
+		match self.broadcast_on(&main_client, &tx, timeout).await {
+			BroadcastAttempt::Answered(response) => return response,
+			// The request may still be delivered by the blocking call.
+			BroadcastAttempt::TimedOut => return BroadcastResponse::Unknown,
+			BroadcastAttempt::ConnectionBroken => {},
+		}
+		if !self.reconnect_main_client(&main_client).await {
+			return BroadcastResponse::Unknown;
+		}
+		// Resubmitting the same transaction is idempotent, so one more attempt on a fresh
+		// connection is safe whatever happened to the first one.
+		log_info!(self.logger, "Retrying broadcast of {} on a new connection", tx.compute_txid());
+		match self.broadcast_on(&self.main_client(), &tx, timeout).await {
+			BroadcastAttempt::Answered(response) => response,
+			BroadcastAttempt::ConnectionBroken | BroadcastAttempt::TimedOut => {
+				BroadcastResponse::Unknown
+			},
+		}
+	}
+
+	async fn broadcast_on(
+		&self, main_client: &MainElectrumClient, tx: &Transaction, timeout: Duration,
+	) -> BroadcastAttempt {
+		let client = Arc::clone(&main_client.electrum_client);
 		let expected = tx.compute_txid();
 		let tx_bytes = tx.encode();
+		let blocking_tx = tx.clone();
 		// A timed-out spawn_blocking task may continue on its thread. Its result is unknown.
-		let task = self.runtime_handle.spawn_blocking(move || client.transaction_broadcast(&tx));
+		let task =
+			self.runtime_handle.spawn_blocking(move || client.transaction_broadcast(&blocking_tx));
 		match tokio::time::timeout(timeout, task).await {
 			Ok(Ok(Ok(actual))) if actual == expected => {
 				log_trace!(self.logger, "Successfully broadcast transaction {}", expected);
-				BroadcastResponse::Accepted
+				BroadcastAttempt::Answered(BroadcastResponse::Accepted)
 			},
 			Ok(Ok(Ok(actual))) => {
 				log_error!(
@@ -914,7 +1034,7 @@ impl ElectrumRuntimeClient {
 					"Failed broadcast transaction bytes: {}",
 					log_bytes!(tx_bytes)
 				);
-				BroadcastResponse::Unknown
+				BroadcastAttempt::Answered(BroadcastResponse::Unknown)
 			},
 			Ok(Ok(Err(error))) => {
 				log_error!(self.logger, "Failed to broadcast transaction {}: {}", expected, error);
@@ -923,7 +1043,11 @@ impl ElectrumRuntimeClient {
 					"Failed broadcast transaction bytes: {}",
 					log_bytes!(tx_bytes)
 				);
-				classify_electrum_broadcast(expected, Err(error))
+				if electrum_connection_broken(&error) {
+					BroadcastAttempt::ConnectionBroken
+				} else {
+					BroadcastAttempt::Answered(classify_electrum_broadcast(expected, Err(error)))
+				}
 			},
 			Ok(Err(error)) => {
 				log_error!(
@@ -937,7 +1061,7 @@ impl ElectrumRuntimeClient {
 					"Failed broadcast transaction bytes: {}",
 					log_bytes!(tx_bytes)
 				);
-				BroadcastResponse::Unknown
+				BroadcastAttempt::Answered(BroadcastResponse::Unknown)
 			},
 			Err(error) => {
 				log_error!(
@@ -951,7 +1075,7 @@ impl ElectrumRuntimeClient {
 					"Failed broadcast transaction bytes: {}",
 					log_bytes!(tx_bytes)
 				);
-				BroadcastResponse::Unknown
+				BroadcastAttempt::TimedOut
 			},
 		}
 	}
@@ -959,7 +1083,8 @@ impl ElectrumRuntimeClient {
 	async fn get_fee_rate_cache_update(
 		&self,
 	) -> Result<HashMap<ConfirmationTarget, FeeRate>, Error> {
-		let electrum_client = Arc::clone(&self.electrum_client);
+		let main_client = self.main_client();
+		let electrum_client = Arc::clone(&main_client.electrum_client);
 
 		let mut batch = Batch::default();
 		let confirmation_targets = get_all_conf_targets();
@@ -976,20 +1101,24 @@ impl ElectrumRuntimeClient {
 			spawn_fut,
 		);
 
-		let raw_estimates_btc_kvb = timeout_fut
-			.await
-			.map_err(|e| {
+		let raw_estimates_btc_kvb = match timeout_fut.await {
+			Err(e) => {
 				log_error!(self.logger, "Updating fee rate estimates timed out: {}", e);
-				Error::FeerateEstimationUpdateTimeout
-			})?
-			.map_err(|e| {
+				return Err(Error::FeerateEstimationUpdateTimeout);
+			},
+			Ok(Err(e)) => {
 				log_error!(self.logger, "Failed to retrieve fee rate estimates: {}", e);
-				Error::FeerateEstimationUpdateFailed
-			})?
-			.map_err(|e| {
+				return Err(Error::FeerateEstimationUpdateFailed);
+			},
+			Ok(Ok(Err(e))) => {
 				log_error!(self.logger, "Failed to retrieve fee rate estimates: {}", e);
-				Error::FeerateEstimationUpdateFailed
-			})?;
+				if electrum_connection_broken(&e) {
+					self.reconnect_main_client(&main_client).await;
+				}
+				return Err(Error::FeerateEstimationUpdateFailed);
+			},
+			Ok(Ok(Ok(estimates))) => estimates,
+		};
 
 		if raw_estimates_btc_kvb.len() != confirmation_targets.len()
 			&& self.config.network == Network::Bitcoin
@@ -1310,6 +1439,179 @@ mod tests {
 		release_sender.send(()).unwrap();
 		finished_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
 		server.join().unwrap();
+	}
+
+	/// Answers broadcasts with the transaction's txid and every other call with an empty result.
+	/// While `hang_up` is set, it reports each request's method on `received`, never answers the
+	/// first one, trickles answers to the rest so another caller can queue a request between the
+	/// waiting reader's reads, and closes the connection once a balance request arrives.
+	struct FakeElectrumServer {
+		url: String,
+		hang_up: Arc<AtomicBool>,
+		received: mpsc::Receiver<String>,
+		broadcasts: Arc<AtomicUsize>,
+	}
+
+	impl FakeElectrumServer {
+		fn start() -> Self {
+			let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+			let url = format!("tcp://{}", listener.local_addr().unwrap());
+			let hang_up = Arc::new(AtomicBool::new(false));
+			let broadcasts = Arc::new(AtomicUsize::new(0));
+			let (sender, received) = mpsc::channel();
+			let (server_hang_up, server_broadcasts) =
+				(Arc::clone(&hang_up), Arc::clone(&broadcasts));
+			thread::spawn(move || {
+				for stream in listener.incoming() {
+					let Ok(stream) = stream else { return };
+					let (hang_up, broadcasts, sender) = (
+						Arc::clone(&server_hang_up),
+						Arc::clone(&server_broadcasts),
+						sender.clone(),
+					);
+					thread::spawn(move || Self::serve(stream, hang_up, sender, broadcasts));
+				}
+			});
+			Self { url, hang_up, received, broadcasts }
+		}
+
+		fn serve(
+			stream: std::net::TcpStream, hang_up: Arc<AtomicBool>, received: mpsc::Sender<String>,
+			broadcasts: Arc<AtomicUsize>,
+		) {
+			let mut writer = stream.try_clone().unwrap();
+			let mut reader = BufReader::new(stream.try_clone().unwrap());
+			let mut unanswered = 0;
+			loop {
+				let mut line = String::new();
+				if reader.read_line(&mut line).unwrap_or(0) == 0 {
+					return;
+				}
+				let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+				if hang_up.load(Ordering::SeqCst) {
+					let method = request["method"].as_str().unwrap_or_default().to_owned();
+					let _ = received.send(method.clone());
+					if method == "blockchain.scripthash.get_balance" {
+						// End of stream first, then a reset for the requests left unread.
+						let _ = stream.shutdown(std::net::Shutdown::Write);
+						thread::sleep(Duration::from_millis(200));
+						let _ = received.send("closed".to_owned());
+						return;
+					}
+					unanswered += 1;
+					if unanswered > 1 {
+						let mut writer = stream.try_clone().unwrap();
+						let response = serde_json::json!({
+							"jsonrpc": "2.0", "id": request["id"], "result": 0.00001
+						});
+						thread::spawn(move || {
+							thread::sleep(Duration::from_millis(50 * unanswered));
+							let _ = writeln!(writer, "{}", response);
+						});
+					}
+					continue;
+				}
+				let result = match request["method"].as_str() {
+					Some("blockchain.transaction.broadcast") => {
+						let bytes = <Vec<u8> as bitcoin::hex::FromHex>::from_hex(
+							request["params"][0].as_str().unwrap(),
+						)
+						.unwrap();
+						let tx: Transaction = bitcoin::consensus::deserialize(&bytes).unwrap();
+						broadcasts.fetch_add(1, Ordering::SeqCst);
+						serde_json::json!(tx.compute_txid().to_string())
+					},
+					Some("blockchain.estimatefee") => serde_json::json!(0.00001),
+					Some("blockchain.scripthash.get_balance") => {
+						serde_json::json!({ "confirmed": 0, "unconfirmed": 0 })
+					},
+					_ => serde_json::Value::Null,
+				};
+				let response =
+					serde_json::json!({ "jsonrpc": "2.0", "id": request["id"], "result": result });
+				if writeln!(writer, "{}", response).is_err() {
+					return;
+				}
+			}
+		}
+	}
+
+	fn spendable_test_tx() -> Transaction {
+		Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![bitcoin::TxIn {
+				previous_output: bitcoin::OutPoint::new(Txid::from_byte_array([7; 32]), 0),
+				..Default::default()
+			}],
+			output: vec![bitcoin::TxOut {
+				value: bitcoin::Amount::from_sat(2_000),
+				script_pubkey: ScriptBuf::new(),
+			}],
+		}
+	}
+
+	#[test]
+	fn electrum_broadcast_succeeds_after_the_server_dropped_a_connection_with_queued_calls() {
+		let server = FakeElectrumServer::start();
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Runtime::new(Arc::clone(&logger)).unwrap();
+		let client = Arc::new(
+			ElectrumRuntimeClient::new(
+				server.url.clone(),
+				runtime.handle().clone(),
+				Arc::new(Config::default()),
+				logger,
+				2,
+			)
+			.unwrap(),
+		);
+		let tx = spendable_test_tx();
+		assert_eq!(runtime.block_on(client.broadcast(tx.clone())), BroadcastResponse::Accepted);
+
+		// A fee update and a balance lookup share the connection when the server drops it, as
+		// wallet sync and fee updates do when the app returns from the background. The caller
+		// still waiting for its response is never woken and never returns.
+		server.hang_up.store(true, Ordering::SeqCst);
+		let (fee_client, fee_handle) = (Arc::clone(&client), runtime.handle().clone());
+		let fee_update =
+			thread::spawn(move || fee_handle.block_on(fee_client.get_fee_rate_cache_update()));
+		assert_eq!(server.received.recv().unwrap(), "blockchain.estimatefee");
+		let (balance_client, balance_handle) = (Arc::clone(&client), runtime.handle().clone());
+		let address = bitcoin::Address::p2wsh(&ScriptBuf::new(), Network::Regtest);
+		let balance = thread::spawn(move || {
+			balance_handle.block_on(balance_client.get_address_balance(&address))
+		});
+		while server.received.recv().unwrap() != "closed" {}
+		assert!(fee_update.join().unwrap().is_err());
+		thread::sleep(Duration::from_millis(100));
+		assert!(!balance.is_finished(), "the queued call must still be waiting");
+		server.hang_up.store(false, Ordering::SeqCst);
+
+		let before = server.broadcasts.load(Ordering::SeqCst);
+		assert_eq!(runtime.block_on(client.broadcast(tx)), BroadcastResponse::Accepted);
+		assert_eq!(server.broadcasts.load(Ordering::SeqCst), before + 1);
+	}
+
+	#[test]
+	fn electrum_connection_counts_as_broken_only_after_it_was_closed_or_reset() {
+		let pipe = || ElectrumError::IOError(std::io::ErrorKind::BrokenPipe.into());
+		let reset =
+			|| ElectrumError::SharedIOError(Arc::new(std::io::ErrorKind::ConnectionReset.into()));
+		let eof =
+			|| ElectrumError::JSON(serde_json::from_str::<serde_json::Value>("").unwrap_err());
+		let timed_out =
+			|| ElectrumError::SharedIOError(Arc::new(std::io::ErrorKind::WouldBlock.into()));
+		assert!(electrum_connection_broken(&pipe()));
+		assert!(electrum_connection_broken(&reset()));
+		assert!(electrum_connection_broken(&eof()));
+		assert!(electrum_connection_broken(&ElectrumError::AllAttemptsErrored(vec![
+			timed_out(),
+			pipe(),
+		])));
+		assert!(!electrum_connection_broken(&timed_out()));
+		assert!(!electrum_connection_broken(&ElectrumError::AllAttemptsErrored(vec![timed_out()])));
+		assert!(!electrum_connection_broken(&ElectrumError::Protocol(serde_json::json!("x"))));
 	}
 
 	const RUNTIME_SELF_DROP_CHILD_ENV: &str = "LDK_NODE_ELECTRUM_RUNTIME_SELF_DROP_CHILD";
