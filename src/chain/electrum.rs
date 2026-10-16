@@ -865,7 +865,7 @@ impl ElectrumRuntimeClient {
 			},
 			Ok(Err(e)) => {
 				if electrum_connection_broken(&e) {
-					let _ = self.reconnect_main_client(&main_client);
+					drop(self.reconnect_main_client(&main_client));
 				}
 				None
 			},
@@ -940,7 +940,7 @@ impl ElectrumRuntimeClient {
 			Err(e) => {
 				log_error!(self.logger, "Sync of on-chain wallet failed: {}", e);
 				if electrum_connection_broken(&e) {
-					let _ = self.reconnect_main_client(&main_client);
+					drop(self.reconnect_main_client(&main_client));
 				}
 				Err(Error::WalletOperationFailed)
 			},
@@ -976,7 +976,7 @@ impl ElectrumRuntimeClient {
 			Err(e) => {
 				log_error!(self.logger, "Incremental sync of on-chain wallet failed: {}", e);
 				if electrum_connection_broken(&e) {
-					let _ = self.reconnect_main_client(&main_client);
+					drop(self.reconnect_main_client(&main_client));
 				}
 				Err(Error::WalletOperationFailed)
 			},
@@ -1124,7 +1124,7 @@ impl ElectrumRuntimeClient {
 			Ok(Ok(Err(e))) => {
 				log_error!(self.logger, "Failed to retrieve fee rate estimates: {}", e);
 				if electrum_connection_broken(&e) {
-					let _ = self.reconnect_main_client(&main_client);
+					drop(self.reconnect_main_client(&main_client));
 				}
 				return Err(Error::FeerateEstimationUpdateFailed);
 			},
