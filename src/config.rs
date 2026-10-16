@@ -679,6 +679,13 @@ pub(crate) fn default_user_config(config: &Config) -> UserConfig {
 		user_config.accept_forwards_to_priv_channels = false;
 		user_config.channel_handshake_config.announce_for_forwarding = false;
 		user_config.channel_handshake_limits.force_announced_channel_preference = true;
+
+		// A node that can't announce channels only accepts unannounced ones. LDK's default of 10%
+		// of the channel value in flight would cap every single incoming payment far below the
+		// inbound capacity, so we allow the counterparty to use all of it, as we already do for
+		// unannounced channels we open ourselves.
+		user_config.channel_handshake_config.max_inbound_htlc_value_in_flight_percent_of_channel =
+			100;
 	}
 
 	user_config
@@ -1014,7 +1021,11 @@ pub enum AsyncPaymentsRole {
 mod tests {
 	use std::str::FromStr;
 
-	use super::{may_announce_channel, AnnounceError, Config, NodeAlias, SocketAddress};
+	use lightning::util::config::UserConfig;
+
+	use super::{
+		default_user_config, may_announce_channel, AnnounceError, Config, NodeAlias, SocketAddress,
+	};
 
 	#[test]
 	fn node_announce_channel() {
@@ -1060,6 +1071,46 @@ mod tests {
 			addresses.push(socket_address);
 		}
 		assert!(may_announce_channel(&node_config).is_ok());
+	}
+
+	#[test]
+	fn inbound_htlc_value_in_flight_limit_follows_announce_ability() {
+		let default_percent = UserConfig::default()
+			.channel_handshake_config
+			.max_inbound_htlc_value_in_flight_percent_of_channel;
+		let percent_of = |config: &Config| {
+			default_user_config(config)
+				.channel_handshake_config
+				.max_inbound_htlc_value_in_flight_percent_of_channel
+		};
+		let alias = NodeAlias([1u8; 32]);
+		let address = SocketAddress::from_str("localhost:8000").unwrap();
+
+		// Neither alias nor listening addresses: the node can't announce, so the whole channel
+		// value may be in flight.
+		let mut node_config = Config::default();
+		assert!(may_announce_channel(&node_config).is_err());
+		assert_eq!(percent_of(&node_config), 100);
+
+		// Missing listening addresses only.
+		node_config.node_alias = Some(alias);
+		assert_eq!(
+			may_announce_channel(&node_config),
+			Err(AnnounceError::MissingListeningAddresses)
+		);
+		assert_eq!(percent_of(&node_config), 100);
+
+		// Missing node alias only.
+		node_config.node_alias = None;
+		node_config.listening_addresses = Some(vec![address]);
+		assert_eq!(may_announce_channel(&node_config), Err(AnnounceError::MissingNodeAlias));
+		assert_eq!(percent_of(&node_config), 100);
+
+		// A node that can announce channels keeps LDK's default.
+		node_config.node_alias = Some(alias);
+		assert!(may_announce_channel(&node_config).is_ok());
+		assert_eq!(percent_of(&node_config), default_percent);
+		assert!(default_percent < 100);
 	}
 
 	#[test]
