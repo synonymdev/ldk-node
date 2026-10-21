@@ -3724,10 +3724,11 @@ async fn inbound_htlc_in_flight_limit_for_unannounced_node() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = TestChainSource::Esplora(&electrsd);
 
-	let config_a = random_config(true);
+	// Without anchors, so the unfunded node B accepts the channel without an on-chain reserve.
+	let config_a = random_config(false);
 	let node_a = setup_node(&chain_source, config_a, None);
 
-	let mut config_b = random_config(true);
+	let mut config_b = random_config(false);
 	config_b.node_config.node_alias = None;
 	let node_b = setup_node(&chain_source, config_b, None);
 
