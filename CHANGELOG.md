@@ -2,7 +2,6 @@
 
 ## Bug Fixes
 
-- Accept incoming payments up to the full channel value, instead of 10% of it, on nodes that cannot announce channels (no node alias or listening addresses), for channels opened after the update.
 - Reconnect the shared Electrum connection after the server drops it, so wallet sync, fee updates and broadcasts recover without a node restart (for example after a mobile app returns from the background), and retry a failed broadcast once on the new connection, all within each call's original deadline.
 - Fixed on-chain HTLC claims, anchor fee bumps and splices failing to sign when the transaction also spends inputs the on-chain wallet does not own.
 - Fixed splicing from a Taproot primary wallet.
@@ -81,6 +80,7 @@
 
 ## Synonym Fork Additions
 
+- Accept incoming payments up to the full channel value, instead of 10% of it, on nodes that cannot announce channels (no node alias or listening addresses), for channels opened after the update.
 - Expose the exact prepared transaction fee so applications can validate the approved total before broadcast.
 - Prevent concurrent prepared payment broadcasts from blocking Tokio worker progress.
 - Release unused change reservations when the last never-submitted prepared payment handle is dropped.
