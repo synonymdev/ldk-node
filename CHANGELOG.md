@@ -1,7 +1,8 @@
-# 0.7.0-rc.76 (Synonym Fork)
+# 0.7.0-rc.77 (Synonym Fork)
 
 ## Bug Fixes
 
+- Accept incoming payments up to the full channel value, instead of 10% of it, on nodes that cannot announce channels (no node alias or listening addresses), for channels opened after the update.
 - Reconnect the shared Electrum connection after the server drops it, so wallet sync, fee updates and broadcasts recover without a node restart (for example after a mobile app returns from the background), and retry a failed broadcast once on the new connection, all within each call's original deadline.
 - Fixed on-chain HTLC claims, anchor fee bumps and splices failing to sign when the transaction also spends inputs the on-chain wallet does not own.
 - Fixed splicing from a Taproot primary wallet.
