@@ -1,4 +1,4 @@
-# 0.7.0-rc.76 (Synonym Fork)
+# 0.7.0-rc.77 (Synonym Fork)
 
 ## Bug Fixes
 
@@ -80,6 +80,7 @@
 
 ## Synonym Fork Additions
 
+- Accept incoming payments up to the full channel value, instead of 10% of it, on nodes that cannot announce channels (no node alias or listening addresses), for channels opened after the update.
 - Expose the exact prepared transaction fee so applications can validate the approved total before broadcast.
 - Prevent concurrent prepared payment broadcasts from blocking Tokio worker progress.
 - Release unused change reservations when the last never-submitted prepared payment handle is dropped.
