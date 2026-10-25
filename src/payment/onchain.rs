@@ -221,6 +221,7 @@ impl PreparedOnchainSend {
 				return result.clone();
 			}
 			check_send_context(&self.is_running)?;
+			self.wallet.record_broadcast_txid(&self.txid())?;
 			let source = Arc::clone(&self.chain_source);
 			let tx = self.tx.clone();
 			let submission_started = &self.submission_started;
@@ -911,6 +912,9 @@ impl OnchainPayment {
 	/// that pays a higher fee. The original transaction must have been created with
 	/// RBF enabled (which is the default for transactions created by LDK).
 	///
+	/// Only transactions this wallet built and broadcast itself (on-chain sends, and earlier
+	/// RBF or CPFP transactions) can be replaced.
+	///
 	/// **Note:** This cannot be used on funding transactions as doing so would invalidate the channel.
 	///
 	/// # Arguments
@@ -928,6 +932,7 @@ impl OnchainPayment {
 	/// * [`Error::TransactionNotFound`] - If the transaction can't be found in the wallet
 	/// * [`Error::TransactionAlreadyConfirmed`] - If the transaction is already confirmed
 	/// * [`Error::CannotRbfFundingTransaction`] - If the transaction is a channel funding transaction
+	/// * [`Error::TransactionNotBroadcastByWallet`] - If the transaction was not built and broadcast by this wallet
 	/// * [`Error::InvalidFeeRate`] - If the new fee rate is not higher than the original
 	/// * [`Error::OnchainTxCreationFailed`] - If the new transaction couldn't be created
 	pub fn bump_fee_by_rbf(&self, txid: &Txid, fee_rate: FeeRate) -> Result<Txid, Error> {
@@ -1487,5 +1492,102 @@ mod prepared_send_tests {
 			f.listener.set_nonblocking(true).unwrap();
 			f.assert_no_dispatch();
 		}
+	}
+
+	fn bump_fee() -> bitcoin::FeeRate {
+		bitcoin::FeeRate::from_sat_per_vb_u32(10)
+	}
+
+	fn send_amount() -> OnchainSendAmount {
+		OnchainSendAmount::ExactRetainingReserve { amount_sats: 50_000, cur_anchor_reserve_sats: 0 }
+	}
+
+	// Pop the next package queued on the node's broadcaster and apply it to the wallet graph,
+	// modelling the next mempool sync. A later `last_seen` lets a replacement win over the
+	// transaction it replaces.
+	fn take_broadcast_and_sync(f: &Fixture, last_seen: u64) -> Transaction {
+		let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+		let package = runtime
+			.block_on(async { f.node.tx_broadcaster.get_broadcast_queue().await.try_recv() })
+			.unwrap();
+		assert_eq!(package.len(), 1);
+		let tx = package.into_iter().next().unwrap();
+		f.node.wallet.apply_mempool_txs(vec![(tx.clone(), last_seen)], vec![]).unwrap();
+		tx
+	}
+
+	#[test]
+	fn rbf_bumps_transactions_the_wallet_broadcast() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let txid = f
+			.node
+			.wallet
+			.send_to_address(&f.recipient(), send_amount(), fee(), None, &payment.channel_manager)
+			.unwrap();
+		assert_eq!(take_broadcast_and_sync(&f, 2).compute_txid(), txid);
+
+		let replacement = payment.bump_fee_by_rbf(&txid, bump_fee()).unwrap();
+		assert_eq!(take_broadcast_and_sync(&f, 3).compute_txid(), replacement);
+
+		// A replacement is recorded too, so it can be bumped again.
+		let second =
+			payment.bump_fee_by_rbf(&replacement, bitcoin::FeeRate::from_sat_per_vb_u32(20));
+		assert_ne!(second.unwrap(), replacement);
+	}
+
+	#[test]
+	fn rbf_refuses_transactions_the_wallet_did_not_broadcast() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+
+		let unknown = Txid::from_byte_array([7; 32]);
+		assert_eq!(
+			payment.bump_fee_by_rbf(&unknown, bump_fee()),
+			Err(Error::TransactionNotBroadcastByWallet)
+		);
+
+		// A transaction spending wallet funds that reached the wallet graph from elsewhere.
+		let foreign = f
+			.node
+			.wallet
+			.prepare_send_to_address(
+				&f.recipient(),
+				send_amount(),
+				fee(),
+				None,
+				&payment.channel_manager,
+			)
+			.unwrap();
+		f.node.wallet.apply_mempool_txs(vec![(foreign.clone(), 2)], vec![]).unwrap();
+		let foreign_txid = foreign.compute_txid();
+		assert!(f.node.wallet.get_cached_txs().iter().any(|tx| tx.compute_txid() == foreign_txid));
+		assert_eq!(
+			payment.bump_fee_by_rbf(&foreign_txid, bump_fee()),
+			Err(Error::TransactionNotBroadcastByWallet)
+		);
+		f.assert_no_dispatch();
+	}
+
+	#[test]
+	fn broadcast_record_survives_restart() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let txid = f
+			.node
+			.wallet
+			.send_to_address(&f.recipient(), send_amount(), fee(), None, &payment.channel_manager)
+			.unwrap();
+		let config = (*f.node.config).clone();
+		// Keep the store alive: the test-only `SqliteStore` deletes its directory on drop.
+		let store = Arc::clone(&f.node.kv_store);
+		drop(payment);
+		drop(f);
+
+		let mut builder = crate::Builder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_owned(), None);
+		let node = builder.build_with_store(store).unwrap();
+		assert!(node.wallet.is_broadcast_by_wallet(&txid).unwrap());
+		assert!(!node.wallet.is_broadcast_by_wallet(&Txid::from_byte_array([7; 32])).unwrap());
 	}
 }

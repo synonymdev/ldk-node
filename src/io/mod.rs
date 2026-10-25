@@ -75,6 +75,11 @@ pub(crate) const BDK_WALLET_INDEXER_PRIMARY_NAMESPACE: &str = "bdk_wallet";
 pub(crate) const BDK_WALLET_INDEXER_SECONDARY_NAMESPACE: &str = "";
 pub(crate) const BDK_WALLET_INDEXER_KEY: &str = "indexer";
 
+/// The txid of each transaction the on-chain wallet built and broadcast is persisted as a key
+/// (with an empty value) under this namespace.
+pub(crate) const WALLET_BROADCAST_TXIDS_PRIMARY_NAMESPACE: &str = "wallet_broadcast_txids";
+pub(crate) const WALLET_BROADCAST_TXIDS_SECONDARY_NAMESPACE: &str = "";
+
 /// [`StaticInvoice`]s will be persisted under this key.
 ///
 /// [`StaticInvoice`]: lightning::offers::static_invoice::StaticInvoice

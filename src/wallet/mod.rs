@@ -48,6 +48,7 @@ use lightning::sign::{
 	PeerStorageKey, Recipient, SignerProvider, SpendableOutputDescriptor,
 };
 use lightning::util::message_signing;
+use lightning::util::persist::KVStoreSync;
 use lightning_invoice::RawBolt11Invoice;
 use persist::KVStoreWalletPersister;
 use zeroize::Zeroizing;
@@ -57,6 +58,9 @@ use crate::config::{
 };
 use crate::event::{TxInput, TxOutput};
 use crate::fee_estimator::{ConfirmationTarget, FeeEstimator, OnchainFeeEstimator};
+use crate::io::{
+	WALLET_BROADCAST_TXIDS_PRIMARY_NAMESPACE, WALLET_BROADCAST_TXIDS_SECONDARY_NAMESPACE,
+};
 use crate::logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use crate::payment::store::ConfirmationStatus;
 use crate::payment::{KeychainKind, PaymentDetails, PaymentDirection, PaymentStatus};
@@ -230,6 +234,39 @@ impl Wallet {
 			}
 		}
 		false
+	}
+
+	/// Durably records that this wallet is about to broadcast `txid`, which makes it eligible for
+	/// [`Self::bump_fee_by_rbf`]. Must be called before the transaction is dispatched.
+	pub(crate) fn record_broadcast_txid(&self, txid: &Txid) -> Result<(), Error> {
+		KVStoreSync::write(
+			&*self.kv_store,
+			WALLET_BROADCAST_TXIDS_PRIMARY_NAMESPACE,
+			WALLET_BROADCAST_TXIDS_SECONDARY_NAMESPACE,
+			&txid.to_string(),
+			Vec::new(),
+		)
+		.map_err(|e| {
+			log_error!(self.logger, "Failed to persist broadcast record for {}: {}", txid, e);
+			Error::PersistenceFailed
+		})
+	}
+
+	/// Returns whether `txid` was recorded by [`Self::record_broadcast_txid`].
+	pub(crate) fn is_broadcast_by_wallet(&self, txid: &Txid) -> Result<bool, Error> {
+		match KVStoreSync::read(
+			&*self.kv_store,
+			WALLET_BROADCAST_TXIDS_PRIMARY_NAMESPACE,
+			WALLET_BROADCAST_TXIDS_SECONDARY_NAMESPACE,
+			&txid.to_string(),
+		) {
+			Ok(_) => Ok(true),
+			Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => Ok(false),
+			Err(e) => {
+				log_error!(self.logger, "Failed to read broadcast record for {}: {}", txid, e);
+				Err(Error::PersistenceFailed)
+			},
+		}
 	}
 
 	pub(crate) fn estimate_fee_rate(&self, target: ConfirmationTarget) -> FeeRate {
@@ -857,6 +894,16 @@ impl Wallet {
 			return Err(Error::CannotRbfFundingTransaction);
 		}
 
+		// Only replace transactions this wallet built and broadcast itself.
+		if !self.is_broadcast_by_wallet(txid)? {
+			log_error!(
+				self.logger,
+				"Cannot RBF transaction {}: it was not broadcast by this wallet",
+				txid
+			);
+			return Err(Error::TransactionNotBroadcastByWallet);
+		}
+
 		let mut locked_wallet = self.inner.lock().unwrap();
 
 		let (tx, original_fee) = locked_wallet.build_rbf(*txid, fee_rate).map_err(|e| match e {
@@ -898,10 +945,14 @@ impl Wallet {
 			Error::PersistenceFailed
 		})?;
 
+		let new_txid = tx.compute_txid();
+		if let Err(e) = self.record_broadcast_txid(&new_txid) {
+			let _ = locked_wallet.cancel_tx(&tx);
+			return Err(e);
+		}
+
 		// Extract and broadcast the transaction
 		self.broadcaster.broadcast_transactions(&[&tx]);
-
-		let new_txid = tx.compute_txid();
 
 		// Calculate and log the actual fee increase achieved
 		let new_fee = locked_wallet.calculate_tx_fee(&tx).unwrap_or(Amount::ZERO);
@@ -959,10 +1010,14 @@ impl Wallet {
 			Error::PersistenceFailed
 		})?;
 
+		let child_txid = tx.compute_txid();
+		if let Err(e) = self.record_broadcast_txid(&child_txid) {
+			let _ = locked_wallet.cancel_tx(&tx);
+			return Err(e);
+		}
+
 		// Extract and broadcast the transaction
 		self.broadcaster.broadcast_transactions(&[&tx]);
-
-		let child_txid = tx.compute_txid();
 
 		// Calculate and log the actual results
 		let child_fee = locked_wallet.calculate_tx_fee(&tx).unwrap_or(Amount::ZERO);
@@ -1895,8 +1950,13 @@ impl Wallet {
 			utxos_to_spend,
 			channel_manager,
 		)?;
+		let txid = tx.compute_txid();
+		if let Err(e) = self.record_broadcast_txid(&txid) {
+			let _ = self.cancel_tx(&tx);
+			return Err(e);
+		}
 		self.broadcaster.broadcast_transactions(&[&tx]);
-		Ok(tx.compute_txid())
+		Ok(txid)
 	}
 
 	/// Sign a user transaction and persist wallet changes without dispatching it.

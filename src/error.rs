@@ -133,6 +133,8 @@ pub enum Error {
 	CannotRbfFundingTransaction,
 	/// The transaction was not found in the wallet.
 	TransactionNotFound,
+	/// The transaction was not broadcast by this wallet and cannot be fee-bumped.
+	TransactionNotBroadcastByWallet,
 	/// The transaction is already confirmed and cannot be modified.
 	TransactionAlreadyConfirmed,
 	/// The transaction has no spendable outputs.
@@ -239,6 +241,12 @@ impl fmt::Display for Error {
 				write!(f, "Cannot RBF a channel funding transaction.")
 			},
 			Self::TransactionNotFound => write!(f, "The transaction was not found in the wallet."),
+			Self::TransactionNotBroadcastByWallet => {
+				write!(
+					f,
+					"The transaction was not broadcast by this wallet and cannot be fee-bumped."
+				)
+			},
 			Self::TransactionAlreadyConfirmed => {
 				write!(f, "The transaction is already confirmed and cannot be modified.")
 			},
