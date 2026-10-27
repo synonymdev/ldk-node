@@ -1727,8 +1727,21 @@ mod prepared_send_tests {
 		take_broadcast_and_sync(&f, 2);
 		store.fail.store(true, Ordering::Release);
 
-		// A wallet send fails, queues nothing and releases its change address.
-		let change = payment.wallet.get_drain_script().unwrap();
+		// A wallet send fails, queues nothing and releases its change address: a dropped
+		// candidate learns the next change script, which the failed send must not consume.
+		let next_change = || {
+			let probe =
+				payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+			probe
+				.tx
+				.output
+				.iter()
+				.find(|output| output.script_pubkey != f.recipient().script_pubkey())
+				.unwrap()
+				.script_pubkey
+				.clone()
+		};
+		let change = next_change();
 		assert_eq!(
 			f.node
 				.wallet
@@ -1743,7 +1756,7 @@ mod prepared_send_tests {
 			Some(Error::PersistenceFailed)
 		);
 		f.assert_nothing_queued();
-		assert_eq!(payment.wallet.get_drain_script().unwrap(), change);
+		assert_eq!(next_change(), change);
 
 		assert_eq!(payment.bump_fee_by_rbf(&recorded, bump_fee()), Err(Error::PersistenceFailed));
 		f.assert_nothing_queued();
