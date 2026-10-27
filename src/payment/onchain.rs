@@ -221,6 +221,7 @@ impl PreparedOnchainSend {
 				return result.clone();
 			}
 			check_send_context(&self.is_running)?;
+			self.wallet.record_broadcast_txid(&self.txid())?;
 			let source = Arc::clone(&self.chain_source);
 			let tx = self.tx.clone();
 			let submission_started = &self.submission_started;
@@ -911,6 +912,9 @@ impl OnchainPayment {
 	/// that pays a higher fee. The original transaction must have been created with
 	/// RBF enabled (which is the default for transactions created by LDK).
 	///
+	/// Only transactions this wallet built and broadcast itself (on-chain sends, and earlier
+	/// RBF or CPFP transactions) can be replaced.
+	///
 	/// **Note:** This cannot be used on funding transactions as doing so would invalidate the channel.
 	///
 	/// # Arguments
@@ -925,9 +929,15 @@ impl OnchainPayment {
 	/// # Errors
 	///
 	/// * [`Error::NotRunning`] - If the node is not running
-	/// * [`Error::TransactionNotFound`] - If the transaction can't be found in the wallet
-	/// * [`Error::TransactionAlreadyConfirmed`] - If the transaction is already confirmed
 	/// * [`Error::CannotRbfFundingTransaction`] - If the transaction is a channel funding transaction
+	/// * [`Error::TransactionNotBroadcastByWallet`] - If this wallet has no broadcast record for
+	///   the transaction. This check runs before the wallet lookup, so it is also returned for
+	///   unknown transactions and for sends made before upgrading to a version that keeps records
+	/// * [`Error::TransactionNotFound`] - If a recorded transaction has not reached the wallet yet
+	///   (e.g. before the next sync)
+	/// * [`Error::TransactionAlreadyConfirmed`] - If a recorded transaction is already confirmed
+	/// * [`Error::PersistenceFailed`] - If the broadcast record can't be read or the replacement's
+	///   record can't be written; nothing is broadcast in that case
 	/// * [`Error::InvalidFeeRate`] - If the new fee rate is not higher than the original
 	/// * [`Error::OnchainTxCreationFailed`] - If the new transaction couldn't be created
 	pub fn bump_fee_by_rbf(&self, txid: &Txid, fee_rate: FeeRate) -> Result<Txid, Error> {
@@ -1035,10 +1045,18 @@ impl OnchainPayment {
 #[cfg(all(test, not(feature = "uniffi")))]
 mod prepared_send_tests {
 	use super::*;
+	use crate::io::test_utils::InMemoryStore;
+	use crate::io::WALLET_BROADCAST_TXIDS_PRIMARY_NAMESPACE;
+	use crate::types::DynStore;
 	use bitcoin::hashes::Hash;
 	use bitcoin::{absolute, transaction, Amount, Network, TxIn, TxOut};
+	use lightning::util::persist::{KVStore, KVStoreSync};
+	use std::future::Future;
 	use std::io::{Read, Write};
 	use std::net::TcpListener;
+	use std::pin::Pin;
+	use std::sync::atomic::AtomicBool;
+	use std::thread::JoinHandle;
 	use std::time::Duration;
 
 	struct Fixture {
@@ -1048,6 +1066,10 @@ mod prepared_send_tests {
 
 	impl Fixture {
 		fn new() -> Self {
+			Self::with_store(None)
+		}
+
+		fn with_store(store: Option<Arc<DynStore>>) -> Self {
 			let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 			listener.set_nonblocking(true).unwrap();
 			let dir = std::env::temp_dir().join(format!("ldk-prepared-{}", rand::random::<u64>()));
@@ -1062,7 +1084,10 @@ mod prepared_send_tests {
 				format!("http://{}", listener.local_addr().unwrap()),
 				Some(crate::config::EsploraSyncConfig { background_sync_config: None }),
 			);
-			let node = builder.build().unwrap();
+			let node = match store {
+				Some(store) => builder.build_with_store(store).unwrap(),
+				None => builder.build().unwrap(),
+			};
 			// Exercise signing and direct dispatch without starting any background sync tasks.
 			*node.is_running.write().unwrap() = true;
 			let address = node.onchain_payment().new_address().unwrap();
@@ -1092,6 +1117,133 @@ mod prepared_send_tests {
 
 		fn assert_no_dispatch(&self) {
 			assert_eq!(self.listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+		}
+
+		// Wallet sends, RBF and CPFP enqueue on the broadcaster rather than contacting the
+		// listener, and the fixture never starts the task that drains that queue.
+		fn assert_nothing_queued(&self) {
+			let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+			assert!(runtime
+				.block_on(async { self.node.tx_broadcaster.get_broadcast_queue().await.try_recv() })
+				.is_err());
+		}
+	}
+
+	// Serves one Esplora `POST /tx` on `listener` with the given response, returning the
+	// request body.
+	fn serve_one_tx_post(listener: TcpListener, status: u16, body: String) -> JoinHandle<String> {
+		std::thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+			let mut request = Vec::new();
+			let header_end = loop {
+				let mut byte = [0u8; 1];
+				stream.read_exact(&mut byte).unwrap();
+				request.push(byte[0]);
+				if request.ends_with(b"\r\n\r\n") {
+					break request.len();
+				}
+			};
+			let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+			assert!(headers.starts_with("POST /tx HTTP/1.1"));
+			let len: usize = headers
+				.lines()
+				.find_map(|line| {
+					line.to_ascii_lowercase().strip_prefix("content-length: ").map(str::to_owned)
+				})
+				.unwrap()
+				.parse()
+				.unwrap();
+			let mut bytes = vec![0u8; len];
+			stream.read_exact(&mut bytes).unwrap();
+			std::thread::sleep(Duration::from_millis(100));
+			write!(
+				stream,
+				"HTTP/1.1 {} result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+				status,
+				body.len(),
+				body
+			)
+			.unwrap();
+			String::from_utf8(bytes).unwrap()
+		})
+	}
+
+	// Fails writes to the broadcast record namespace while `fail` is set.
+	struct FailingRecordStore {
+		inner: InMemoryStore,
+		fail: AtomicBool,
+	}
+
+	impl FailingRecordStore {
+		fn check(&self, primary_namespace: &str) -> lightning::io::Result<()> {
+			if primary_namespace == WALLET_BROADCAST_TXIDS_PRIMARY_NAMESPACE
+				&& self.fail.load(Ordering::Acquire)
+			{
+				return Err(lightning::io::Error::new(
+					lightning::io::ErrorKind::Other,
+					"injected write failure",
+				));
+			}
+			Ok(())
+		}
+	}
+
+	impl KVStoreSync for FailingRecordStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> lightning::io::Result<Vec<u8>> {
+			KVStoreSync::read(&self.inner, primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> lightning::io::Result<()> {
+			self.check(primary_namespace)?;
+			KVStoreSync::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> lightning::io::Result<()> {
+			KVStoreSync::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> lightning::io::Result<Vec<String>> {
+			KVStoreSync::list(&self.inner, primary_namespace, secondary_namespace)
+		}
+	}
+
+	impl KVStore for FailingRecordStore {
+		fn read(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, lightning::io::Error>> + 'static + Send>>
+		{
+			KVStore::read(&self.inner, primary_namespace, secondary_namespace, key)
+		}
+
+		fn write(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		) -> Pin<Box<dyn Future<Output = Result<(), lightning::io::Error>> + 'static + Send>> {
+			if let Err(e) = self.check(primary_namespace) {
+				return Box::pin(async move { Err(e) });
+			}
+			KVStore::write(&self.inner, primary_namespace, secondary_namespace, key, buf)
+		}
+
+		fn remove(
+			&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
+		) -> Pin<Box<dyn Future<Output = Result<(), lightning::io::Error>> + 'static + Send>> {
+			KVStore::remove(&self.inner, primary_namespace, secondary_namespace, key, lazy)
+		}
+
+		fn list(
+			&self, primary_namespace: &str, secondary_namespace: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, lightning::io::Error>> + 'static + Send>>
+		{
+			KVStore::list(&self.inner, primary_namespace, secondary_namespace)
 		}
 	}
 
@@ -1401,51 +1553,15 @@ mod prepared_send_tests {
 			listener.set_nonblocking(false).unwrap();
 			let expected_body = bitcoin::consensus::encode::serialize_hex(&prepared.tx);
 			let txid = prepared.txid();
-			let server = std::thread::spawn(move || {
-				let (mut stream, _) = listener.accept().unwrap();
-				stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-				let mut request = Vec::new();
-				let header_end = loop {
-					let mut byte = [0u8; 1];
-					stream.read_exact(&mut byte).unwrap();
-					request.push(byte[0]);
-					if request.ends_with(b"\r\n\r\n") {
-						break request.len();
-					}
-				};
-				let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
-				assert!(headers.starts_with("POST /tx HTTP/1.1"));
-				let len: usize = headers
-					.lines()
-					.find_map(|line| {
-						line.to_ascii_lowercase()
-							.strip_prefix("content-length: ")
-							.map(str::to_owned)
-					})
-					.unwrap()
-					.parse()
-					.unwrap();
-				let mut bytes = vec![0u8; len];
-				stream.read_exact(&mut bytes).unwrap();
-				assert_eq!(String::from_utf8(bytes).unwrap(), expected_body);
-				let body = match body_kind {
-					"accepted" => txid.to_string(),
-					"rejected" => {
-						"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}"
-							.to_owned()
-					},
-					_ => "malformed".to_owned(),
-				};
-				std::thread::sleep(Duration::from_millis(100));
-				write!(
-					stream,
-					"HTTP/1.1 {} result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-					status,
-					body.len(),
-					body
-				)
-				.unwrap();
-			});
+			let body = match body_kind {
+				"accepted" => txid.to_string(),
+				"rejected" => {
+					"sendrawtransaction RPC error: {\"code\":-26,\"message\":\"non-final\"}"
+						.to_owned()
+				},
+				_ => "malformed".to_owned(),
+			};
+			let server = serve_one_tx_post(listener, status, body);
 			let runtime = tokio::runtime::Builder::new_multi_thread()
 				.worker_threads(1)
 				.enable_all()
@@ -1468,7 +1584,7 @@ mod prepared_send_tests {
 					matches!(result, OnchainSendResult::Rejected { txid: id, .. } if id == txid),
 				_ => matches!(result, OnchainSendResult::Unknown { txid: id } if id == txid),
 			});
-			server.join().unwrap();
+			assert_eq!(server.join().unwrap(), expected_body);
 			let reserved_change = prepared
 				.tx
 				.output
@@ -1487,5 +1603,210 @@ mod prepared_send_tests {
 			f.listener.set_nonblocking(true).unwrap();
 			f.assert_no_dispatch();
 		}
+	}
+
+	fn bump_fee() -> bitcoin::FeeRate {
+		bitcoin::FeeRate::from_sat_per_vb_u32(10)
+	}
+
+	fn send_amount() -> OnchainSendAmount {
+		OnchainSendAmount::ExactRetainingReserve { amount_sats: 50_000, cur_anchor_reserve_sats: 0 }
+	}
+
+	// Pop the next package queued on the node's broadcaster and apply it to the wallet graph,
+	// modelling the next mempool sync. A later `last_seen` lets a replacement win over the
+	// transaction it replaces.
+	fn take_broadcast_and_sync(f: &Fixture, last_seen: u64) -> Transaction {
+		let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+		let package = runtime
+			.block_on(async { f.node.tx_broadcaster.get_broadcast_queue().await.try_recv() })
+			.unwrap();
+		assert_eq!(package.len(), 1);
+		let tx = package.into_iter().next().unwrap();
+		f.node.wallet.apply_mempool_txs(vec![(tx.clone(), last_seen)], vec![]).unwrap();
+		tx
+	}
+
+	#[test]
+	fn rbf_bumps_transactions_the_wallet_broadcast() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let txid = f
+			.node
+			.wallet
+			.send_to_address(&f.recipient(), send_amount(), fee(), None, &payment.channel_manager)
+			.unwrap();
+		assert_eq!(take_broadcast_and_sync(&f, 2).compute_txid(), txid);
+
+		let replacement = payment.bump_fee_by_rbf(&txid, bump_fee()).unwrap();
+		assert_eq!(take_broadcast_and_sync(&f, 3).compute_txid(), replacement);
+
+		// A replacement is recorded too, so it can be bumped again.
+		let second =
+			payment.bump_fee_by_rbf(&replacement, bitcoin::FeeRate::from_sat_per_vb_u32(20));
+		assert_ne!(second.unwrap(), replacement);
+	}
+
+	#[test]
+	fn rbf_refuses_transactions_the_wallet_did_not_broadcast() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+
+		let unknown = Txid::from_byte_array([7; 32]);
+		assert_eq!(
+			payment.bump_fee_by_rbf(&unknown, bump_fee()),
+			Err(Error::TransactionNotBroadcastByWallet)
+		);
+
+		// A transaction spending wallet funds that reached the wallet graph from elsewhere.
+		let foreign = f
+			.node
+			.wallet
+			.prepare_send_to_address(
+				&f.recipient(),
+				send_amount(),
+				fee(),
+				None,
+				&payment.channel_manager,
+			)
+			.unwrap();
+		f.node.wallet.apply_mempool_txs(vec![(foreign.clone(), 2)], vec![]).unwrap();
+		let foreign_txid = foreign.compute_txid();
+		assert!(f.node.wallet.get_cached_txs().iter().any(|tx| tx.compute_txid() == foreign_txid));
+		assert_eq!(
+			payment.bump_fee_by_rbf(&foreign_txid, bump_fee()),
+			Err(Error::TransactionNotBroadcastByWallet)
+		);
+		f.assert_nothing_queued();
+	}
+
+	#[test]
+	fn rbf_bumps_transactions_sent_through_prepared_broadcast() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let prepared =
+			payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+		let txid = prepared.txid();
+		let listener = f.listener.try_clone().unwrap();
+		listener.set_nonblocking(false).unwrap();
+		let server = serve_one_tx_post(listener, 200, txid.to_string());
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let candidate = Arc::clone(&prepared);
+		let result = runtime
+			.block_on(async move { tokio::spawn(async move { candidate.broadcast() }).await })
+			.unwrap()
+			.unwrap();
+		assert!(matches!(result, OnchainSendResult::Accepted { txid: id } if id == txid));
+		assert_eq!(server.join().unwrap(), bitcoin::consensus::encode::serialize_hex(&prepared.tx));
+		f.listener.set_nonblocking(true).unwrap();
+
+		// Model the next mempool sync, then replace the prepared send.
+		f.node.wallet.apply_mempool_txs(vec![(prepared.tx.clone(), 2)], vec![]).unwrap();
+		let replacement = payment.bump_fee_by_rbf(&txid, bump_fee()).unwrap();
+		assert_eq!(take_broadcast_and_sync(&f, 3).compute_txid(), replacement);
+	}
+
+	#[test]
+	fn failed_broadcast_record_write_dispatches_nothing() {
+		let store = Arc::new(FailingRecordStore {
+			inner: InMemoryStore::new(),
+			fail: AtomicBool::new(false),
+		});
+		let f = Fixture::with_store(Some(Arc::clone(&store) as Arc<DynStore>));
+		let payment = f.node.onchain_payment();
+		// Record one send while writes still succeed, so it can be bumped below.
+		let recorded = f
+			.node
+			.wallet
+			.send_to_address(&f.recipient(), send_amount(), fee(), None, &payment.channel_manager)
+			.unwrap();
+		take_broadcast_and_sync(&f, 2);
+		store.fail.store(true, Ordering::Release);
+
+		// A wallet send fails, queues nothing and releases its change address: a dropped
+		// candidate learns the next change script, which the failed send must not consume.
+		let next_change = || {
+			let probe =
+				payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+			probe
+				.tx
+				.output
+				.iter()
+				.find(|output| output.script_pubkey != f.recipient().script_pubkey())
+				.unwrap()
+				.script_pubkey
+				.clone()
+		};
+		let change = next_change();
+		assert_eq!(
+			f.node
+				.wallet
+				.send_to_address(
+					&f.recipient(),
+					send_amount(),
+					fee(),
+					None,
+					&payment.channel_manager
+				)
+				.err(),
+			Some(Error::PersistenceFailed)
+		);
+		f.assert_nothing_queued();
+		assert_eq!(next_change(), change);
+
+		assert_eq!(payment.bump_fee_by_rbf(&recorded, bump_fee()), Err(Error::PersistenceFailed));
+		f.assert_nothing_queued();
+		assert_eq!(
+			payment.accelerate_by_cpfp(&recorded, Some(bump_fee()), None),
+			Err(Error::PersistenceFailed)
+		);
+		f.assert_nothing_queued();
+
+		// A prepared send fails before reaching the chain source and caches no result.
+		let prepared =
+			payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let candidate = Arc::clone(&prepared);
+		let result = runtime
+			.block_on(async move { tokio::spawn(async move { candidate.broadcast() }).await })
+			.unwrap();
+		assert_eq!(result, Err(Error::PersistenceFailed));
+		assert!(prepared.result.lock().unwrap().is_none());
+		f.assert_no_dispatch();
+
+		// The failed replacement left the wallet consistent: it bumps once writes succeed.
+		store.fail.store(false, Ordering::Release);
+		let replacement = payment.bump_fee_by_rbf(&recorded, bump_fee()).unwrap();
+		assert_eq!(take_broadcast_and_sync(&f, 3).compute_txid(), replacement);
+	}
+
+	#[test]
+	fn broadcast_record_survives_restart() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let txid = f
+			.node
+			.wallet
+			.send_to_address(&f.recipient(), send_amount(), fee(), None, &payment.channel_manager)
+			.unwrap();
+		let config = (*f.node.config).clone();
+		// Keep the store alive: the test-only `SqliteStore` deletes its directory on drop.
+		let store = Arc::clone(&f.node.kv_store);
+		drop(payment);
+		drop(f);
+
+		let mut builder = crate::Builder::from_config(config);
+		builder.set_chain_source_esplora("http://127.0.0.1:1".to_owned(), None);
+		let node = builder.build_with_store(store).unwrap();
+		assert!(node.wallet.is_broadcast_by_wallet(&txid).unwrap());
+		assert!(!node.wallet.is_broadcast_by_wallet(&Txid::from_byte_array([7; 32])).unwrap());
 	}
 }

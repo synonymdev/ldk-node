@@ -509,6 +509,7 @@ enum NodeError {
 	"AsyncPaymentServicesDisabled",
 	"CannotRbfFundingTransaction",
     "TransactionNotFound",
+    "TransactionNotBroadcastByWallet",
     "TransactionAlreadyConfirmed",
     "NoSpendableOutputs",
     "CoinSelectionFailed",
