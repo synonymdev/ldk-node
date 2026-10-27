@@ -2036,6 +2036,8 @@ sealed class NodeException(message: String): kotlin.Exception(message) {
 
     class TransactionNotFound(message: String) : NodeException(message)
 
+    class TransactionNotBroadcastByWallet(message: String) : NodeException(message)
+
     class TransactionAlreadyConfirmed(message: String) : NodeException(message)
 
     class NoSpendableOutputs(message: String) : NodeException(message)
