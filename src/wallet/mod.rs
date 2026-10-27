@@ -898,7 +898,7 @@ impl Wallet {
 		if !self.is_broadcast_by_wallet(txid)? {
 			log_error!(
 				self.logger,
-				"Cannot RBF transaction {}: it was not broadcast by this wallet",
+				"Cannot RBF transaction {}: this wallet has no broadcast record for it",
 				txid
 			);
 			return Err(Error::TransactionNotBroadcastByWallet);
