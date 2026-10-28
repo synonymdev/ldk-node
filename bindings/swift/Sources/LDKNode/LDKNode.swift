@@ -9479,6 +9479,8 @@ public enum NodeError {
 
     case TransactionNotFound(message: String)
 
+    case TransactionNotBroadcastByWallet(message: String)
+
     case TransactionAlreadyConfirmed(message: String)
 
     case NoSpendableOutputs(message: String)
@@ -9741,43 +9743,47 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 59: return try .TransactionAlreadyConfirmed(
+        case 59: return try .TransactionNotBroadcastByWallet(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 60: return try .NoSpendableOutputs(
+        case 60: return try .TransactionAlreadyConfirmed(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 61: return try .CoinSelectionFailed(
+        case 61: return try .NoSpendableOutputs(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 62: return try .InvalidMnemonic(
+        case 62: return try .CoinSelectionFailed(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 63: return try .BackgroundSyncNotEnabled(
+        case 63: return try .InvalidMnemonic(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 64: return try .AddressTypeAlreadyMonitored(
+        case 64: return try .BackgroundSyncNotEnabled(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 65: return try .AddressTypeIsPrimary(
+        case 65: return try .AddressTypeAlreadyMonitored(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 66: return try .AddressTypeNotMonitored(
+        case 66: return try .AddressTypeIsPrimary(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 67: return try .OnchainWalletAccountNotRegistered(
+        case 67: return try .AddressTypeNotMonitored(
                 message: FfiConverterString.read(from: &buf)
             )
 
-        case 68: return try .InvalidSeedBytes(
+        case 68: return try .OnchainWalletAccountNotRegistered(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 69: return try .InvalidSeedBytes(
                 message: FfiConverterString.read(from: &buf)
             )
 
@@ -9903,26 +9909,28 @@ public struct FfiConverterTypeNodeError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(57))
         case .TransactionNotFound(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(58))
-        case .TransactionAlreadyConfirmed(_ /* message is ignored*/ ):
+        case .TransactionNotBroadcastByWallet(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(59))
-        case .NoSpendableOutputs(_ /* message is ignored*/ ):
+        case .TransactionAlreadyConfirmed(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(60))
-        case .CoinSelectionFailed(_ /* message is ignored*/ ):
+        case .NoSpendableOutputs(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(61))
-        case .InvalidMnemonic(_ /* message is ignored*/ ):
+        case .CoinSelectionFailed(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(62))
-        case .BackgroundSyncNotEnabled(_ /* message is ignored*/ ):
+        case .InvalidMnemonic(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(63))
-        case .AddressTypeAlreadyMonitored(_ /* message is ignored*/ ):
+        case .BackgroundSyncNotEnabled(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(64))
-        case .AddressTypeIsPrimary(_ /* message is ignored*/ ):
+        case .AddressTypeAlreadyMonitored(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(65))
-        case .AddressTypeNotMonitored(_ /* message is ignored*/ ):
+        case .AddressTypeIsPrimary(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(66))
-        case .OnchainWalletAccountNotRegistered(_ /* message is ignored*/ ):
+        case .AddressTypeNotMonitored(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(67))
-        case .InvalidSeedBytes(_ /* message is ignored*/ ):
+        case .OnchainWalletAccountNotRegistered(_ /* message is ignored*/ ):
             writeInt(&buf, Int32(68))
+        case .InvalidSeedBytes(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(69))
         }
     }
 }

@@ -13784,6 +13784,11 @@ class NodeError:  # type: ignore
         def __repr__(self):
             return "NodeError.TransactionNotFound({})".format(repr(str(self)))
     _UniffiTempNodeError.TransactionNotFound = TransactionNotFound # type: ignore
+    class TransactionNotBroadcastByWallet(_UniffiTempNodeError):
+
+        def __repr__(self):
+            return "NodeError.TransactionNotBroadcastByWallet({})".format(repr(str(self)))
+    _UniffiTempNodeError.TransactionNotBroadcastByWallet = TransactionNotBroadcastByWallet # type: ignore
     class TransactionAlreadyConfirmed(_UniffiTempNodeError):
 
         def __repr__(self):
@@ -14076,42 +14081,46 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
                 _UniffiConverterString.read(buf),
             )
         if variant == 59:
-            return NodeError.TransactionAlreadyConfirmed(
+            return NodeError.TransactionNotBroadcastByWallet(
                 _UniffiConverterString.read(buf),
             )
         if variant == 60:
-            return NodeError.NoSpendableOutputs(
+            return NodeError.TransactionAlreadyConfirmed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 61:
-            return NodeError.CoinSelectionFailed(
+            return NodeError.NoSpendableOutputs(
                 _UniffiConverterString.read(buf),
             )
         if variant == 62:
-            return NodeError.InvalidMnemonic(
+            return NodeError.CoinSelectionFailed(
                 _UniffiConverterString.read(buf),
             )
         if variant == 63:
-            return NodeError.BackgroundSyncNotEnabled(
+            return NodeError.InvalidMnemonic(
                 _UniffiConverterString.read(buf),
             )
         if variant == 64:
-            return NodeError.AddressTypeAlreadyMonitored(
+            return NodeError.BackgroundSyncNotEnabled(
                 _UniffiConverterString.read(buf),
             )
         if variant == 65:
-            return NodeError.AddressTypeIsPrimary(
+            return NodeError.AddressTypeAlreadyMonitored(
                 _UniffiConverterString.read(buf),
             )
         if variant == 66:
-            return NodeError.AddressTypeNotMonitored(
+            return NodeError.AddressTypeIsPrimary(
                 _UniffiConverterString.read(buf),
             )
         if variant == 67:
-            return NodeError.OnchainWalletAccountNotRegistered(
+            return NodeError.AddressTypeNotMonitored(
                 _UniffiConverterString.read(buf),
             )
         if variant == 68:
+            return NodeError.OnchainWalletAccountNotRegistered(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 69:
             return NodeError.InvalidSeedBytes(
                 _UniffiConverterString.read(buf),
             )
@@ -14234,6 +14243,8 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
         if isinstance(value, NodeError.CannotRbfFundingTransaction):
             return
         if isinstance(value, NodeError.TransactionNotFound):
+            return
+        if isinstance(value, NodeError.TransactionNotBroadcastByWallet):
             return
         if isinstance(value, NodeError.TransactionAlreadyConfirmed):
             return
@@ -14374,26 +14385,28 @@ class _UniffiConverterTypeNodeError(_UniffiConverterRustBuffer):
             buf.write_i32(57)
         if isinstance(value, NodeError.TransactionNotFound):
             buf.write_i32(58)
-        if isinstance(value, NodeError.TransactionAlreadyConfirmed):
+        if isinstance(value, NodeError.TransactionNotBroadcastByWallet):
             buf.write_i32(59)
-        if isinstance(value, NodeError.NoSpendableOutputs):
+        if isinstance(value, NodeError.TransactionAlreadyConfirmed):
             buf.write_i32(60)
-        if isinstance(value, NodeError.CoinSelectionFailed):
+        if isinstance(value, NodeError.NoSpendableOutputs):
             buf.write_i32(61)
-        if isinstance(value, NodeError.InvalidMnemonic):
+        if isinstance(value, NodeError.CoinSelectionFailed):
             buf.write_i32(62)
-        if isinstance(value, NodeError.BackgroundSyncNotEnabled):
+        if isinstance(value, NodeError.InvalidMnemonic):
             buf.write_i32(63)
-        if isinstance(value, NodeError.AddressTypeAlreadyMonitored):
+        if isinstance(value, NodeError.BackgroundSyncNotEnabled):
             buf.write_i32(64)
-        if isinstance(value, NodeError.AddressTypeIsPrimary):
+        if isinstance(value, NodeError.AddressTypeAlreadyMonitored):
             buf.write_i32(65)
-        if isinstance(value, NodeError.AddressTypeNotMonitored):
+        if isinstance(value, NodeError.AddressTypeIsPrimary):
             buf.write_i32(66)
-        if isinstance(value, NodeError.OnchainWalletAccountNotRegistered):
+        if isinstance(value, NodeError.AddressTypeNotMonitored):
             buf.write_i32(67)
-        if isinstance(value, NodeError.InvalidSeedBytes):
+        if isinstance(value, NodeError.OnchainWalletAccountNotRegistered):
             buf.write_i32(68)
+        if isinstance(value, NodeError.InvalidSeedBytes):
+            buf.write_i32(69)
 
 
 
