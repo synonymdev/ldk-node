@@ -398,6 +398,33 @@ fn ordinary_stop_can_still_restart_and_borrowed_runtime_is_refused_unchanged() {
 }
 
 #[test]
+fn ordinary_stop_with_inbound_peer_can_restart_and_finish_shutdown() {
+	let fixture = Fixture::new();
+	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+	let port = listener.local_addr().unwrap().port();
+	drop(listener);
+	let address = lightning::ln::msgs::SocketAddress::TcpIpV4 { addr: [127, 0, 0, 1], port };
+	let node = fixture.node_with_listener(42, Some(address.clone()));
+	node.start().unwrap();
+	let peer_fixture = Fixture::new();
+	let peer = peer_fixture.node_with_listener(43, None);
+	peer.start().unwrap();
+	peer.connect(node.node_id(), address, false).unwrap();
+	let deadline = std::time::Instant::now() + Duration::from_secs(5);
+	while node.peer_manager.peer_by_node_id(&peer.node_id()).is_none() {
+		assert!(std::time::Instant::now() < deadline, "inbound handshake did not complete");
+		thread::sleep(Duration::from_millis(1));
+	}
+	node.stop().unwrap();
+	node.start().unwrap();
+	assert!(node.status().is_running);
+	let mut owner = shutdown(node);
+	assert_eq!(owner.wait(Duration::from_secs(5)), Ok(()));
+	assert_eq!(owner.wait(Duration::ZERO), Ok(()));
+	peer.stop().unwrap();
+}
+
+#[test]
 fn late_handshake_is_disconnected_after_background_completion() {
 	let remote_fixture = Fixture::new();
 	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
