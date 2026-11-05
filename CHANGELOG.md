@@ -81,7 +81,8 @@
 
 ## Synonym Fork Additions
 
-- Add a Rust-only consuming VSS shutdown owner that waits for original native work and final persistence, retains timeouts and failures, and refuses entry while exported child handles remain. This is source preparation; mobile bindings and migration activation are unchanged.
+- Expose `Node::prepare_shutdown`, `NodeShutdownHandle::wait` and `ShutdownHandleError` through Swift, Kotlin and Python bindings. Callers must close admission, finish admitted operations and event listeners, release node and child aliases, and retain the same handle and lifecycle fence until success. Call `wait` off the UI thread. Generated bindings require matching native binaries; migration activation remains unchanged.
+- Add a consuming VSS shutdown owner that waits for original native work and final persistence, retains timeouts and failures, and refuses entry while exported child handles remain.
 
 - Accept incoming payments up to the full channel value, instead of 10% of it, on nodes that cannot announce channels (no node alias or listening addresses), for channels opened after the update.
 - Expose the exact prepared transaction fee so applications can validate the approved total before broadcast.

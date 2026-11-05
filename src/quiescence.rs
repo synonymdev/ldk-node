@@ -130,6 +130,7 @@ pub struct NodeShutdown {
 }
 
 enum ShutdownPhase {
+	Prepared,
 	Background,
 	NativeChain,
 	NativePeers,
@@ -139,11 +140,22 @@ enum ShutdownPhase {
 }
 
 impl NodeShutdown {
-	pub(crate) fn begin(node: crate::Node) -> Self {
+	pub(crate) fn prepare(node: Box<crate::Node>) -> Self {
 		let failure = node
 			.background_processor_failed
 			.load(Ordering::Acquire)
 			.then_some(ShutdownError::PersistenceFailed);
+		Self {
+			node,
+			phase: ShutdownPhase::Prepared,
+			failure,
+			#[cfg(test)]
+			after_background_disconnect: None,
+		}
+	}
+
+	pub(crate) fn begin(&mut self) {
+		let node = &self.node;
 		*node.is_running.write().unwrap() = false;
 		node.background_processor_generation.fetch_add(1, Ordering::AcqRel);
 		node.strict_shutdown.store(true, Ordering::Release);
@@ -152,13 +164,7 @@ impl NodeShutdown {
 		node.chain_source.begin_shutdown();
 		let _ = node.stop_sender.send(());
 		node.peer_manager.disconnect_all_peers();
-		Self {
-			node: Box::new(node),
-			phase: ShutdownPhase::Background,
-			failure,
-			#[cfg(test)]
-			after_background_disconnect: None,
-		}
+		self.phase = ShutdownPhase::Background;
 	}
 
 	/// Wait up to `timeout` for the original tasks, callbacks and persistence operations.
@@ -182,6 +188,10 @@ impl NodeShutdown {
 		loop {
 			let remaining = deadline.saturating_duration_since(Instant::now());
 			let result = match self.phase {
+				ShutdownPhase::Prepared => {
+					self.begin();
+					continue;
+				},
 				ShutdownPhase::Background => {
 					// An already admitted handshake may finish after the first disconnect.
 					// Keep disconnecting only those original peers while their tasks drain.
@@ -234,6 +244,7 @@ impl NodeShutdown {
 				},
 				ShutdownPhase::Processor => ShutdownPhase::Store,
 				ShutdownPhase::Store | ShutdownPhase::Complete => ShutdownPhase::Complete,
+				ShutdownPhase::Prepared => unreachable!("prepared owner began above"),
 			};
 		}
 	}

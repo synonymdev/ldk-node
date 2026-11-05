@@ -2611,6 +2611,7 @@ fn build_with_store_internal(
 		payment_store,
 		lifecycle_lock: Mutex::new(()),
 		shutdown_owner: Arc::new(()),
+		shutdown_handoff: Mutex::new(std::sync::Weak::new()),
 		strict_shutdown: Arc::new(AtomicBool::new(false)),
 		shutdown_store: None,
 		is_running,

@@ -100,6 +100,8 @@ mod probe_handle;
 mod quiescence;
 mod runtime;
 pub use quiescence::{NodeShutdown, ShutdownError};
+mod shutdown_handoff;
+pub use shutdown_handoff::{NodeShutdownHandle, ShutdownHandleError};
 mod scoring;
 mod tx_broadcaster;
 mod types;
@@ -217,6 +219,7 @@ pub struct Node {
 	payment_store: Arc<PaymentStore>,
 	lifecycle_lock: Mutex<()>,
 	shutdown_owner: Arc<()>,
+	shutdown_handoff: Mutex<std::sync::Weak<NodeShutdownHandle>>,
 	strict_shutdown: Arc<AtomicBool>,
 	shutdown_store: Option<Arc<io::vss_store::VssStore>>,
 	is_running: Arc<RwLock<bool>>,
@@ -332,14 +335,22 @@ impl Node {
 	/// }
 	/// # }
 	/// ```
-	pub fn try_into_shutdown(mut self) -> Result<NodeShutdown, Box<Self>> {
+	pub fn try_into_shutdown(self) -> Result<NodeShutdown, Box<Self>> {
+		let mut owner = Box::new(self).prepare_shutdown_owner()?;
+		owner.begin();
+		Ok(owner)
+	}
+
+	// Separate ownership transfer from effects so the FFI handle can retain the node
+	// inside its mutex before any shutdown operation can panic.
+	fn prepare_shutdown_owner(mut self: Box<Self>) -> Result<NodeShutdown, Box<Self>> {
 		if Arc::get_mut(&mut self.shutdown_owner).is_none()
 			|| !self.runtime.owns_runtime()
 			|| self.shutdown_store.is_none()
 		{
-			return Err(Box::new(self));
+			return Err(self);
 		}
-		Ok(NodeShutdown::begin(self))
+		Ok(NodeShutdown::prepare(self))
 	}
 
 	/// Starts the necessary background tasks, such as handling events coming from user input,

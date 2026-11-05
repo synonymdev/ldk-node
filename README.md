@@ -111,7 +111,21 @@ background processor and then closes and drains the original store. A persistenc
 interrupted task remains a failure; a later successful write cannot erase it. Dropping the owner
 or cancelling a waiter is not evidence that shutdown succeeded.
 
-This Rust API is not exported through mobile bindings. Its result concerns this node's work,
-not independent nodes, processes or storage writers. It supplies neither a complete-wallet
-backup nor a server migration receipt. Applications still need ownership fencing across every
-original domain and compatible server enforcement before changing storage ownership.
+Reference-counted Rust and generated-language callers can instead use `Node::prepare_shutdown`.
+It returns a retained `NodeShutdownHandle` without stopping the node. Repeated preparations
+share the same native owner. Close application admission, finish admitted operations and event
+listeners, then release every Node alias and payment handle. Preserve genuine pending sends
+until they finish. Clearing one variable, cancelling a listener task, or destroying a foreign
+wrapper does not prove that its native calls have ended.
+
+Call the handle's `wait(timeout_millis)` off the UI thread. `PendingHandles` leaves the original
+node unchanged while aliases or children remain; `Busy` means another waiter owns the transition.
+After exclusive ownership is obtained, timeouts and failures stay attached to that same original
+shutdown. Retain the handle and application lifecycle fence until successful completion. An idle
+event waiter must actually finish or release its native future; language-level cancellation alone
+may not do so.
+
+The result concerns this node's work, not independent nodes, processes or storage writers. It
+supplies neither a complete-wallet backup nor a server migration receipt. Applications still
+need ownership fencing across every original domain and compatible server enforcement before
+changing storage ownership.
