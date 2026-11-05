@@ -97,3 +97,21 @@ The Minimum Supported Rust Version (MSRV) is currently 1.85.0.
 [kotlin]: https://kotlinlang.org/
 [python]: https://www.python.org/
 [flutter_bindings]: https://github.com/LtbLightning/ldk-node-flutter
+
+### Retaining an original node during VSS shutdown
+
+Rust callers using the built-in VSS store and a node-owned runtime can consume an exclusively
+owned node with `Node::try_into_shutdown`. Drop its payment, liquidity and prepared-send handles
+first. Unsupported stores, borrowed runtimes or retained children return the original node
+without beginning shutdown. Ordinary `Node::stop` remains restartable. If it cancels admitted work, a later consuming shutdown on the same node retains that failure; ordinary stop is not a persistence or drainage receipt.
+
+Keep the returned `NodeShutdown` across `ShutdownError::TimedOut` and wait again on that same
+owner. This closes admission, waits for admitted native callbacks and peer workers, finishes the
+background processor and then closes and drains the original store. A persistence error or an
+interrupted task remains a failure; a later successful write cannot erase it. Dropping the owner
+or cancelling a waiter is not evidence that shutdown succeeded.
+
+This Rust API is not exported through mobile bindings. Its result concerns this node's work,
+not independent nodes, processes or storage writers. It supplies neither a complete-wallet
+backup nor a server migration receipt. Applications still need ownership fencing across every
+original domain and compatible server enforcement before changing storage ownership.
