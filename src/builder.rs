@@ -835,7 +835,8 @@ impl NodeBuilder {
 				BuildError::KVStoreSetupFailed
 			})?;
 
-		build_with_store_internal(
+		let vss_store = Arc::new(vss_store);
+		let mut node = build_with_store_internal(
 			config,
 			self.chain_data_source_config.as_ref(),
 			self.gossip_source_config.as_ref(),
@@ -845,9 +846,11 @@ impl NodeBuilder {
 			seed_bytes,
 			runtime,
 			logger,
-			Arc::new(vss_store),
+			vss_store.clone(),
 			self.channel_data_migration.as_ref(),
-		)
+		)?;
+		node.shutdown_store = Some(vss_store);
+		Ok(node)
 	}
 
 	/// Builds a [`Node`] instance according to the options previously configured.
@@ -2607,6 +2610,9 @@ fn build_with_store_internal(
 		rgs_peer_recovery_exclusions: Arc::new(RgsPeerRecoveryExclusions::default()),
 		payment_store,
 		lifecycle_lock: Mutex::new(()),
+		shutdown_owner: Arc::new(()),
+		strict_shutdown: Arc::new(AtomicBool::new(false)),
+		shutdown_store: None,
 		is_running,
 		background_processor_failed: Arc::new(AtomicBool::new(false)),
 		background_processor_generation: Arc::new(AtomicU64::new(0)),

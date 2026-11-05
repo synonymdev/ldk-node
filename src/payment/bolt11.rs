@@ -66,9 +66,15 @@ pub struct Bolt11Payment {
 	is_running: Arc<RwLock<bool>>,
 	logger: Arc<Logger>,
 	router: Arc<Router>,
+	shutdown_owner: Option<Arc<()>>,
 }
 
 impl Bolt11Payment {
+	pub(crate) fn with_shutdown_owner(mut self, owner: Arc<()>) -> Self {
+		self.shutdown_owner = Some(owner);
+		self
+	}
+
 	pub(crate) fn new(
 		runtime: Arc<RuntimeControl>, channel_manager: Arc<ChannelManager>,
 		connection_manager: Arc<ConnectionManager<Arc<Logger>>>,
@@ -78,6 +84,7 @@ impl Bolt11Payment {
 		router: Arc<Router>,
 	) -> Self {
 		Self {
+			shutdown_owner: None,
 			runtime,
 			channel_manager,
 			connection_manager,

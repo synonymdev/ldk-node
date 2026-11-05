@@ -58,15 +58,29 @@ pub struct Bolt12Payment {
 	is_running: Arc<RwLock<bool>>,
 	logger: Arc<Logger>,
 	async_payments_role: Option<AsyncPaymentsRole>,
+	shutdown_owner: Option<Arc<()>>,
 }
 
 impl Bolt12Payment {
+	pub(crate) fn with_shutdown_owner(mut self, owner: Arc<()>) -> Self {
+		self.shutdown_owner = Some(owner);
+		self
+	}
+
 	pub(crate) fn new(
 		channel_manager: Arc<ChannelManager>, payment_store: Arc<PaymentStore>,
 		config: Arc<Config>, is_running: Arc<RwLock<bool>>, logger: Arc<Logger>,
 		async_payments_role: Option<AsyncPaymentsRole>,
 	) -> Self {
-		Self { channel_manager, payment_store, config, is_running, logger, async_payments_role }
+		Self {
+			shutdown_owner: None,
+			channel_manager,
+			payment_store,
+			config,
+			is_running,
+			logger,
+			async_payments_role,
+		}
 	}
 
 	/// Send a payment given an offer.

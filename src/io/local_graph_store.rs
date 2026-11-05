@@ -24,6 +24,7 @@ use lightning::util::persist::{
 use lightning::util::ser::ReadableArgs;
 
 use crate::logger::{log_error, LdkLogger};
+use crate::quiescence::{ShutdownError, WorkTracker};
 use crate::types::DynStore;
 
 const LOCAL_GRAPH_CACHE_MAGIC: &[u8; 4] = b"LGNC";
@@ -134,13 +135,15 @@ pub struct LocalGraphStore {
 	inner: Arc<DynStore>,
 	storage_dir_path: String,
 	rgs_timestamp: Arc<AtomicU32>,
+	failures: Arc<WorkTracker>,
 }
 
 impl LocalGraphStore {
 	pub fn new(
 		inner: Arc<DynStore>, storage_dir_path: String, rgs_timestamp: Arc<AtomicU32>,
+		failures: Arc<WorkTracker>,
 	) -> Self {
-		Self { inner, storage_dir_path, rgs_timestamp }
+		Self { inner, storage_dir_path, rgs_timestamp, failures }
 	}
 
 	fn is_network_graph(
@@ -175,6 +178,7 @@ impl KVStoreSync for LocalGraphStore {
 		if self.is_network_graph(primary_namespace, secondary_namespace, key) {
 			let timestamp = self.rgs_timestamp.load(Ordering::Acquire);
 			write_local_graph_cache_bytes(&self.storage_dir_path, &buf, timestamp).map_err(|e| {
+				self.failures.record_failure(ShutdownError::PersistenceFailed);
 				io::Error::new(io::ErrorKind::Other, format!("Local cache write failed: {}", e))
 			})
 		} else {
@@ -191,10 +195,13 @@ impl KVStoreSync for LocalGraphStore {
 			match std::fs::remove_file(&cache_path) {
 				Ok(()) => Ok(()),
 				Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-				Err(e) => Err(io::Error::new(
-					io::ErrorKind::Other,
-					format!("Failed to remove local cache: {}", e),
-				)),
+				Err(e) => {
+					self.failures.record_failure(ShutdownError::PersistenceFailed);
+					Err(io::Error::new(
+						io::ErrorKind::Other,
+						format!("Failed to remove local cache: {}", e),
+					))
+				},
 			}
 		} else {
 			KVStoreSync::remove(&*self.inner, primary_namespace, secondary_namespace, key, lazy)
@@ -237,8 +244,10 @@ impl KVStore for LocalGraphStore {
 		if self.is_network_graph(primary_namespace, secondary_namespace, key) {
 			let storage_dir = self.storage_dir_path.clone();
 			let timestamp = self.rgs_timestamp.load(Ordering::Acquire);
+			let failures = Arc::clone(&self.failures);
 			Box::pin(async move {
 				write_local_graph_cache_bytes(&storage_dir, &buf, timestamp).map_err(|e| {
+					failures.record_failure(ShutdownError::PersistenceFailed);
 					io::Error::new(io::ErrorKind::Other, format!("Local cache write failed: {}", e))
 				})
 			})
@@ -252,15 +261,19 @@ impl KVStore for LocalGraphStore {
 	) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'static + Send>> {
 		if self.is_network_graph(primary_namespace, secondary_namespace, key) {
 			let storage_dir = self.storage_dir_path.clone();
+			let failures = Arc::clone(&self.failures);
 			Box::pin(async move {
 				let cache_path = format!("{}/{}", storage_dir, NETWORK_GRAPH_LOCAL_CACHE_FILENAME);
 				match std::fs::remove_file(&cache_path) {
 					Ok(()) => Ok(()),
 					Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-					Err(e) => Err(io::Error::new(
-						io::ErrorKind::Other,
-						format!("Failed to remove local cache: {}", e),
-					)),
+					Err(e) => {
+						failures.record_failure(ShutdownError::PersistenceFailed);
+						Err(io::Error::new(
+							io::ErrorKind::Other,
+							format!("Failed to remove local cache: {}", e),
+						))
+					},
 				}
 			})
 		} else {
