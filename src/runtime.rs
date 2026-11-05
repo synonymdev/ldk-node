@@ -288,8 +288,10 @@ impl RuntimeControl {
 			async move {
 				tokio::select! {
 					biased;
-					_ = cancellation_token.cancelled() => {},
+					// A task that has finished (including a cooperative stop signal) was not
+					// interrupted. Only cancellation of a still-pending future fails its permit.
 					_ = future => { permit.complete(None); },
+					_ = cancellation_token.cancelled() => {},
 				}
 			},
 			&self.handle,
@@ -625,6 +627,32 @@ mod tests {
 			.build()
 			.unwrap();
 		Runtime::with_owned_runtime(runtime, Arc::new(Logger::new_log_facade()))
+	}
+
+	#[test]
+	fn cancellation_distinguishes_ready_completion_from_pending_work() {
+		for ready in [true, false] {
+			// Queue without driving this runtime: both completion and cancellation are
+			// ready on the first poll, independently of worker-thread scheduling.
+			let executor =
+				tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+			let runtime =
+				Runtime::with_handle(executor.handle().clone(), Arc::new(Logger::new_log_facade()));
+			runtime.spawn_cancellable_background_task(async move {
+				if !ready {
+					std::future::pending::<()>().await;
+				}
+			});
+			runtime.cancel_tracked_tasks();
+			let tasks = mutex_lock(&runtime.cancellable_background_tasks).tasks.clone();
+			executor.block_on(async {
+				tokio::time::timeout(Duration::from_secs(2), tasks.wait()).await.unwrap();
+			});
+			runtime.work.close();
+			let expected = if ready { Ok(()) } else { Err(ShutdownError::TaskFailed) };
+			assert_eq!(runtime.work.wait(Duration::ZERO), expected);
+			assert_eq!(runtime.work.wait(Duration::ZERO), expected);
+		}
 	}
 
 	#[test]

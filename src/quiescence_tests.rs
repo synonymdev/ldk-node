@@ -385,8 +385,10 @@ fn ordinary_stop_can_still_restart_and_borrowed_runtime_is_refused_unchanged() {
 	node.stop().unwrap();
 	node.start().unwrap();
 	assert!(node.status().is_running);
-	node.stop().unwrap();
-	drop(node);
+	let mut owner = shutdown(node);
+	assert_eq!(owner.wait(Duration::from_secs(5)), Ok(()));
+	assert_eq!(owner.wait(Duration::ZERO), Ok(()));
+	drop(owner);
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
 	let node = runtime.block_on(async { fixture.node() });
 	let node = match node.try_into_shutdown() {
