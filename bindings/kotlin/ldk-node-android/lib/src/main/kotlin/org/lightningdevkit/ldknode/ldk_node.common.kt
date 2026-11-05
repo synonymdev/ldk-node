@@ -505,6 +505,9 @@ interface NodeInterface {
 
     fun `payment`(`paymentId`: PaymentId): PaymentDetails?
 
+    @Throws(ShutdownHandleException::class)
+    fun `prepareShutdown`(): NodeShutdownHandle
+
     @Throws(NodeException::class)
     fun `removeAddressTypeFromMonitor`(`addressType`: AddressType)
 
@@ -552,6 +555,17 @@ interface NodeInterface {
     fun `verifySignature`(`msg`: List<kotlin.UByte>, `sig`: kotlin.String, `pkey`: PublicKey): kotlin.Boolean
 
     fun `waitNextEvent`(): Event
+
+    companion object
+}
+
+
+
+
+interface NodeShutdownHandleInterface {
+
+    @Throws(ShutdownHandleException::class)
+    fun `wait`(`timeoutMillis`: kotlin.ULong)
 
     companion object
 }
@@ -2276,6 +2290,28 @@ sealed class QrPaymentResult {
 }
 
 
+
+
+
+
+
+sealed class ShutdownHandleException(message: String): kotlin.Exception(message) {
+
+    class Unsupported(message: String) : ShutdownHandleException(message)
+
+    class PendingHandles(message: String) : ShutdownHandleException(message)
+
+    class Busy(message: String) : ShutdownHandleException(message)
+
+    class TimedOut(message: String) : ShutdownHandleException(message)
+
+    class PersistenceFailed(message: String) : ShutdownHandleException(message)
+
+    class TaskFailed(message: String) : ShutdownHandleException(message)
+
+    class Poisoned(message: String) : ShutdownHandleException(message)
+
+}
 
 
 

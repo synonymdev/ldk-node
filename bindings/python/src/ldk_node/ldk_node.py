@@ -745,6 +745,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_payment() != 60296:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_node_prepare_shutdown() != 55496:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor() != 37081:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_remove_onchain_wallet_account() != 21186:
@@ -780,6 +782,8 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_ldk_node_checksum_method_node_verify_signature() != 20486:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_node_wait_next_event() != 55101:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_nodeshutdownhandle_wait() != 13884:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_offer_absolute_expiry_seconds() != 22836:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -2044,6 +2048,11 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_payment.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_payment.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_method_node_prepare_shutdown.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_node_prepare_shutdown.restype = ctypes.c_void_p
 _UniffiLib.uniffi_ldk_node_fn_method_node_remove_address_type_from_monitor.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -2158,6 +2167,22 @@ _UniffiLib.uniffi_ldk_node_fn_method_node_wait_next_event.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_node_wait_next_event.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_ldk_node_fn_clone_nodeshutdownhandle.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_clone_nodeshutdownhandle.restype = ctypes.c_void_p
+_UniffiLib.uniffi_ldk_node_fn_free_nodeshutdownhandle.argtypes = (
+    ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_free_nodeshutdownhandle.restype = None
+_UniffiLib.uniffi_ldk_node_fn_method_nodeshutdownhandle_wait.argtypes = (
+    ctypes.c_void_p,
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_nodeshutdownhandle_wait.restype = None
 _UniffiLib.uniffi_ldk_node_fn_clone_offer.argtypes = (
     ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -3386,6 +3411,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_open_channel.restype = ctypes.c_
 _UniffiLib.uniffi_ldk_node_checksum_method_node_payment.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_payment.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_node_prepare_shutdown.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_node_prepare_shutdown.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor.restype = ctypes.c_uint16
@@ -3440,6 +3468,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_node_verify_signature.restype = ctype
 _UniffiLib.uniffi_ldk_node_checksum_method_node_wait_next_event.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_node_wait_next_event.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_nodeshutdownhandle_wait.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_nodeshutdownhandle_wait.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_offer_absolute_expiry_seconds.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_offer_absolute_expiry_seconds.restype = ctypes.c_uint16
@@ -6014,6 +6045,8 @@ class NodeProtocol(typing.Protocol):
         raise NotImplementedError
     def payment(self, payment_id: "PaymentId"):
         raise NotImplementedError
+    def prepare_shutdown(self, ):
+        raise NotImplementedError
     def remove_address_type_from_monitor(self, address_type: "AddressType"):
         raise NotImplementedError
     def remove_onchain_wallet_account(self, address_type: "AddressType",account_index: "int"):
@@ -6508,6 +6541,15 @@ class Node:
 
 
 
+    def prepare_shutdown(self, ) -> "NodeShutdownHandle":
+        return _UniffiConverterTypeNodeShutdownHandle.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeShutdownHandleError,_UniffiLib.uniffi_ldk_node_fn_method_node_prepare_shutdown,self._uniffi_clone_pointer(),)
+        )
+
+
+
+
+
     def remove_address_type_from_monitor(self, address_type: "AddressType") -> None:
         _UniffiConverterTypeAddressType.check_lower(address_type)
 
@@ -6757,6 +6799,78 @@ class _UniffiConverterTypeNode:
 
     @classmethod
     def write(cls, value: NodeProtocol, buf: _UniffiRustBuffer):
+        buf.write_u64(cls.lower(value))
+
+
+
+class NodeShutdownHandleProtocol(typing.Protocol):
+    def wait(self, timeout_millis: "int"):
+        raise NotImplementedError
+
+
+class NodeShutdownHandle:
+    _pointer: ctypes.c_void_p
+
+    def __init__(self, *args, **kwargs):
+        raise ValueError("This class has no default constructor")
+
+    def __del__(self):
+        # In case of partial initialization of instances.
+        pointer = getattr(self, "_pointer", None)
+        if pointer is not None:
+            _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_free_nodeshutdownhandle, pointer)
+
+    def _uniffi_clone_pointer(self):
+        return _uniffi_rust_call(_UniffiLib.uniffi_ldk_node_fn_clone_nodeshutdownhandle, self._pointer)
+
+    # Used by alternative constructors or any methods which return this type.
+    @classmethod
+    def _make_instance_(cls, pointer):
+        # Lightly yucky way to bypass the usual __init__ logic
+        # and just create a new instance with the required pointer.
+        inst = cls.__new__(cls)
+        inst._pointer = pointer
+        return inst
+
+
+    def wait(self, timeout_millis: "int") -> None:
+        _UniffiConverterUInt64.check_lower(timeout_millis)
+
+        _uniffi_rust_call_with_error(_UniffiConverterTypeShutdownHandleError,_UniffiLib.uniffi_ldk_node_fn_method_nodeshutdownhandle_wait,self._uniffi_clone_pointer(),
+        _UniffiConverterUInt64.lower(timeout_millis))
+
+
+
+
+
+
+
+class _UniffiConverterTypeNodeShutdownHandle:
+
+    @staticmethod
+    def lift(value: int):
+        return NodeShutdownHandle._make_instance_(value)
+
+    @staticmethod
+    def check_lower(value: NodeShutdownHandle):
+        if not isinstance(value, NodeShutdownHandle):
+            raise TypeError("Expected NodeShutdownHandle instance, {} found".format(type(value).__name__))
+
+    @staticmethod
+    def lower(value: NodeShutdownHandleProtocol):
+        if not isinstance(value, NodeShutdownHandle):
+            raise TypeError("Expected NodeShutdownHandle instance, {} found".format(type(value).__name__))
+        return value._uniffi_clone_pointer()
+
+    @classmethod
+    def read(cls, buf: _UniffiRustBuffer):
+        ptr = buf.read_u64()
+        if ptr == 0:
+            raise InternalError("Raw pointer value was null")
+        return cls.lift(ptr)
+
+    @classmethod
+    def write(cls, value: NodeShutdownHandleProtocol, buf: _UniffiRustBuffer):
         buf.write_u64(cls.lower(value))
 
 
@@ -15490,6 +15604,127 @@ class _UniffiConverterTypeQrPaymentResult(_UniffiConverterRustBuffer):
 
 
 
+# ShutdownHandleError
+# We want to define each variant as a nested class that's also a subclass,
+# which is tricky in Python.  To accomplish this we're going to create each
+# class separately, then manually add the child classes to the base class's
+# __dict__.  All of this happens in dummy class to avoid polluting the module
+# namespace.
+class ShutdownHandleError(Exception):
+    pass
+
+_UniffiTempShutdownHandleError = ShutdownHandleError
+
+class ShutdownHandleError:  # type: ignore
+    class Unsupported(_UniffiTempShutdownHandleError):
+
+        def __repr__(self):
+            return "ShutdownHandleError.Unsupported({})".format(repr(str(self)))
+    _UniffiTempShutdownHandleError.Unsupported = Unsupported # type: ignore
+    class PendingHandles(_UniffiTempShutdownHandleError):
+
+        def __repr__(self):
+            return "ShutdownHandleError.PendingHandles({})".format(repr(str(self)))
+    _UniffiTempShutdownHandleError.PendingHandles = PendingHandles # type: ignore
+    class Busy(_UniffiTempShutdownHandleError):
+
+        def __repr__(self):
+            return "ShutdownHandleError.Busy({})".format(repr(str(self)))
+    _UniffiTempShutdownHandleError.Busy = Busy # type: ignore
+    class TimedOut(_UniffiTempShutdownHandleError):
+
+        def __repr__(self):
+            return "ShutdownHandleError.TimedOut({})".format(repr(str(self)))
+    _UniffiTempShutdownHandleError.TimedOut = TimedOut # type: ignore
+    class PersistenceFailed(_UniffiTempShutdownHandleError):
+
+        def __repr__(self):
+            return "ShutdownHandleError.PersistenceFailed({})".format(repr(str(self)))
+    _UniffiTempShutdownHandleError.PersistenceFailed = PersistenceFailed # type: ignore
+    class TaskFailed(_UniffiTempShutdownHandleError):
+
+        def __repr__(self):
+            return "ShutdownHandleError.TaskFailed({})".format(repr(str(self)))
+    _UniffiTempShutdownHandleError.TaskFailed = TaskFailed # type: ignore
+    class Poisoned(_UniffiTempShutdownHandleError):
+
+        def __repr__(self):
+            return "ShutdownHandleError.Poisoned({})".format(repr(str(self)))
+    _UniffiTempShutdownHandleError.Poisoned = Poisoned # type: ignore
+
+ShutdownHandleError = _UniffiTempShutdownHandleError # type: ignore
+del _UniffiTempShutdownHandleError
+
+
+class _UniffiConverterTypeShutdownHandleError(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        variant = buf.read_i32()
+        if variant == 1:
+            return ShutdownHandleError.Unsupported(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 2:
+            return ShutdownHandleError.PendingHandles(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 3:
+            return ShutdownHandleError.Busy(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 4:
+            return ShutdownHandleError.TimedOut(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 5:
+            return ShutdownHandleError.PersistenceFailed(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 6:
+            return ShutdownHandleError.TaskFailed(
+                _UniffiConverterString.read(buf),
+            )
+        if variant == 7:
+            return ShutdownHandleError.Poisoned(
+                _UniffiConverterString.read(buf),
+            )
+        raise InternalError("Raw enum value doesn't match any cases")
+
+    @staticmethod
+    def check_lower(value):
+        if isinstance(value, ShutdownHandleError.Unsupported):
+            return
+        if isinstance(value, ShutdownHandleError.PendingHandles):
+            return
+        if isinstance(value, ShutdownHandleError.Busy):
+            return
+        if isinstance(value, ShutdownHandleError.TimedOut):
+            return
+        if isinstance(value, ShutdownHandleError.PersistenceFailed):
+            return
+        if isinstance(value, ShutdownHandleError.TaskFailed):
+            return
+        if isinstance(value, ShutdownHandleError.Poisoned):
+            return
+
+    @staticmethod
+    def write(value, buf):
+        if isinstance(value, ShutdownHandleError.Unsupported):
+            buf.write_i32(1)
+        if isinstance(value, ShutdownHandleError.PendingHandles):
+            buf.write_i32(2)
+        if isinstance(value, ShutdownHandleError.Busy):
+            buf.write_i32(3)
+        if isinstance(value, ShutdownHandleError.TimedOut):
+            buf.write_i32(4)
+        if isinstance(value, ShutdownHandleError.PersistenceFailed):
+            buf.write_i32(5)
+        if isinstance(value, ShutdownHandleError.TaskFailed):
+            buf.write_i32(6)
+        if isinstance(value, ShutdownHandleError.Poisoned):
+            buf.write_i32(7)
+
+
 
 
 
@@ -18159,6 +18394,7 @@ __all__ = [
     "PaymentStatus",
     "PendingSweepBalance",
     "QrPaymentResult",
+    "ShutdownHandleError",
     "SyncType",
     "VssHeaderProviderError",
     "WordCount",
@@ -18219,6 +18455,7 @@ __all__ = [
     "LogWriter",
     "NetworkGraph",
     "Node",
+    "NodeShutdownHandle",
     "Offer",
     "OnchainPayment",
     "PreparedOnchainSend",

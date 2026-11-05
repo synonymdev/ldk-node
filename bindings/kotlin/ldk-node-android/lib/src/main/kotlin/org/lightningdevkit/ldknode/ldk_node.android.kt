@@ -1574,6 +1574,12 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2446,6 +2452,10 @@ internal interface UniffiLib : Library {
         `paymentId`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_method_node_prepare_shutdown(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
     fun uniffi_ldk_node_fn_method_node_remove_address_type_from_monitor(
         `ptr`: Pointer?,
         `addressType`: RustBufferByValue,
@@ -2542,6 +2552,19 @@ internal interface UniffiLib : Library {
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    fun uniffi_ldk_node_fn_clone_nodeshutdownhandle(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    fun uniffi_ldk_node_fn_free_nodeshutdownhandle(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_ldk_node_fn_method_nodeshutdownhandle_wait(
+        `ptr`: Pointer?,
+        `timeoutMillis`: Long,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_ldk_node_fn_clone_offer(
         `ptr`: Pointer?,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -3484,6 +3507,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_node_payment(
     ): Short
+    fun uniffi_ldk_node_checksum_method_node_prepare_shutdown(
+    ): Short
     fun uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_remove_onchain_wallet_account(
@@ -3519,6 +3544,8 @@ internal interface UniffiLib : Library {
     fun uniffi_ldk_node_checksum_method_node_verify_signature(
     ): Short
     fun uniffi_ldk_node_checksum_method_node_wait_next_event(
+    ): Short
+    fun uniffi_ldk_node_checksum_method_nodeshutdownhandle_wait(
     ): Short
     fun uniffi_ldk_node_checksum_method_offer_absolute_expiry_seconds(
     ): Short
@@ -4099,6 +4126,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ldk_node_checksum_method_node_payment() != 60296.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_ldk_node_checksum_method_node_prepare_shutdown() != 55496.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor() != 37081.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -4151,6 +4181,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_node_wait_next_event() != 55101.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_nodeshutdownhandle_wait() != 13884.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_offer_absolute_expiry_seconds() != 22836.toShort()) {
@@ -7791,6 +7824,18 @@ open class Node: Disposable, NodeInterface {
         })
     }
 
+    @Throws(ShutdownHandleException::class)
+    override fun `prepareShutdown`(): NodeShutdownHandle {
+        return FfiConverterTypeNodeShutdownHandle.lift(callWithPointer {
+            uniffiRustCallWithError(ShutdownHandleExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_node_prepare_shutdown(
+                    it,
+                    uniffiRustCallStatus,
+                )
+            }!!
+        })
+    }
+
     @Throws(NodeException::class)
     override fun `removeAddressTypeFromMonitor`(`addressType`: AddressType) {
         callWithPointer {
@@ -8058,6 +8103,151 @@ object FfiConverterTypeNode: FfiConverter<Node, Pointer> {
     override fun allocationSize(value: Node) = 8UL
 
     override fun write(value: Node, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(lower(value).toLong())
+    }
+}
+
+
+
+open class NodeShutdownHandle: Disposable, NodeShutdownHandleInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(null))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed: kotlinx.atomicfu.AtomicBoolean = kotlinx.atomicfu.atomic(false)
+    private val callCounter: kotlinx.atomicfu.AtomicLong = kotlinx.atomicfu.atomic(1L)
+
+    private val lock = kotlinx.atomicfu.locks.ReentrantLock()
+
+    private fun <T> synchronized(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    override fun close() {
+        synchronized { this.destroy() }
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.value
+            if (c == 0L) {
+                throw IllegalStateException("${this::class::simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this::class::simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiPointerDestroyer(private val pointer: Pointer?) : Disposable {
+        override fun destroy() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_ldk_node_fn_free_nodeshutdownhandle(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall { status ->
+            UniffiLib.INSTANCE.uniffi_ldk_node_fn_clone_nodeshutdownhandle(pointer!!, status)
+        }!!
+    }
+
+
+    @Throws(ShutdownHandleException::class)
+    override fun `wait`(`timeoutMillis`: kotlin.ULong) {
+        callWithPointer {
+            uniffiRustCallWithError(ShutdownHandleExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_nodeshutdownhandle_wait(
+                    it,
+                    FfiConverterULong.lower(`timeoutMillis`),
+                    uniffiRustCallStatus,
+                )
+            }
+        }
+    }
+
+
+
+
+
+
+
+    companion object
+
+}
+
+
+
+
+
+object FfiConverterTypeNodeShutdownHandle: FfiConverter<NodeShutdownHandle, Pointer> {
+
+    override fun lower(value: NodeShutdownHandle): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): NodeShutdownHandle {
+        return NodeShutdownHandle(value)
+    }
+
+    override fun read(buf: ByteBuffer): NodeShutdownHandle {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(buf.getLong().toPointer())
+    }
+
+    override fun allocationSize(value: NodeShutdownHandle) = 8UL
+
+    override fun write(value: NodeShutdownHandle, buf: ByteBuffer) {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(lower(value).toLong())
@@ -13360,6 +13550,65 @@ object FfiConverterTypeQrPaymentResult : FfiConverterRustBuffer<QrPaymentResult>
             is QrPaymentResult.Bolt12 -> {
                 buf.putInt(3)
                 FfiConverterTypePaymentId.write(value.`paymentId`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+object ShutdownHandleExceptionErrorHandler : UniffiRustCallStatusErrorHandler<ShutdownHandleException> {
+    override fun lift(errorBuf: RustBufferByValue): ShutdownHandleException = FfiConverterTypeShutdownHandleError.lift(errorBuf)
+}
+
+object FfiConverterTypeShutdownHandleError : FfiConverterRustBuffer<ShutdownHandleException> {
+    override fun read(buf: ByteBuffer): ShutdownHandleException {
+        return when (buf.getInt()) {
+            1 -> ShutdownHandleException.Unsupported(FfiConverterString.read(buf))
+            2 -> ShutdownHandleException.PendingHandles(FfiConverterString.read(buf))
+            3 -> ShutdownHandleException.Busy(FfiConverterString.read(buf))
+            4 -> ShutdownHandleException.TimedOut(FfiConverterString.read(buf))
+            5 -> ShutdownHandleException.PersistenceFailed(FfiConverterString.read(buf))
+            6 -> ShutdownHandleException.TaskFailed(FfiConverterString.read(buf))
+            7 -> ShutdownHandleException.Poisoned(FfiConverterString.read(buf))
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: ShutdownHandleException): ULong {
+        return 4UL
+    }
+
+    override fun write(value: ShutdownHandleException, buf: ByteBuffer) {
+        when (value) {
+            is ShutdownHandleException.Unsupported -> {
+                buf.putInt(1)
+                Unit
+            }
+            is ShutdownHandleException.PendingHandles -> {
+                buf.putInt(2)
+                Unit
+            }
+            is ShutdownHandleException.Busy -> {
+                buf.putInt(3)
+                Unit
+            }
+            is ShutdownHandleException.TimedOut -> {
+                buf.putInt(4)
+                Unit
+            }
+            is ShutdownHandleException.PersistenceFailed -> {
+                buf.putInt(5)
+                Unit
+            }
+            is ShutdownHandleException.TaskFailed -> {
+                buf.putInt(6)
+                Unit
+            }
+            is ShutdownHandleException.Poisoned -> {
+                buf.putInt(7)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

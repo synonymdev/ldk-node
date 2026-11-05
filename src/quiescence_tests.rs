@@ -18,6 +18,9 @@ struct Fixture {
 	writes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+#[path = "shutdown_handoff_tests.rs"]
+mod handoff_tests;
+
 fn request(socket: &mut TcpStream) -> (String, Vec<u8>) {
 	// Accepted sockets inherit nonblocking mode on some platforms.
 	socket.set_nonblocking(false).unwrap();

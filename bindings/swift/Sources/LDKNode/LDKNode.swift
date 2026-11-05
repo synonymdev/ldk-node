@@ -2594,6 +2594,8 @@ public protocol NodeProtocol: AnyObject {
 
     func payment(paymentId: PaymentId) -> PaymentDetails?
 
+    func prepareShutdown() throws -> NodeShutdownHandle
+
     func removeAddressTypeFromMonitor(addressType: AddressType) throws
 
     func removeOnchainWalletAccount(addressType: AddressType, accountIndex: UInt32) throws
@@ -2941,6 +2943,12 @@ open class Node:
         })
     }
 
+    open func prepareShutdown() throws -> NodeShutdownHandle {
+        return try FfiConverterTypeNodeShutdownHandle.lift(rustCallWithError(FfiConverterTypeShutdownHandleError.lift) {
+            uniffi_ldk_node_fn_method_node_prepare_shutdown(self.uniffiClonePointer(), $0)
+        })
+    }
+
     open func removeAddressTypeFromMonitor(addressType: AddressType) throws {
         try rustCallWithError(FfiConverterTypeNodeError.lift) {
             uniffi_ldk_node_fn_method_node_remove_address_type_from_monitor(self.uniffiClonePointer(),
@@ -3119,6 +3127,114 @@ public func FfiConverterTypeNode_lift(_ pointer: UnsafeMutableRawPointer) throws
 #endif
 public func FfiConverterTypeNode_lower(_ value: Node) -> UnsafeMutableRawPointer {
     return FfiConverterTypeNode.lower(value)
+}
+
+public protocol NodeShutdownHandleProtocol: AnyObject {
+    func wait(timeoutMillis: UInt64) throws
+}
+
+open class NodeShutdownHandle:
+    NodeShutdownHandleProtocol
+{
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    public required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public init(noPointer _: NoPointer) {
+        pointer = nil
+    }
+
+    #if swift(>=5.8)
+        @_documentation(visibility: private)
+    #endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_ldk_node_fn_clone_nodeshutdownhandle(self.pointer, $0) }
+    }
+
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_ldk_node_fn_free_nodeshutdownhandle(pointer, $0) }
+    }
+
+    open func wait(timeoutMillis: UInt64) throws {
+        try rustCallWithError(FfiConverterTypeShutdownHandleError.lift) {
+            uniffi_ldk_node_fn_method_nodeshutdownhandle_wait(self.uniffiClonePointer(),
+                                                              FfiConverterUInt64.lower(timeoutMillis), $0)
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNodeShutdownHandle: FfiConverter {
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = NodeShutdownHandle
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> NodeShutdownHandle {
+        return NodeShutdownHandle(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: NodeShutdownHandle) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NodeShutdownHandle {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if ptr == nil {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: NodeShutdownHandle, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNodeShutdownHandle_lift(_ pointer: UnsafeMutableRawPointer) throws -> NodeShutdownHandle {
+    return try FfiConverterTypeNodeShutdownHandle.lift(pointer)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNodeShutdownHandle_lower(_ value: NodeShutdownHandle) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeNodeShutdownHandle.lower(value)
 }
 
 public protocol OfferProtocol: AnyObject {
@@ -10503,6 +10619,91 @@ public func FfiConverterTypeQrPaymentResult_lower(_ value: QrPaymentResult) -> R
 
 extension QrPaymentResult: Equatable, Hashable {}
 
+public enum ShutdownHandleError {
+    case Unsupported(message: String)
+
+    case PendingHandles(message: String)
+
+    case Busy(message: String)
+
+    case TimedOut(message: String)
+
+    case PersistenceFailed(message: String)
+
+    case TaskFailed(message: String)
+
+    case Poisoned(message: String)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeShutdownHandleError: FfiConverterRustBuffer {
+    typealias SwiftType = ShutdownHandleError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ShutdownHandleError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        case 1: return try .Unsupported(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 2: return try .PendingHandles(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 3: return try .Busy(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 4: return try .TimedOut(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 5: return try .PersistenceFailed(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 6: return try .TaskFailed(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        case 7: return try .Poisoned(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ShutdownHandleError, into buf: inout [UInt8]) {
+        switch value {
+        case .Unsupported(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(1))
+        case .PendingHandles(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(2))
+        case .Busy(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(3))
+        case .TimedOut(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(4))
+        case .PersistenceFailed(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(5))
+        case .TaskFailed(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(6))
+        case .Poisoned(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(7))
+        }
+    }
+}
+
+extension ShutdownHandleError: Equatable, Hashable {}
+
+extension ShutdownHandleError: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -13753,6 +13954,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_ldk_node_checksum_method_node_payment() != 60296 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_ldk_node_checksum_method_node_prepare_shutdown() != 55496 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_ldk_node_checksum_method_node_remove_address_type_from_monitor() != 37081 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13805,6 +14009,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_node_wait_next_event() != 55101 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_ldk_node_checksum_method_nodeshutdownhandle_wait() != 13884 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_ldk_node_checksum_method_offer_absolute_expiry_seconds() != 22836 {

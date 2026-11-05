@@ -193,7 +193,27 @@ interface Builder {
 	Node build_with_vss_store_and_header_provider(string vss_url, string store_id, VssHeaderProvider header_provider);
 };
 
+// Preparation retains the original node; callers must close their own admission and
+// finish listeners/operations before releasing all node and child aliases.
+interface NodeShutdownHandle {
+	[Throws=ShutdownHandleError]
+	void wait(u64 timeout_millis);
+};
+
+[Error]
+enum ShutdownHandleError {
+	"Unsupported",
+	"PendingHandles",
+	"Busy",
+	"TimedOut",
+	"PersistenceFailed",
+	"TaskFailed",
+	"Poisoned"
+};
+
 interface Node {
+	[Self=ByArc, Throws=ShutdownHandleError]
+	NodeShutdownHandle prepare_shutdown();
 	[Throws=NodeError]
 	void start();
 	[Throws=NodeError]
