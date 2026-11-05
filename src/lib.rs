@@ -547,11 +547,12 @@ impl Node {
 								let peer_mgr = Arc::clone(&peer_mgr);
 								runtime.spawn_cancellable_background_task(async move {
 									let Ok(peer_mgr) = peer_mgr.tracked_peer_manager() else { return; };
-									lightning_net_tokio::setup_inbound(
+									// Registration spawns the real workers, retained by the peer lease.
+									// Its returned join waiter is not additional cancellable work.
+									drop(lightning_net_tokio::setup_inbound(
 										peer_mgr,
 										tcp_stream.into_std().unwrap(),
-										)
-										.await;
+									));
 								});
 							}
 						}
@@ -865,6 +866,9 @@ impl Node {
 	/// Disconnects all peers, stops all running background tasks, and shuts down [`Node`].
 	///
 	/// After this returns most API methods will return [`Error::NotRunning`].
+	///
+	/// This restartable operation may cancel admitted work. If that happens, a later consuming
+	/// shutdown on the same node reports [`ShutdownError::TaskFailed`] rather than certifying it.
 	pub fn stop(&self) -> Result<(), Error> {
 		let _lifecycle_lock = self.lifecycle_lock.lock().unwrap();
 		if !*self.is_running.read().unwrap()

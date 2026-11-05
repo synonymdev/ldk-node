@@ -103,7 +103,7 @@ The Minimum Supported Rust Version (MSRV) is currently 1.85.0.
 Rust callers using the built-in VSS store and a node-owned runtime can consume an exclusively
 owned node with `Node::try_into_shutdown`. Drop its payment, liquidity and prepared-send handles
 first. Unsupported stores, borrowed runtimes or retained children return the original node
-without beginning shutdown. Ordinary `Node::stop` remains restartable.
+without beginning shutdown. Ordinary `Node::stop` remains restartable. If it cancels admitted work, a later consuming shutdown on the same node retains that failure; ordinary stop is not a persistence or drainage receipt.
 
 Keep the returned `NodeShutdown` across `ShutdownError::TimedOut` and wait again on that same
 owner. This closes admission, waits for admitted native callbacks and peer workers, finishes the
