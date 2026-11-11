@@ -2,6 +2,7 @@
 
 ## Bug Fixes
 
+- Bump `lightning`, `lightning-liquidity`, `lightning-persister` and `lightning-transaction-sync` to 0.2.8 and `lightning-invoice` to 0.34.2.
 - `bump_fee_by_rbf` now only replaces transactions this wallet built and broadcast itself, and returns `TransactionNotBroadcastByWallet` for any other txid.
 - Reconnect the shared Electrum connection after the server drops it, so wallet sync, fee updates and broadcasts recover without a node restart (for example after a mobile app returns from the background), and retry a failed broadcast once on the new connection, all within each call's original deadline.
 - Fixed on-chain HTLC claims, anchor fee bumps and splices failing to sign when the transaction also spends inputs the on-chain wallet does not own.
