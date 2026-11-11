@@ -83,6 +83,8 @@
 
 ## Synonym Fork Additions
 
+- Add a Rust-only consuming VSS shutdown owner that waits for original native work and final persistence, retains timeouts and failures, and refuses entry while exported child handles remain. This is source preparation; mobile bindings and migration activation are unchanged.
+
 - Accept incoming payments up to the full channel value, instead of 10% of it, on nodes that cannot announce channels (no node alias or listening addresses), for channels opened after the update.
 - Expose the exact prepared transaction fee so applications can validate the approved total before broadcast.
 - Prevent concurrent prepared payment broadcasts from blocking Tokio worker progress.

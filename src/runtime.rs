@@ -22,6 +22,7 @@ use crate::config::{
 };
 use crate::error::Error;
 use crate::logger::{log_debug, log_error, log_trace, LdkLogger, Logger};
+use crate::quiescence::{ShutdownError, WorkTracker};
 
 fn mutex_lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 	mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -60,6 +61,10 @@ impl Runtime {
 				Ok(Self::with_owned_runtime(runtime, logger))
 			},
 		}
+	}
+
+	pub(crate) fn owns_runtime(&self) -> bool {
+		self.owned_runtime.is_some()
 	}
 
 	pub fn with_handle(handle: tokio::runtime::Handle, logger: Arc<Logger>) -> Self {
@@ -107,6 +112,7 @@ pub(crate) struct RuntimeControl {
 	leftover_task_trackers: Mutex<Vec<TaskTracker>>,
 	leftover_processor_task: Mutex<Option<JoinHandle<Result<(), LdkIoError>>>>,
 	logger: Arc<Logger>,
+	work: Arc<WorkTracker>,
 }
 
 struct TrackedTasks {
@@ -146,7 +152,12 @@ impl RuntimeControl {
 			leftover_task_trackers: Mutex::new(Vec::new()),
 			leftover_processor_task: Mutex::new(None),
 			logger,
+			work: Arc::new(WorkTracker::default()),
 		}
+	}
+
+	pub(crate) fn persistence_recorder(&self) -> Arc<WorkTracker> {
+		Arc::clone(&self.work)
 	}
 
 	pub fn allow_task_spawns(&self) -> bool {
@@ -263,21 +274,28 @@ impl RuntimeControl {
 	{
 		let tasks = mutex_lock(tasks);
 		if tasks.tasks.is_closed() {
+			self.work.record_failure(ShutdownError::TaskFailed);
 			log_trace!(self.logger, "Ignoring {} task spawned during shutdown.", task_name);
 			return;
 		}
 
+		let permit = match self.work.admit() {
+			Ok(permit) => permit,
+			Err(_) => return,
+		};
 		let cancellation_token = tasks.cancellation_token.clone();
-		let _ = tasks.tasks.spawn_on(
+		drop(tasks.tasks.spawn_on(
 			async move {
 				tokio::select! {
 					biased;
+					// A task that has finished (including a cooperative stop signal) was not
+					// interrupted. Only cancellation of a still-pending future fails its permit.
+					_ = future => { permit.complete(None); },
 					_ = cancellation_token.cancelled() => {},
-					_ = future => {},
 				}
 			},
 			&self.handle,
-		);
+		));
 	}
 
 	pub fn spawn_background_processor_task<F, C>(&self, future: F, on_failure: C)
@@ -294,6 +312,41 @@ impl RuntimeControl {
 			}
 			result
 		}));
+	}
+
+	/// Unlike ordinary stop, this never aborts an admitted future to meet the deadline.
+	pub(crate) fn drain_background(&self, timeout: Duration) -> Result<(), ShutdownError> {
+		let background = mutex_lock(&self.background_tasks).tasks.clone();
+		let cancellable = mutex_lock(&self.cancellable_background_tasks).tasks.clone();
+		self.block_on(async {
+			tokio::time::timeout(timeout, async {
+				background.wait().await;
+				cancellable.wait().await;
+			})
+			.await
+			.map_err(|_| ShutdownError::TimedOut)
+		})?;
+		self.work.close();
+		self.work.wait(Duration::ZERO)
+	}
+
+	pub(crate) fn drain_processor(&self, timeout: Duration) -> Result<(), ShutdownError> {
+		let mut slot = mutex_lock(&self.background_processor_task);
+		let Some(task) = slot.as_mut() else {
+			return Ok(());
+		};
+		let result = self.block_on(async { tokio::time::timeout(timeout, task).await });
+		match result {
+			Err(_) => Err(ShutdownError::TimedOut),
+			Ok(result) => {
+				slot.take();
+				match result {
+					Ok(Ok(())) => Ok(()),
+					Ok(Err(_)) => Err(ShutdownError::PersistenceFailed),
+					Err(_) => Err(ShutdownError::TaskFailed),
+				}
+			},
+		}
 	}
 
 	pub fn try_block_on<F: Future>(&self, future: F) -> Result<F::Output, Error> {
@@ -395,6 +448,7 @@ impl RuntimeControl {
 				))),
 				Err(e) => {
 					log_error!(self.logger, "Stopping event handling timed out: {}", e);
+					self.work.record_failure(ShutdownError::TaskFailed);
 					task.abort();
 					match tokio::time::timeout(shutdown_timeout, &mut task).await {
 						Err(e) => {
@@ -426,6 +480,8 @@ impl RuntimeControl {
 
 		if result.is_ok() {
 			log_debug!(self.logger, "Stopped background processing of events.");
+		} else {
+			self.work.record_failure(ShutdownError::PersistenceFailed);
 		}
 		result
 	}
@@ -460,6 +516,7 @@ impl Drop for RuntimeControl {
 /// must drive the persistence future they are waiting for.
 pub(crate) struct StoreRuntime {
 	runtime: Option<tokio::runtime::Runtime>,
+	work: Arc<WorkTracker>,
 }
 
 impl StoreRuntime {
@@ -482,19 +539,43 @@ impl StoreRuntime {
 					format!("Failed to build {runtime_name} runtime: {e}"),
 				)
 			})?;
-		Ok(Self { runtime: Some(runtime) })
+		Ok(Self { runtime: Some(runtime), work: Arc::new(WorkTracker::default()) })
 	}
 
 	pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
 		self.runtime.as_ref().expect("store runtime must be available").handle()
 	}
 
-	pub(crate) fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+	pub(crate) fn close_and_drain(&self, timeout: Duration) -> Result<(), ShutdownError> {
+		self.work.close();
+		tokio::task::block_in_place(|| self.work.wait(timeout))
+	}
+
+	pub(crate) fn block_on_store<F, T>(&self, future: F, mutation: bool) -> Result<T, LdkIoError>
 	where
-		F: Future + Send + 'static,
-		F::Output: Send + 'static,
+		F: Future<Output = Result<T, LdkIoError>>,
 	{
-		self.handle().spawn(future)
+		let permit = self.work.admit()?;
+		let result = tokio::task::block_in_place(|| self.handle().block_on(future));
+		permit.complete((mutation && result.is_err()).then_some(ShutdownError::PersistenceFailed));
+		result
+	}
+
+	pub(crate) fn spawn_store<F, T>(
+		&self, future: F, mutation: bool,
+	) -> io::Result<JoinHandle<Result<T, LdkIoError>>>
+	where
+		F: Future<Output = Result<T, LdkIoError>> + Send + 'static,
+		T: Send + 'static,
+	{
+		let permit = self.work.admit()?;
+		Ok(self.handle().spawn(async move {
+			let result = future.await;
+			permit.complete(
+				(mutation && result.is_err()).then_some(ShutdownError::PersistenceFailed),
+			);
+			result
+		}))
 	}
 
 	pub(crate) fn shutdown_background(mut self) {
@@ -546,6 +627,32 @@ mod tests {
 			.build()
 			.unwrap();
 		Runtime::with_owned_runtime(runtime, Arc::new(Logger::new_log_facade()))
+	}
+
+	#[test]
+	fn cancellation_distinguishes_ready_completion_from_pending_work() {
+		for ready in [true, false] {
+			// Queue without driving this runtime: both completion and cancellation are
+			// ready on the first poll, independently of worker-thread scheduling.
+			let executor =
+				tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+			let runtime =
+				Runtime::with_handle(executor.handle().clone(), Arc::new(Logger::new_log_facade()));
+			runtime.spawn_cancellable_background_task(async move {
+				if !ready {
+					std::future::pending::<()>().await;
+				}
+			});
+			runtime.cancel_tracked_tasks();
+			let tasks = mutex_lock(&runtime.cancellable_background_tasks).tasks.clone();
+			executor.block_on(async {
+				tokio::time::timeout(Duration::from_secs(2), tasks.wait()).await.unwrap();
+			});
+			runtime.work.close();
+			let expected = if ready { Ok(()) } else { Err(ShutdownError::TaskFailed) };
+			assert_eq!(runtime.work.wait(Duration::ZERO), expected);
+			assert_eq!(runtime.work.wait(Duration::ZERO), expected);
+		}
 	}
 
 	#[test]

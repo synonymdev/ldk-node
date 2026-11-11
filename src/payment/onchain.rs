@@ -108,6 +108,7 @@ pub struct OnchainPayment {
 	config: Arc<Config>,
 	is_running: Arc<RwLock<bool>>,
 	logger: Arc<Logger>,
+	shutdown_owner: Option<Arc<()>>,
 }
 
 /// Result of one direct backend submission of a locally created on-chain transaction.
@@ -178,6 +179,7 @@ pub struct PreparedOnchainSend {
 	chain_source: Arc<ChainSource>,
 	is_running: Arc<RwLock<bool>>,
 	result: Mutex<Option<Result<OnchainSendResult, Error>>>,
+	_shutdown_owner: Option<Arc<()>>,
 }
 
 impl PreparedOnchainSend {
@@ -259,12 +261,26 @@ impl Drop for PreparedOnchainSend {
 }
 
 impl OnchainPayment {
+	pub(crate) fn with_shutdown_owner(mut self, owner: Arc<()>) -> Self {
+		self.shutdown_owner = Some(owner);
+		self
+	}
+
 	pub(crate) fn new(
 		runtime: Arc<RuntimeControl>, chain_source: Arc<ChainSource>, wallet: Arc<Wallet>,
 		channel_manager: Arc<ChannelManager>, config: Arc<Config>, is_running: Arc<RwLock<bool>>,
 		logger: Arc<Logger>,
 	) -> Self {
-		Self { runtime, chain_source, wallet, channel_manager, config, is_running, logger }
+		Self {
+			shutdown_owner: None,
+			runtime,
+			chain_source,
+			wallet,
+			channel_manager,
+			config,
+			is_running,
+			logger,
+		}
 	}
 
 	fn prepare_send(
@@ -302,6 +318,7 @@ impl OnchainPayment {
 			},
 		};
 		Ok(Arc::new(PreparedOnchainSend {
+			_shutdown_owner: self.shutdown_owner.clone(),
 			tx,
 			wallet: Arc::clone(&self.wallet),
 			submission_started: AtomicBool::new(false),
@@ -1255,6 +1272,22 @@ mod prepared_send_tests {
 
 	fn fee() -> Option<FeeRate> {
 		Some(bitcoin::FeeRate::from_sat_per_vb_u32(2))
+	}
+
+	#[test]
+	fn prepared_send_keeps_original_owner_until_last_draft_drop() {
+		let f = Fixture::new();
+		let payment = f.node.onchain_payment();
+		let prepared =
+			payment.prepare_send_to_address(&f.recipient(), 50_000, fee(), None).unwrap();
+		drop(payment);
+		assert_eq!(Arc::strong_count(&f.node.shutdown_owner), 2);
+		let last = Arc::clone(&prepared);
+		drop(prepared);
+		assert_eq!(Arc::strong_count(&f.node.shutdown_owner), 2);
+		drop(last);
+		assert_eq!(Arc::strong_count(&f.node.shutdown_owner), 1);
+		f.assert_no_dispatch();
 	}
 
 	#[test]

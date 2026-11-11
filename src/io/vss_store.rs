@@ -127,6 +127,10 @@ impl VssStore {
 		Ok(Self { inner, next_version, internal_runtime: Some(internal_runtime) })
 	}
 
+	pub(crate) fn close_and_drain(&self, timeout: Duration) -> Result<(), crate::ShutdownError> {
+		self.internal_runtime().close_and_drain(timeout)
+	}
+
 	fn internal_runtime(&self) -> Arc<StoreRuntime> {
 		Arc::clone(self.internal_runtime.as_ref().expect("VSS runtime must be available"))
 	}
@@ -176,7 +180,7 @@ impl KVStoreSync for VssStore {
 				.read_internal(&inner.blocking_client, primary_namespace, secondary_namespace, key)
 				.await
 		};
-		tokio::task::block_in_place(move || internal_runtime.handle().block_on(fut))
+		internal_runtime.block_on_store(fut, false)
 	}
 
 	fn write(
@@ -207,7 +211,7 @@ impl KVStoreSync for VssStore {
 				)
 				.await
 		};
-		tokio::task::block_in_place(move || internal_runtime.handle().block_on(fut))
+		internal_runtime.block_on_store(fut, true)
 	}
 
 	fn remove(
@@ -238,10 +242,10 @@ impl KVStoreSync for VssStore {
 				.await
 		};
 		if lazy {
-			internal_runtime.spawn(async { fut.await });
+			internal_runtime.spawn_store(fut, true)?;
 			Ok(())
 		} else {
-			tokio::task::block_in_place(move || internal_runtime.handle().block_on(fut))
+			internal_runtime.block_on_store(fut, true)
 		}
 	}
 
@@ -259,7 +263,7 @@ impl KVStoreSync for VssStore {
 				.list_internal(&inner.blocking_client, primary_namespace, secondary_namespace)
 				.await
 		};
-		tokio::task::block_in_place(move || internal_runtime.handle().block_on(fut))
+		internal_runtime.block_on_store(fut, false)
 	}
 }
 
@@ -273,11 +277,19 @@ impl KVStore for VssStore {
 		let inner = Arc::clone(&self.inner);
 		let runtime = self.internal_runtime();
 		Box::pin(async move {
-			let task = runtime.spawn(async move {
-				inner
-					.read_internal(&inner.async_client, primary_namespace, secondary_namespace, key)
-					.await
-			});
+			let task = runtime.spawn_store(
+				async move {
+					inner
+						.read_internal(
+							&inner.async_client,
+							primary_namespace,
+							secondary_namespace,
+							key,
+						)
+						.await
+				},
+				false,
+			)?;
 			task.await.map_err(|e| {
 				io::Error::new(io::ErrorKind::Other, format!("VSS runtime task failed: {}", e))
 			})?
@@ -294,20 +306,23 @@ impl KVStore for VssStore {
 		let inner = Arc::clone(&self.inner);
 		let runtime = self.internal_runtime();
 		Box::pin(async move {
-			let task = runtime.spawn(async move {
-				inner
-					.write_internal(
-						&inner.async_client,
-						inner_lock_ref,
-						locking_key,
-						version,
-						primary_namespace,
-						secondary_namespace,
-						key,
-						buf,
-					)
-					.await
-			});
+			let task = runtime.spawn_store(
+				async move {
+					inner
+						.write_internal(
+							&inner.async_client,
+							inner_lock_ref,
+							locking_key,
+							version,
+							primary_namespace,
+							secondary_namespace,
+							key,
+							buf,
+						)
+						.await
+				},
+				true,
+			)?;
 			task.await.map_err(|e| {
 				io::Error::new(io::ErrorKind::Other, format!("VSS runtime task failed: {}", e))
 			})?
@@ -338,12 +353,10 @@ impl KVStore for VssStore {
 		};
 		Box::pin(async move {
 			if lazy {
-				runtime.spawn(async move {
-					let _ = fut.await;
-				});
+				runtime.spawn_store(fut, true)?;
 				Ok(())
 			} else {
-				let task = runtime.spawn(fut);
+				let task = runtime.spawn_store(fut, true)?;
 				task.await.map_err(|e| {
 					io::Error::new(io::ErrorKind::Other, format!("VSS runtime task failed: {}", e))
 				})?
@@ -358,11 +371,14 @@ impl KVStore for VssStore {
 		let inner = Arc::clone(&self.inner);
 		let runtime = self.internal_runtime();
 		Box::pin(async move {
-			let task = runtime.spawn(async move {
-				inner
-					.list_internal(&inner.async_client, primary_namespace, secondary_namespace)
-					.await
-			});
+			let task = runtime.spawn_store(
+				async move {
+					inner
+						.list_internal(&inner.async_client, primary_namespace, secondary_namespace)
+						.await
+				},
+				false,
+			)?;
 			task.await.map_err(|e| {
 				io::Error::new(io::ErrorKind::Other, format!("VSS runtime task failed: {}", e))
 			})?
@@ -860,5 +876,118 @@ mod tests {
 
 		do_read_write_remove_list_persist(&vss_store);
 		drop(vss_store)
+	}
+}
+
+#[cfg(test)]
+mod drain_tests {
+	use super::*;
+	use crate::ShutdownError;
+	use std::io::{Read, Write};
+	use std::net::TcpListener;
+	use std::sync::mpsc;
+	use std::thread;
+	use vss_client::headers::FixedHeaders;
+
+	// A fresh loopback transport holds actual VSS requests at their response boundary.
+	// It uses public fixed fixture material and never opens an existing wallet/server store.
+	fn held_store(
+		request_count: usize,
+	) -> (Arc<VssStore>, mpsc::Receiver<mpsc::Sender<()>>, thread::JoinHandle<()>) {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let base_url = format!("http://{}", listener.local_addr().unwrap());
+		let (started, requests) = mpsc::channel();
+		let server = thread::spawn(move || {
+			let mut workers = Vec::new();
+			for _ in 0..request_count {
+				let (mut socket, _) = listener.accept().unwrap();
+				let started = started.clone();
+				workers.push(thread::spawn(move || {
+					socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+					let mut header = Vec::new();
+					while !header.ends_with(b"\r\n\r\n") {
+						let mut byte = [0];
+						socket.read_exact(&mut byte).unwrap();
+						header.push(byte[0]);
+						assert!(header.len() < 16384);
+					}
+					let header = String::from_utf8(header).unwrap();
+					let length = header
+						.lines()
+						.find_map(|line| {
+							let (name, value) = line.split_once(':')?;
+							name.eq_ignore_ascii_case("content-length")
+								.then(|| value.trim().parse::<usize>().unwrap())
+						})
+						.unwrap();
+					let mut body = vec![0; length];
+					socket.read_exact(&mut body).unwrap();
+					let (release, released) = mpsc::channel();
+					started.send(release).unwrap();
+					released.recv_timeout(Duration::from_secs(5)).unwrap();
+					socket
+						.write_all(
+							b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+						)
+						.unwrap();
+				}));
+			}
+			for worker in workers {
+				worker.join().unwrap();
+			}
+		});
+		let headers = Arc::new(FixedHeaders::new(HashMap::new()));
+		let store = VssStore {
+			inner: Arc::new(VssStoreInner::new(
+				VssSchemaVersion::V1,
+				VssClient::new_with_headers(base_url.clone(), retry_policy(), headers.clone()),
+				VssClient::new_with_headers(base_url, retry_policy(), headers),
+				"native-drain-fixture".to_owned(),
+				[42; 32],
+				KeyObfuscator::new([43; 32]),
+			)),
+			next_version: AtomicU64::new(1),
+			internal_runtime: Some(Arc::new(
+				StoreRuntime::new("vss-drain-test", 2, "VSS test").unwrap(),
+			)),
+		};
+		(Arc::new(store), requests, server)
+	}
+
+	#[test]
+	fn strict_drain_waits_for_sync_write_and_detached_lazy_delete() {
+		let (store, requests, server) = held_store(2);
+		let writer = Arc::clone(&store);
+		let write =
+			thread::spawn(move || KVStoreSync::write(&*writer, "", "", "write", vec![1, 2, 3]));
+		let release_write = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+		KVStoreSync::remove(&*store, "", "", "delete", true).unwrap();
+		let release_delete = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+		let late = KVStore::write(&*store, "", "", "late", vec![4]);
+		assert_eq!(store.close_and_drain(Duration::from_millis(10)), Err(ShutdownError::TimedOut));
+		assert!(KVStoreSync::write(&*store, "", "", "refused", vec![5]).is_err());
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		assert!(runtime.block_on(late).is_err());
+		release_write.send(()).unwrap();
+		write.join().unwrap().unwrap();
+		assert_eq!(store.close_and_drain(Duration::from_millis(10)), Err(ShutdownError::TimedOut));
+		release_delete.send(()).unwrap();
+		assert_eq!(store.close_and_drain(Duration::from_secs(5)), Ok(()));
+		assert_eq!(store.close_and_drain(Duration::ZERO), Ok(()));
+		server.join().unwrap();
+	}
+
+	#[test]
+	fn cancelled_outer_waiter_does_not_finish_native_vss_io() {
+		let (store, requests, server) = held_store(1);
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let task = runtime.spawn(KVStore::write(&*store, "", "", "write", vec![1]));
+		let release = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+		task.abort();
+		assert!(runtime.block_on(task).unwrap_err().is_cancelled());
+		assert_eq!(store.close_and_drain(Duration::from_millis(10)), Err(ShutdownError::TimedOut));
+		release.send(()).unwrap();
+		assert_eq!(store.close_and_drain(Duration::from_secs(5)), Ok(()));
+		server.join().unwrap();
 	}
 }
