@@ -17,7 +17,10 @@ use std::time::Duration;
 
 use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
 use lightning::io::{self, Error, ErrorKind};
-use lightning::util::persist::{KVStore, KVStoreSync};
+use lightning::util::persist::{
+	KVStore, KVStoreSync, CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+	CHANNEL_MONITOR_UPDATE_PERSISTENCE_PRIMARY_NAMESPACE,
+};
 use lightning::util::ser::{Readable, Writeable};
 use lightning::{impl_writeable_tlv_based_enum, log_error, log_warn};
 use prost::Message;
@@ -259,8 +262,7 @@ enum WriteOutcome {
 /// Runs `attempt` with `policy`'s retries, ending each attempt after `attempt_timeout`. The
 /// whole call, backoff included, counts as in flight, so the store is not replaced before it
 /// returns. If the store has been replaced already, returns [`WriteOutcome::Dropped`] without
-/// writing: its node has stopped and cannot start again, and a failed write would make LDK treat
-/// a monitor update as unrecoverable and panic in the node's detached work.
+/// writing: its node has stopped and cannot start again.
 async fn fenced_retry<F, Fut>(
 	fence: &StoreFence, policy: &CustomRetryPolicy, attempt_timeout: Duration, mut attempt: F,
 ) -> Result<WriteOutcome, VssError>
@@ -310,7 +312,7 @@ impl VssStore {
 		let wallet = sha256::Hash::hash(&obfuscation_master_key).to_byte_array();
 		let key_obfuscator = KeyObfuscator::new(obfuscation_master_key);
 
-		let store = (base_url.trim_end_matches('/').to_string(), store_id.clone(), wallet);
+		let store = (fence_url(&base_url), store_id.clone(), wallet);
 		let generation = tokio::task::block_in_place(|| {
 			STORE_FENCES.start_generation(&store, REPLACED_WRITES_TIMEOUT)
 		})?;
@@ -843,14 +845,7 @@ impl VssStoreInner {
 			match res {
 				Ok(WriteOutcome::Written) => Ok(()),
 				Ok(WriteOutcome::Dropped) => {
-					log_warn!(
-						self.logger,
-						"Dropped write of key {}/{}/{}: another node was built on this VSS store",
-						primary_namespace,
-						secondary_namespace,
-						key
-					);
-					Ok(())
+					self.dropped(true, &primary_namespace, &secondary_namespace, &key)
 				},
 				Err(e) => {
 					let msg = format!(
@@ -862,6 +857,26 @@ impl VssStoreInner {
 			}
 		})
 		.await
+	}
+
+	/// Reports a write or removal that `fenced_retry` dropped because the store was replaced:
+	/// channel monitor writes succeed with a warning (see `drops_quietly`), every other caller,
+	/// e.g. a wallet handing out an address, gets an error.
+	fn dropped(
+		&self, is_write: bool, primary_namespace: &str, secondary_namespace: &str, key: &str,
+	) -> io::Result<()> {
+		let action = if is_write { "write" } else { "removal" };
+		let msg = format!(
+			"Dropped {} of key {}/{}/{}: another node was built on this VSS store",
+			action, primary_namespace, secondary_namespace, key
+		);
+		if drops_quietly(is_write, primary_namespace) {
+			log_warn!(self.logger, "{}", msg);
+			Ok(())
+		} else {
+			log_error!(self.logger, "{}", msg);
+			Err(Error::new(ErrorKind::Other, msg))
+		}
 	}
 
 	async fn remove_internal(
@@ -894,14 +909,7 @@ impl VssStoreInner {
 			match res {
 				Ok(WriteOutcome::Written) => Ok(()),
 				Ok(WriteOutcome::Dropped) => {
-					log_warn!(
-						self.logger,
-						"Dropped removal of key {}/{}/{}: another node was built on this VSS store",
-						primary_namespace,
-						secondary_namespace,
-						key
-					);
-					Ok(())
+					self.dropped(false, &primary_namespace, &secondary_namespace, &key)
 				},
 				Err(e) => {
 					let msg = format!(
@@ -991,6 +999,25 @@ fn derive_data_encryption_and_obfuscation_keys(vss_seed: &[u8; 32]) -> ([u8; 32]
 	let k1 = hkdf(&prk, b"data_encryption_key");
 	let k2 = hkdf(&prk, &[&k1[..], b"obfuscation_key"].concat());
 	(k1, k2)
+}
+
+/// Whether a dropped write or removal succeeds with a warning instead of an error: LDK treats a
+/// failed channel monitor or monitor update write as unrecoverable and panics, while it only logs
+/// failed removals and archive writes.
+fn drops_quietly(is_write: bool, primary_namespace: &str) -> bool {
+	is_write
+		&& [
+			CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE,
+			CHANNEL_MONITOR_UPDATE_PERSISTENCE_PRIMARY_NAMESPACE,
+		]
+		.contains(&primary_namespace)
+}
+
+/// The VSS URL as requests reach it, so that spellings of the same URL share a fence.
+fn fence_url(base_url: &str) -> String {
+	let url =
+		reqwest::Url::parse(base_url).map(String::from).unwrap_or_else(|_| base_url.to_string());
+	url.trim_end_matches('/').to_string()
 }
 
 fn retry_policy() -> CustomRetryPolicy {
@@ -1325,6 +1352,23 @@ mod store_fences_tests {
 	}
 
 	#[test]
+	fn spellings_of_one_vss_url_share_a_fence() {
+		assert_eq!(fence_url("https://vss.example/vss"), fence_url("https://VSS.example:443/vss/"));
+		assert_ne!(fence_url("https://vss.example/vss"), fence_url("https://vss.example:8443/vss"));
+	}
+
+	#[test]
+	fn only_channel_monitor_writes_are_dropped_quietly() {
+		assert!(drops_quietly(true, CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE));
+		assert!(drops_quietly(true, CHANNEL_MONITOR_UPDATE_PERSISTENCE_PRIMARY_NAMESPACE));
+		assert!(!drops_quietly(false, CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE));
+		assert!(!drops_quietly(false, CHANNEL_MONITOR_UPDATE_PERSISTENCE_PRIMARY_NAMESPACE));
+		assert!(!drops_quietly(true, "archived_monitors"));
+		assert!(!drops_quietly(true, "bdk_wallet"));
+		assert!(!drops_quietly(true, ""));
+	}
+
+	#[test]
 	fn stores_fence_only_their_own_writes() {
 		let fences = StoreFences::default();
 		let other = ("https://vss.example".to_string(), "other".to_string(), [1; 32]);
@@ -1543,8 +1587,14 @@ mod tests {
 				.unwrap();
 
 		KVStoreSync::write(&current, "ns", "", "key", vec![2]).unwrap();
-		KVStoreSync::write(&replaced, "ns", "", "key", vec![1]).unwrap();
-		KVStoreSync::remove(&replaced, "ns", "", "key", false).unwrap();
+		KVStoreSync::write(&replaced, "ns", "", "key", vec![1]).unwrap_err();
+		KVStoreSync::remove(&replaced, "ns", "", "key", false).unwrap_err();
 		assert_eq!(KVStoreSync::read(&current, "ns", "", "key").unwrap(), vec![2]);
+
+		let monitors = CHANNEL_MONITOR_PERSISTENCE_PRIMARY_NAMESPACE;
+		KVStoreSync::write(&current, monitors, "", "monitor", vec![2]).unwrap();
+		KVStoreSync::write(&replaced, monitors, "", "monitor", vec![1]).unwrap();
+		KVStoreSync::remove(&replaced, monitors, "", "monitor", false).unwrap_err();
+		assert_eq!(KVStoreSync::read(&current, monitors, "", "monitor").unwrap(), vec![2]);
 	}
 }

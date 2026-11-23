@@ -727,8 +727,8 @@ impl NodeBuilder {
 	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
 	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
 	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
-	/// remaining writes and its [`Node::start`] fails with [`crate::Error::PersistenceFailed`]:
-	/// build a new [`Node`] instead.
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/04.md
@@ -787,8 +787,8 @@ impl NodeBuilder {
 	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
 	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
 	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
-	/// remaining writes and its [`Node::start`] fails with [`crate::Error::PersistenceFailed`]:
-	/// build a new [`Node`] instead.
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_fixed_headers(
@@ -812,8 +812,8 @@ impl NodeBuilder {
 	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
 	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
 	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
-	/// remaining writes and its [`Node::start`] fails with [`crate::Error::PersistenceFailed`]:
-	/// build a new [`Node`] instead.
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_header_provider(
@@ -1228,8 +1228,8 @@ impl ArcedNodeBuilder {
 	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
 	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
 	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
-	/// remaining writes and its [`Node::start`] fails with [`crate::Error::PersistenceFailed`]:
-	/// build a new [`Node`] instead.
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/04.md
@@ -1258,8 +1258,8 @@ impl ArcedNodeBuilder {
 	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
 	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
 	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
-	/// remaining writes and its [`Node::start`] fails with [`crate::Error::PersistenceFailed`]:
-	/// build a new [`Node`] instead.
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_fixed_headers(
@@ -1285,8 +1285,8 @@ impl ArcedNodeBuilder {
 	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
 	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
 	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
-	/// remaining writes and its [`Node::start`] fails with [`crate::Error::PersistenceFailed`]:
-	/// build a new [`Node`] instead.
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_header_provider(
