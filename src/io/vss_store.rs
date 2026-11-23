@@ -92,8 +92,8 @@ type StoreKey = (String, String, [u8; 32]);
 /// since, e.g. a newer channel monitor. Building a store therefore waits until no node runs on
 /// the VSS store (see [`StoreFence::mark_live`]) and no write call of the current store is in
 /// flight, retries and their backoff included, then starts a new generation for it. From then on,
-/// an earlier generation's write calls are dropped before they start (see `fenced_retry`), and
-/// its node refuses to start.
+/// an earlier generation's write calls are dropped before their first attempt (see
+/// `StoreFence::begin_write`), and its node refuses to start.
 ///
 /// A call stops counting once it returns, also when its last request timed out on the client, or
 /// when its task is cancelled, e.g. by `VssStore`'s runtime shutting down. The server may still
@@ -171,7 +171,7 @@ impl StoreFences {
 
 /// Counts one write call as in flight, from when it is queued until it returns or its future is
 /// dropped.
-pub(crate) struct WriteGuard<'a> {
+struct WriteGuard<'a> {
 	fences: &'a StoreFences,
 	store: StoreKey,
 }
@@ -343,7 +343,8 @@ impl VssStore {
 			async_retry_policy,
 			header_provider.clone(),
 		);
-		// Writes retry in `fenced_retry`, which counts each call in flight and bounds each attempt.
+		// Writes retry in `fenced_retry`, which bounds each attempt; each call counts in flight from
+		// `StoreFence::begin_write` at its call site.
 		let blocking_write_client = VssClient::new_with_headers(
 			base_url.clone(),
 			no_retry_policy(),
@@ -860,7 +861,7 @@ impl VssStoreInner {
 		.await
 	}
 
-	/// Reports a write or removal that `fenced_retry` dropped because the store was replaced:
+	/// Reports a write or removal dropped because the store was replaced before it began:
 	/// channel monitor writes succeed with a warning (see `drops_quietly`), every other caller,
 	/// e.g. a wallet handing out an address, gets an error.
 	fn dropped(
@@ -1213,6 +1214,22 @@ mod store_fences_tests {
 		release_tx.send(()).unwrap();
 		writer.join().unwrap();
 		builder.join().unwrap().unwrap();
+	}
+
+	#[test]
+	fn a_write_queued_behind_another_keeps_the_store_current() {
+		let fences = StoreFences::default();
+		let store = store();
+		let current = fences.start_generation(&store, Duration::ZERO).unwrap();
+		let first = fences.begin_write(&store, current).unwrap();
+		// A second write of the same key, counted at its call while it waits for the key's lock.
+		let queued = fences.begin_write(&store, current).unwrap();
+		drop(first);
+		let err = fences.start_generation(&store, Duration::from_millis(20)).unwrap_err();
+		assert_eq!(err.kind(), ErrorKind::TimedOut);
+		assert!(fences.is_current(&store, current));
+		drop(queued);
+		assert!(fences.start_generation(&store, Duration::ZERO).unwrap() > current);
 	}
 
 	#[test]
