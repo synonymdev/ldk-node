@@ -65,7 +65,7 @@ use crate::io::utils::{
 	read_network_graph, read_node_metrics, read_payments_async, write_node_metrics,
 	EXTERNAL_PATHFINDING_SCORES_CACHE_KEY,
 };
-use crate::io::vss_store::VssStore;
+use crate::io::vss_store::{StoreFence, VssStore};
 use crate::io::{
 	self, EVENT_QUEUE_PERSISTENCE_KEY, EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
 	EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE, PAYMENT_INFO_PERSISTENCE_PRIMARY_NAMESPACE,
@@ -724,6 +724,12 @@ impl NodeBuilder {
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
 	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
+	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/04.md
 	pub fn build_with_vss_store(
@@ -778,6 +784,12 @@ impl NodeBuilder {
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
 	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
+	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_fixed_headers(
 		&self, vss_url: String, store_id: String, fixed_headers: HashMap<String, String>,
@@ -796,6 +808,12 @@ impl NodeBuilder {
 	/// **Caution**: VSS support is in **alpha** and is considered experimental.
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
+	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_header_provider(
@@ -830,10 +848,12 @@ impl NodeBuilder {
 		let vss_seed_bytes: [u8; 32] = vss_xprv.private_key.secret_bytes();
 
 		let vss_store =
-			VssStore::new(vss_url, store_id, vss_seed_bytes, header_provider).map_err(|e| {
-				log_error!(logger, "Failed to setup VSS store: {}", e);
-				BuildError::KVStoreSetupFailed
-			})?;
+			VssStore::new(vss_url, store_id, vss_seed_bytes, header_provider, Arc::clone(&logger))
+				.map_err(|e| {
+					log_error!(logger, "Failed to setup VSS store: {}", e);
+					BuildError::KVStoreSetupFailed
+				})?;
+		let vss_store_fence = vss_store.fence();
 
 		build_with_store_internal(
 			config,
@@ -846,6 +866,7 @@ impl NodeBuilder {
 			runtime,
 			logger,
 			Arc::new(vss_store),
+			Some(vss_store_fence),
 			self.channel_data_migration.as_ref(),
 		)
 	}
@@ -881,6 +902,7 @@ impl NodeBuilder {
 			runtime,
 			logger,
 			kv_store,
+			None,
 			self.channel_data_migration.as_ref(),
 		)
 	}
@@ -1203,6 +1225,12 @@ impl ArcedNodeBuilder {
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
 	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
+	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/04.md
 	pub fn build_with_vss_store(
@@ -1227,6 +1255,12 @@ impl ArcedNodeBuilder {
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
 	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
+	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_fixed_headers(
 		&self, vss_url: String, store_id: String, fixed_headers: HashMap<String, String>,
@@ -1247,6 +1281,12 @@ impl ArcedNodeBuilder {
 	/// **Caution**: VSS support is in **alpha** and is considered experimental.
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
+	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Past that wait, also if building fails later, an earlier [`Node`] on that store drops its
+	/// remaining writes, failing all but its channel monitor writes, and its [`Node::start`] fails
+	/// with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_header_provider(
@@ -1726,7 +1766,7 @@ fn build_with_store_internal(
 	liquidity_source_config: Option<&LiquiditySourceConfig>,
 	pathfinding_scores_sync_config: Option<&PathfindingScoresSyncConfig>,
 	async_payments_role: Option<AsyncPaymentsRole>, seed_bytes: [u8; 64], runtime: Runtime,
-	logger: Arc<Logger>, kv_store: Arc<DynStore>,
+	logger: Arc<Logger>, kv_store: Arc<DynStore>, vss_store_fence: Option<StoreFence>,
 	channel_data_migration: Option<&ChannelDataMigration>,
 ) -> Result<Node, BuildError> {
 	optionally_install_rustls_cryptoprovider();
@@ -2600,6 +2640,7 @@ fn build_with_store_internal(
 		pathfinding_scores_sync_url,
 		liquidity_source,
 		kv_store,
+		vss_store_fence,
 		logger,
 		_router: router,
 		scorer,
