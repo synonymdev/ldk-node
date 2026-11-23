@@ -1605,15 +1605,16 @@ mod tests {
 		let mut vss_seed = [0u8; 32];
 		rng.fill_bytes(&mut vss_seed);
 		let header_provider = Arc::new(FixedHeaders::new(HashMap::new()));
-		let store =
-			VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider, logger())
-				.unwrap();
+		let store = VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider, logger())
+			.unwrap();
 		let key = store.inner.fence.store.clone();
 
-		// Not polled, so it has not reached the key's lock, let alone the server.
+		// Neither is polled, so neither has reached the key's lock, let alone the server.
 		let write = KVStore::write(&store, "ns", "", "key", vec![1]);
-		let remove = KVStore::remove(&store, "ns", "", "key", false);
+		let err = STORE_FENCES.start_generation(&key, Duration::from_millis(20)).unwrap_err();
+		assert_eq!(err.kind(), ErrorKind::TimedOut);
 		drop(write);
+		let remove = KVStore::remove(&store, "ns", "", "key", false);
 		let err = STORE_FENCES.start_generation(&key, Duration::from_millis(20)).unwrap_err();
 		assert_eq!(err.kind(), ErrorKind::TimedOut);
 		assert!(store.inner.fence.is_current());
