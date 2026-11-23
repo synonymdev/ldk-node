@@ -724,6 +724,11 @@ impl NodeBuilder {
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
 	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Once built, an earlier [`Node`] on that store drops its remaining writes and its
+	/// [`Node::start`] fails with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
+	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/04.md
 	pub fn build_with_vss_store(
@@ -778,6 +783,11 @@ impl NodeBuilder {
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
 	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Once built, an earlier [`Node`] on that store drops its remaining writes and its
+	/// [`Node::start`] fails with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
+	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_fixed_headers(
 		&self, vss_url: String, store_id: String, fixed_headers: HashMap<String, String>,
@@ -796,6 +806,11 @@ impl NodeBuilder {
 	/// **Caution**: VSS support is in **alpha** and is considered experimental.
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
+	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Once built, an earlier [`Node`] on that store drops its remaining writes and its
+	/// [`Node::start`] fails with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_header_provider(
@@ -1207,6 +1222,11 @@ impl ArcedNodeBuilder {
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
 	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Once built, an earlier [`Node`] on that store drops its remaining writes and its
+	/// [`Node::start`] fails with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
+	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/04.md
 	pub fn build_with_vss_store(
@@ -1231,6 +1251,11 @@ impl ArcedNodeBuilder {
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
 	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Once built, an earlier [`Node`] on that store drops its remaining writes and its
+	/// [`Node::start`] fails with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
+	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_fixed_headers(
 		&self, vss_url: String, store_id: String, fixed_headers: HashMap<String, String>,
@@ -1251,6 +1276,11 @@ impl ArcedNodeBuilder {
 	/// **Caution**: VSS support is in **alpha** and is considered experimental.
 	/// Using VSS (or any remote persistence) may cause LDK to panic if persistence failures are
 	/// unrecoverable, i.e., if they remain unresolved after internal retries are exhausted.
+	///
+	/// Building waits for a [`Node`] still running on the same VSS store and wallet to stop and for
+	/// its writes to return, and fails with [`BuildError::KVStoreSetupFailed`] after 60 seconds.
+	/// Once built, an earlier [`Node`] on that store drops its remaining writes and its
+	/// [`Node::start`] fails with [`crate::Error::PersistenceFailed`]: build a new [`Node`] instead.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	pub fn build_with_vss_store_and_header_provider(

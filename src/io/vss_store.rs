@@ -13,8 +13,7 @@ use std::panic::RefUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
-use std::time::{Duration, Instant};
-use std::{error, fmt};
+use std::time::Duration;
 
 use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
 use lightning::io::{self, Error, ErrorKind};
@@ -48,15 +47,6 @@ type CustomRetryPolicy = FilteredRetryPolicy<
 	Box<dyn Fn(&VssError) -> bool + 'static + Send + Sync>,
 >;
 
-type WriteRetryPolicy = FilteredRetryPolicy<
-	JitteredRetryPolicy<
-		MaxTotalDelayRetryPolicy<
-			MaxAttemptsRetryPolicy<ExponentialBackoffRetryPolicy<FencedWriteError>>,
-		>,
-	>,
-	Box<dyn Fn(&FencedWriteError) -> bool + 'static + Send + Sync>,
->;
-
 #[derive(Debug, PartialEq)]
 enum VssSchemaVersion {
 	// The initial schema version.
@@ -75,9 +65,9 @@ impl_writeable_tlv_based_enum!(VssSchemaVersion,
 
 const VSS_SCHEMA_VERSION_KEY: &str = "vss_schema_version";
 
-// How long building a store waits for a node still running on the same VSS store to stop, and
-// then for the write requests of that store to end. A replaced store starts no further attempt,
-// so the second wait covers at most one attempt, which `WRITE_ATTEMPT_TIMEOUT` bounds.
+// How long building a store waits for a node still running on the same VSS store to stop and for
+// the store's write calls to return. A call retries for up to 180 s while VSS fails, so against a
+// failing VSS the build can time out; it then replaces nothing.
 const REPLACED_WRITES_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Bounds one write attempt, the header fetch included: the VSS client times a request out after
@@ -96,13 +86,14 @@ type StoreKey = (String, String, [u8; 32]);
 /// VSS writes are unconditional puts, so a write of a stopped node that is still retrying, or one
 /// its detached work starts later, would overwrite what a node rebuilt on the same store wrote
 /// since, e.g. a newer channel monitor. Building a store therefore waits until no node runs on
-/// the VSS store (see [`StoreFence::mark_live`]), starts a new generation for it and waits for the
-/// write requests of earlier generations to end. From then on, an earlier generation's writes are
-/// dropped before their next attempt (see `fenced_retry`), and its node refuses to start.
+/// the VSS store (see [`StoreFence::mark_live`]) and no write call of the current store is in
+/// flight, retries and their backoff included, then starts a new generation for it. From then on,
+/// an earlier generation's write calls are dropped before they start (see `fenced_retry`), and
+/// its node refuses to start.
 ///
-/// A request stops counting once its attempt ends, also when it times out on the client or its
-/// task is cancelled, e.g. by `VssStore`'s runtime shutting down. The server may still apply such
-/// a request shortly after; ruling that out needs conditional writes.
+/// A call stops counting once it returns, also when its last request timed out on the client, or
+/// when its task is cancelled, e.g. by `VssStore`'s runtime shutting down. The server may still
+/// apply such a request shortly after; ruling that out needs conditional writes.
 #[derive(Default)]
 struct StoreFences {
 	stores: Mutex<HashMap<StoreKey, FenceState>>,
@@ -114,46 +105,31 @@ struct FenceState {
 	generation: u64,
 	// Whether a node runs on the current generation's store.
 	live: bool,
+	// Write calls of the current generation's store that have not returned.
 	writes_in_flight: usize,
 }
 
 impl StoreFences {
+	/// Waits up to `timeout` until no node runs on the store and none of its write calls is in
+	/// flight, then starts a new generation. On a timeout the store is left as it was.
 	fn start_generation(&self, store: &StoreKey, timeout: Duration) -> io::Result<u64> {
-		let deadline = Instant::now() + timeout;
 		let stores = self.stores.lock().unwrap();
 		let (mut stores, result) = self
 			.changed
 			.wait_timeout_while(stores, timeout, |stores| {
-				stores.get(store).is_some_and(|state| state.live)
+				stores.get(store).is_some_and(|state| state.live || state.writes_in_flight > 0)
 			})
 			.unwrap();
 		if result.timed_out() {
-			let msg = "A node using this VSS store is still running";
+			let msg = match stores.get(store) {
+				Some(state) if state.live => "A node using this VSS store is still running",
+				_ => "Writes of the current store to this VSS store are still in flight",
+			};
 			return Err(Error::new(ErrorKind::TimedOut, msg));
 		}
 		let state = stores.entry(store.clone()).or_default();
 		state.generation += 1;
-		let generation = state.generation;
-		// Wakes an earlier store still waiting here, which has now been replaced itself.
-		self.changed.notify_all();
-		let remaining = deadline.saturating_duration_since(Instant::now());
-		let (stores, result) = self
-			.changed
-			.wait_timeout_while(stores, remaining, |stores| {
-				stores.get(store).is_some_and(|state| {
-					state.generation == generation && state.writes_in_flight > 0
-				})
-			})
-			.unwrap();
-		if stores.get(store).is_none_or(|state| state.generation != generation) {
-			let msg = "VSS store was replaced while being built";
-			return Err(Error::new(ErrorKind::Other, msg));
-		}
-		if result.timed_out() {
-			let msg = "Writes of a replaced store to this VSS store are still in flight";
-			return Err(Error::new(ErrorKind::TimedOut, msg));
-		}
-		Ok(generation)
+		Ok(state.generation)
 	}
 
 	fn is_current(&self, store: &StoreKey, generation: u64) -> bool {
@@ -179,7 +155,8 @@ impl StoreFences {
 		}
 	}
 
-	/// Returns `None` if the store of `generation` has been replaced.
+	/// Returns `None` if the store of `generation` has been replaced. While the guard lives, the
+	/// store is not replaced.
 	fn begin_write<'a>(&'a self, store: &'a StoreKey, generation: u64) -> Option<WriteGuard<'a>> {
 		let mut stores = self.stores.lock().unwrap();
 		let state = stores.get_mut(store).filter(|state| state.generation == generation)?;
@@ -188,7 +165,7 @@ impl StoreFences {
 	}
 }
 
-/// Counts one write request as in flight until it ends or its future is dropped.
+/// Counts one write call as in flight until it returns or its future is dropped.
 struct WriteGuard<'a> {
 	fences: &'a StoreFences,
 	store: &'a StoreKey,
@@ -272,72 +249,41 @@ impl Drop for LiveMark<'_> {
 	}
 }
 
-#[derive(Debug)]
-enum FencedWriteError {
-	Replaced,
-	Vss(VssError),
-}
-
-impl fmt::Display for FencedWriteError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::Replaced => write!(f, "VSS store was replaced"),
-			Self::Vss(e) => e.fmt(f),
-		}
-	}
-}
-
-impl error::Error for FencedWriteError {}
-
 #[derive(Debug, PartialEq, Eq)]
 enum WriteOutcome {
 	Written,
-	// The store was replaced, so the write was not sent or its failure ended the attempts.
+	// The store was replaced, so the write was not sent.
 	Dropped,
 }
 
-/// Runs `attempt` with `policy`'s retries while the store of `fence` is current, counting each
-/// attempt as in flight and ending it after `attempt_timeout`. Once the store has been
-/// replaced, returns [`WriteOutcome::Dropped`] without writing: its node has stopped and cannot
-/// start again, and a failed write would make LDK treat a monitor update as unrecoverable and
-/// panic in the node's detached work.
+/// Runs `attempt` with `policy`'s retries, ending each attempt after `attempt_timeout`. The
+/// whole call, backoff included, counts as in flight, so the store is not replaced before it
+/// returns. If the store has been replaced already, returns [`WriteOutcome::Dropped`] without
+/// writing: its node has stopped and cannot start again, and a failed write would make LDK treat
+/// a monitor update as unrecoverable and panic in the node's detached work.
 async fn fenced_retry<F, Fut>(
-	fence: &StoreFence, policy: &WriteRetryPolicy, attempt_timeout: Duration, mut attempt: F,
+	fence: &StoreFence, policy: &CustomRetryPolicy, attempt_timeout: Duration, mut attempt: F,
 ) -> Result<WriteOutcome, VssError>
 where
 	F: FnMut() -> Fut,
 	Fut: Future<Output = Result<(), VssError>>,
 {
-	let res = retry(
+	let Some(_write) = fence.begin_write() else {
+		return Ok(WriteOutcome::Dropped);
+	};
+	retry(
 		|| {
-			let write = fence.begin_write();
-			let request = write.as_ref().map(|_| tokio::time::timeout(attempt_timeout, attempt()));
+			let request = tokio::time::timeout(attempt_timeout, attempt());
 			async move {
-				let (Some(_write), Some(request)) = (write, request) else {
-					return Err(FencedWriteError::Replaced);
-				};
-				let res = request.await.unwrap_or_else(|_| {
+				request.await.unwrap_or_else(|_| {
 					Err(VssError::InternalError("VSS write attempt timed out".to_string()))
-				});
-				// Once replaced, a failed attempt is not retried after a backoff either.
-				res.map_err(|e| {
-					if fence.is_current() {
-						FencedWriteError::Vss(e)
-					} else {
-						FencedWriteError::Replaced
-					}
 				})
 			}
 		},
 		policy,
 	)
-	.await;
-	match res {
-		Ok(()) => Ok(WriteOutcome::Written),
-		Err(FencedWriteError::Replaced) => Ok(WriteOutcome::Dropped),
-		Err(FencedWriteError::Vss(_)) if !fence.is_current() => Ok(WriteOutcome::Dropped),
-		Err(FencedWriteError::Vss(e)) => Err(e),
-	}
+	.await
+	.map(|()| WriteOutcome::Written)
 }
 
 // We set this to a small number of threads that would still allow to make some progress if one
@@ -696,7 +642,7 @@ struct VssStoreInner {
 	// Clients for writes and removes, which `fenced_retry` retries.
 	blocking_write_client: VssClient<CustomRetryPolicy>,
 	async_write_client: VssClient<CustomRetryPolicy>,
-	write_retry_policy: WriteRetryPolicy,
+	write_retry_policy: CustomRetryPolicy,
 	store_id: String,
 	fence: StoreFence,
 	data_encryption_key: [u8; 32],
@@ -723,7 +669,7 @@ impl VssStoreInner {
 			async_client,
 			blocking_write_client,
 			async_write_client,
-			write_retry_policy: write_retry_policy(),
+			write_retry_policy: retry_policy(),
 			store_id,
 			fence,
 			data_encryption_key,
@@ -1072,18 +1018,6 @@ fn no_retry_policy() -> CustomRetryPolicy {
 		.skip_retry_on_error(Box::new(|_: &VssError| true) as _)
 }
 
-// The same retries as `retry_policy`, for `fenced_retry`.
-fn write_retry_policy() -> WriteRetryPolicy {
-	ExponentialBackoffRetryPolicy::new(Duration::from_millis(10))
-		.with_max_attempts(100)
-		.with_max_total_delay(Duration::from_secs(180))
-		.with_max_jitter(Duration::from_millis(100))
-		.skip_retry_on_error(Box::new(|e: &FencedWriteError| match e {
-			FencedWriteError::Replaced => true,
-			FencedWriteError::Vss(e) => is_permanent(e),
-		}) as _)
-}
-
 async fn determine_and_write_schema_version(
 	client: &VssClient<CustomRetryPolicy>, store_id: &String, data_encryption_key: [u8; 32],
 	key_obfuscator: &KeyObfuscator,
@@ -1218,25 +1152,6 @@ mod store_fences_tests {
 	}
 
 	#[test]
-	fn a_store_replaced_while_waiting_stops_waiting() {
-		let fences = Arc::new(StoreFences::default());
-		let replaced = fences.start_generation(&store(), Duration::ZERO).unwrap();
-		let key = store();
-		let write = fences.begin_write(&key, replaced).unwrap();
-		let waiting = {
-			let fences = Arc::clone(&fences);
-			std::thread::spawn(move || fences.start_generation(&store(), Duration::from_secs(10)))
-		};
-		while fences.is_current(&key, replaced) {
-			std::thread::yield_now();
-		}
-		let err = fences.start_generation(&key, Duration::from_millis(20)).unwrap_err();
-		assert_eq!(err.kind(), ErrorKind::TimedOut);
-		assert_eq!(waiting.join().unwrap().unwrap_err().kind(), ErrorKind::Other);
-		drop(write);
-	}
-
-	#[test]
 	fn a_replaced_store_cannot_begin_writes() {
 		let fences = StoreFences::default();
 		let replaced = fences.start_generation(&store(), Duration::ZERO).unwrap();
@@ -1248,7 +1163,7 @@ mod store_fences_tests {
 	}
 
 	#[test]
-	fn a_new_store_waits_for_writes_of_the_replaced_one() {
+	fn a_new_store_waits_for_writes_in_flight() {
 		let fences = Arc::new(StoreFences::default());
 		let replaced = fences.start_generation(&store(), Duration::ZERO).unwrap();
 		let (started_tx, started_rx) = std::sync::mpsc::channel();
@@ -1275,14 +1190,31 @@ mod store_fences_tests {
 	}
 
 	#[test]
-	fn a_new_store_fails_but_still_fences_while_a_write_stays_in_flight() {
+	fn a_new_store_that_times_out_on_a_write_replaces_nothing() {
 		let fences = StoreFences::default();
 		let store = store();
-		let replaced = fences.start_generation(&store, Duration::ZERO).unwrap();
-		let _write = fences.begin_write(&store, replaced).unwrap();
+		let current = fences.start_generation(&store, Duration::ZERO).unwrap();
+		let _write = fences.begin_write(&store, current).unwrap();
 		let err = fences.start_generation(&store, Duration::from_millis(20)).unwrap_err();
 		assert_eq!(err.kind(), ErrorKind::TimedOut);
-		assert!(fences.begin_write(&store, replaced).is_none());
+		assert!(fences.is_current(&store, current));
+		assert!(fences.begin_write(&store, current).is_some());
+	}
+
+	#[test]
+	fn a_new_store_that_times_out_on_a_stopping_node_replaces_nothing() {
+		let fences = StoreFences::default();
+		let store = store();
+		let current = fences.start_generation(&store, Duration::ZERO).unwrap();
+		let write = fences.begin_write(&store, current).unwrap();
+		assert!(fences.mark_live(&store, current));
+		fences.clear_live(&store, current);
+		// The node stopped, but a write it started is still in flight.
+		let err = fences.start_generation(&store, Duration::from_millis(20)).unwrap_err();
+		assert_eq!(err.kind(), ErrorKind::TimedOut);
+		assert!(fences.is_current(&store, current));
+		drop(write);
+		assert!(fences.start_generation(&store, Duration::ZERO).unwrap() > current);
 	}
 
 	#[test]
@@ -1313,7 +1245,7 @@ mod store_fences_tests {
 	async fn fenced_retry_retries_until_a_write_succeeds() {
 		let fence = current_fence("retries");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &write_retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
+		let res = fenced_retry(&fence, &retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
 			if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
 				Err(server_error())
 			} else {
@@ -1329,7 +1261,7 @@ mod store_fences_tests {
 	async fn fenced_retry_returns_permanent_errors_without_retrying() {
 		let fence = current_fence("permanent");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &write_retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
+		let res = fenced_retry(&fence, &retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
 			attempts.fetch_add(1, Ordering::SeqCst);
 			Err(VssError::ConflictError("conflict".to_string()))
 		})
@@ -1343,7 +1275,7 @@ mod store_fences_tests {
 		let fence = current_fence("replaced");
 		current_fence("replaced");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &write_retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
+		let res = fenced_retry(&fence, &retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
 			attempts.fetch_add(1, Ordering::SeqCst);
 			Ok(())
 		})
@@ -1352,19 +1284,44 @@ mod store_fences_tests {
 		assert_eq!(attempts.load(Ordering::SeqCst), 0);
 	}
 
-	#[tokio::test]
-	async fn fenced_retry_stops_retrying_once_the_store_is_replaced() {
-		let fence = current_fence("replaced-between-attempts");
-		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &write_retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
-			attempts.fetch_add(1, Ordering::SeqCst);
-			// A new store starts its generation now; it times out waiting for this attempt.
-			let _ = STORE_FENCES.start_generation(&fence.store, Duration::ZERO);
-			Err(server_error())
-		})
-		.await;
-		assert_eq!(res.unwrap(), WriteOutcome::Dropped);
-		assert_eq!(attempts.load(Ordering::SeqCst), 1);
+	#[tokio::test(flavor = "multi_thread")]
+	async fn a_store_is_not_replaced_while_a_write_waits_to_retry() {
+		let fence = current_fence("retrying");
+		let (failed_tx, failed_rx) = std::sync::mpsc::channel();
+		let (retry_tx, retry_rx) = std::sync::mpsc::channel::<()>();
+		let retry_rx = Arc::new(Mutex::new(retry_rx));
+		let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+		let call = {
+			let (fence, attempts) = (fence.clone(), Arc::clone(&attempts));
+			tokio::spawn(async move {
+				fenced_retry(&fence, &retry_policy(), WRITE_ATTEMPT_TIMEOUT, || {
+					let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+					let (failed_tx, retry_rx) = (failed_tx.clone(), Arc::clone(&retry_rx));
+					async move {
+						if attempt == 0 {
+							failed_tx.send(()).unwrap();
+							return Err(server_error());
+						}
+						// The second attempt starts once the test has tried to replace the store.
+						tokio::task::spawn_blocking(move || retry_rx.lock().unwrap().recv())
+							.await
+							.unwrap()
+							.unwrap();
+						Ok(())
+					}
+				})
+				.await
+			})
+		};
+		failed_rx.recv().unwrap();
+		let err =
+			STORE_FENCES.start_generation(&fence.store, Duration::from_millis(20)).unwrap_err();
+		assert_eq!(err.kind(), ErrorKind::TimedOut);
+		assert!(fence.is_current());
+		retry_tx.send(()).unwrap();
+		assert_eq!(call.await.unwrap().unwrap(), WriteOutcome::Written);
+		assert_eq!(attempts.load(Ordering::SeqCst), 2);
+		STORE_FENCES.start_generation(&fence.store, Duration::ZERO).unwrap();
 	}
 
 	#[test]
@@ -1507,14 +1464,13 @@ mod store_fences_tests {
 	async fn fenced_retry_ends_an_attempt_that_does_not_finish() {
 		let fence = current_fence("stuck");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res =
-			fenced_retry(&fence, &write_retry_policy(), Duration::from_millis(10), || async {
-				if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-					std::future::pending::<()>().await;
-				}
-				Ok(())
-			})
-			.await;
+		let res = fenced_retry(&fence, &retry_policy(), Duration::from_millis(10), || async {
+			if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+				std::future::pending::<()>().await;
+			}
+			Ok(())
+		})
+		.await;
 		assert_eq!(res.unwrap(), WriteOutcome::Written);
 		assert_eq!(attempts.load(Ordering::SeqCst), 2);
 	}

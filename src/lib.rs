@@ -321,6 +321,9 @@ impl Node {
 	///
 	/// After this returns, the [`Node`] instance can be controlled via the provided API methods in
 	/// a thread-safe manner.
+	///
+	/// With a VSS store, returns [`Error::PersistenceFailed`] if another [`Node`] has been built on
+	/// the same VSS store and wallet since this one: build a new [`Node`] to continue.
 	pub fn start(&self) -> Result<(), Error> {
 		let _lifecycle_lock = self.lifecycle_lock.lock().unwrap();
 		if *self.is_running.read().unwrap() {
