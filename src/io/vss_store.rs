@@ -20,7 +20,7 @@ use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
 use lightning::io::{self, Error, ErrorKind};
 use lightning::util::persist::{KVStore, KVStoreSync};
 use lightning::util::ser::{Readable, Writeable};
-use lightning::{impl_writeable_tlv_based_enum, log_warn};
+use lightning::{impl_writeable_tlv_based_enum, log_error, log_warn};
 use prost::Message;
 use rand::RngCore;
 use vss_client::client::VssClient;
@@ -232,6 +232,43 @@ impl StoreFence {
 
 	fn begin_write(&self) -> Option<WriteGuard<'_>> {
 		STORE_FENCES.begin_write(&self.store, self.generation)
+	}
+}
+
+/// Runs a node's `start` with the store of `fence` marked live (see [`StoreFence::mark_live`]),
+/// refusing with [`crate::Error::PersistenceFailed`] if the store has been replaced. Clears the mark
+/// again if `start` fails or panics, unless `stop_required` says the node still needs a stop, which
+/// clears it.
+pub(crate) fn start_marked_live(
+	fence: Option<&StoreFence>, logger: &Logger, start: impl FnOnce() -> Result<(), crate::Error>,
+	stop_required: impl FnOnce() -> bool,
+) -> Result<(), crate::Error> {
+	let Some(fence) = fence else {
+		return start();
+	};
+	if !fence.mark_live() {
+		log_error!(
+			logger,
+			"Refusing to start: another node was built on this node's VSS store since."
+		);
+		return Err(crate::Error::PersistenceFailed);
+	}
+	let mut mark = LiveMark(Some(fence));
+	let res = start();
+	if res.is_ok() || stop_required() {
+		mark.0 = None;
+	}
+	res
+}
+
+/// Clears a live mark when dropped, also while unwinding from a panic.
+struct LiveMark<'a>(Option<&'a StoreFence>);
+
+impl Drop for LiveMark<'_> {
+	fn drop(&mut self) {
+		if let Some(fence) = self.0 {
+			fence.clear_live();
+		}
 	}
 }
 
@@ -1392,6 +1429,78 @@ mod store_fences_tests {
 		let err = fences.start_generation(&store(), Duration::from_millis(20)).unwrap_err();
 		assert_eq!(err.kind(), ErrorKind::TimedOut);
 		assert!(fences.is_current(&store(), current));
+	}
+
+	fn is_live(fence: &StoreFence) -> bool {
+		STORE_FENCES.stores.lock().unwrap().get(&fence.store).is_some_and(|state| state.live)
+	}
+
+	#[test]
+	fn a_started_node_keeps_its_store_live() {
+		let fence = current_fence("started");
+		let logger = Logger::new_log_facade();
+		assert!(start_marked_live(Some(&fence), &logger, || Ok(()), || false).is_ok());
+		assert!(is_live(&fence));
+		fence.clear_live();
+		assert!(!is_live(&fence));
+	}
+
+	#[test]
+	fn a_failed_start_clears_the_live_mark() {
+		let fence = current_fence("failed-start");
+		let logger = Logger::new_log_facade();
+		let res = start_marked_live(
+			Some(&fence),
+			&logger,
+			|| Err(crate::Error::ConnectionFailed),
+			|| false,
+		);
+		assert_eq!(res, Err(crate::Error::ConnectionFailed));
+		assert!(!is_live(&fence));
+	}
+
+	#[test]
+	fn a_failed_start_that_needs_a_stop_stays_live() {
+		let fence = current_fence("failed-start-needs-stop");
+		let logger = Logger::new_log_facade();
+		let res = start_marked_live(
+			Some(&fence),
+			&logger,
+			|| Err(crate::Error::PersistenceFailed),
+			|| true,
+		);
+		assert_eq!(res, Err(crate::Error::PersistenceFailed));
+		assert!(is_live(&fence));
+	}
+
+	#[test]
+	fn a_panicking_start_clears_the_live_mark() {
+		let fence = current_fence("panicking-start");
+		let logger = Logger::new_log_facade();
+		let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			start_marked_live(Some(&fence), &logger, || panic!("start failed"), || false)
+		}));
+		assert!(res.is_err());
+		assert!(!is_live(&fence));
+	}
+
+	#[test]
+	fn a_node_on_a_replaced_store_does_not_start() {
+		let fence = current_fence("replaced-node");
+		current_fence("replaced-node");
+		let logger = Logger::new_log_facade();
+		let mut started = false;
+		let res = start_marked_live(
+			Some(&fence),
+			&logger,
+			|| {
+				started = true;
+				Ok(())
+			},
+			|| false,
+		);
+		assert_eq!(res, Err(crate::Error::PersistenceFailed));
+		assert!(!started);
 	}
 
 	#[tokio::test]
