@@ -46,6 +46,7 @@ use crate::fee_estimator::{
 };
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
+use crate::quiescence::{ShutdownError, WorkTracker};
 use crate::types::{ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::NodeMetrics;
 
@@ -201,6 +202,7 @@ pub(super) struct ElectrumChainSource {
 	address_type_runtime_config: Arc<RwLock<AddressTypeRuntimeConfig>>,
 	logger: Arc<Logger>,
 	pub(super) node_metrics: Arc<RwLock<NodeMetrics>>,
+	native_work: Arc<WorkTracker>,
 }
 
 impl ElectrumChainSource {
@@ -214,6 +216,7 @@ impl ElectrumChainSource {
 		let onchain_wallet_sync_status = Mutex::new(WalletSyncStatus::Completed);
 		let lightning_wallet_sync_status = Mutex::new(WalletSyncStatus::Completed);
 		Self {
+			native_work: Arc::new(WorkTracker::default()),
 			server_url,
 			sync_config,
 			electrum_runtime_status,
@@ -235,7 +238,13 @@ impl ElectrumChainSource {
 			Arc::clone(&self.config),
 			Arc::clone(&self.logger),
 			self.sync_config.connection_timeout_secs,
+			Arc::clone(&self.native_work),
 		)
+	}
+
+	pub(super) fn close_and_drain(&self, timeout: Duration) -> Result<(), ShutdownError> {
+		self.native_work.close();
+		tokio::task::block_in_place(|| self.native_work.wait(timeout))
 	}
 
 	pub(super) fn stop(&self) {
@@ -655,17 +664,19 @@ impl ElectrumRuntimeStatus {
 
 	pub(super) fn start(
 		&mut self, server_url: String, runtime_handle: Handle, config: Arc<Config>,
-		logger: Arc<Logger>, connection_timeout_secs: u64,
+		logger: Arc<Logger>, connection_timeout_secs: u64, native_work: Arc<WorkTracker>,
 	) -> Result<(), Error> {
 		match self {
 			Self::Stopped { pending_registered_txs, pending_registered_outputs } => {
-				let client = Arc::new(ElectrumRuntimeClient::new(
+				let mut client = ElectrumRuntimeClient::new(
 					server_url.clone(),
 					runtime_handle,
 					config,
 					logger,
 					connection_timeout_secs,
-				)?);
+				)?;
+				client.native_work = native_work;
+				let client = Arc::new(client);
 
 				// Apply any pending `Filter` entries
 				for (txid, script_pubkey) in pending_registered_txs.drain(..) {
@@ -744,6 +755,7 @@ struct ElectrumRuntimeClient {
 	config: Arc<Config>,
 	logger: Arc<Logger>,
 	confirm_gate: Arc<ConfirmGate>,
+	native_work: Arc<WorkTracker>,
 }
 
 impl ElectrumRuntimeClient {
@@ -786,6 +798,7 @@ impl ElectrumRuntimeClient {
 		let connect_main =
 			Arc::new(move || MainElectrumClient::connect(&server_url, &electrum_config));
 		Ok(Self {
+			native_work: Arc::new(WorkTracker::default()),
 			main_client: Arc::new(RwLock::new(Arc::new(main_client))),
 			connect_main,
 			tx_sync,
@@ -793,6 +806,21 @@ impl ElectrumRuntimeClient {
 			config,
 			logger,
 			confirm_gate: Arc::new(ConfirmGate::new()),
+		})
+	}
+
+	fn spawn_blocking<F, T>(&self, operation: F) -> JoinHandle<T>
+	where
+		F: FnOnce() -> T + Send + 'static,
+		T: Send + 'static,
+	{
+		// Strict shutdown closes this tracker only after its original callers have drained.
+		let permit =
+			self.native_work.admit().expect("original Electrum callers must precede closure");
+		self.runtime_handle.spawn_blocking(move || {
+			let result = operation();
+			permit.complete(None);
+			result
 		})
 	}
 
@@ -814,7 +842,7 @@ impl ElectrumRuntimeClient {
 			Arc::clone(&self.logger),
 			Arc::clone(failed),
 		);
-		self.runtime_handle.spawn_blocking(move || {
+		self.spawn_blocking(move || {
 			let is_current = || Arc::ptr_eq(&main_client.read().unwrap(), &failed);
 			if !is_current() {
 				return true;
@@ -852,10 +880,8 @@ impl ElectrumRuntimeClient {
 		let script = address.script_pubkey();
 		let main_client = self.main_client();
 		let electrum_client = Arc::clone(&main_client.electrum_client);
-		let balance_result = self
-			.runtime_handle
-			.spawn_blocking(move || electrum_client.script_get_balance(&script))
-			.await;
+		let balance_result =
+			self.spawn_blocking(move || electrum_client.script_get_balance(&script)).await;
 
 		match balance_result {
 			Ok(Ok(balance)) => {
@@ -879,7 +905,7 @@ impl ElectrumRuntimeClient {
 		let now = Instant::now();
 
 		let tx_sync = Arc::clone(&self.tx_sync);
-		let spawn_fut = self.runtime_handle.spawn_blocking(move || tx_sync.sync(confirmables));
+		let spawn_fut = self.spawn_blocking(move || tx_sync.sync(confirmables));
 		let timeout_fut =
 			tokio::time::timeout(Duration::from_secs(LDK_WALLET_SYNC_TIMEOUT_SECS), spawn_fut);
 
@@ -920,7 +946,7 @@ impl ElectrumRuntimeClient {
 		let bdk_electrum_client = Arc::clone(&main_client.bdk_electrum_client);
 		bdk_electrum_client.populate_tx_cache(cached_txs);
 
-		let spawn_fut = self.runtime_handle.spawn_blocking(move || {
+		let spawn_fut = self.spawn_blocking(move || {
 			bdk_electrum_client.full_scan(request, settings.stop_gap, settings.batch_size, true)
 		});
 		let wallet_sync_timeout_fut = tokio::time::timeout(timeout, spawn_fut);
@@ -956,9 +982,8 @@ impl ElectrumRuntimeClient {
 		let bdk_electrum_client = Arc::clone(&main_client.bdk_electrum_client);
 		bdk_electrum_client.populate_tx_cache(cached_txs);
 
-		let spawn_fut = self
-			.runtime_handle
-			.spawn_blocking(move || bdk_electrum_client.sync(request, batch_size, true));
+		let spawn_fut =
+			self.spawn_blocking(move || bdk_electrum_client.sync(request, batch_size, true));
 		let wallet_sync_timeout_fut = tokio::time::timeout(timeout, spawn_fut);
 
 		let result = match wallet_sync_timeout_fut.await {
@@ -1026,8 +1051,7 @@ impl ElectrumRuntimeClient {
 		let tx_bytes = tx.encode();
 		let blocking_tx = tx.clone();
 		// A timed-out spawn_blocking task may continue on its thread. Its result is unknown.
-		let task =
-			self.runtime_handle.spawn_blocking(move || client.transaction_broadcast(&blocking_tx));
+		let task = self.spawn_blocking(move || client.transaction_broadcast(&blocking_tx));
 		match tokio::time::timeout(timeout, task).await {
 			Ok(Ok(Ok(actual))) if actual == expected => {
 				log_trace!(self.logger, "Successfully broadcast transaction {}", expected);
@@ -1104,8 +1128,7 @@ impl ElectrumRuntimeClient {
 			batch.estimate_fee(num_blocks);
 		}
 
-		let spawn_fut =
-			self.runtime_handle.spawn_blocking(move || electrum_client.batch_call(&batch));
+		let spawn_fut = self.spawn_blocking(move || electrum_client.batch_call(&batch));
 
 		let timeout_fut = tokio::time::timeout(
 			Duration::from_secs(FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS),
@@ -1821,6 +1844,46 @@ mod tests {
 		let _ = release_server_tx.send(());
 		server_thread.join().unwrap();
 		thread::sleep(Duration::from_millis(500));
+	}
+
+	#[test]
+	fn strict_drain_retains_blocking_callback_after_outer_waiter_is_cancelled() {
+		let server = FakeElectrumServer::start();
+		let logger = Arc::new(Logger::new_log_facade());
+		let runtime = Runtime::new(logger.clone()).unwrap();
+		let client = test_runtime_client(&server, &runtime, logger);
+		let (started, observed) = sync_channel(1);
+		let (release, held) = sync_channel(1);
+		let blocking = Arc::new(BlockingConfirm {
+			calls: AtomicUsize::new(0),
+			started: Mutex::new(Some(started)),
+			release: Mutex::new(held),
+		});
+		let delegate: Arc<dyn Confirm + Sync + Send> = blocking.clone();
+		let confirm = ShutdownAwareConfirm::new(
+			Arc::downgrade(&client.confirm_gate),
+			vec![Arc::downgrade(&delegate)],
+		);
+		let task = client.spawn_blocking(move || {
+			confirm.best_block_updated(&genesis_block(Network::Regtest).header, 0);
+		});
+		observed.recv_timeout(Duration::from_secs(2)).unwrap();
+		// Dropping/aborting the async waiter cannot stop this already-running blocking callback.
+		let outer = runtime.handle().spawn(async move {
+			task.await.unwrap();
+		});
+		outer.abort();
+		assert!(runtime.block_on(outer).unwrap_err().is_cancelled());
+		client.begin_shutdown();
+		client.native_work.close();
+		assert_eq!(
+			client.native_work.wait(Duration::from_millis(20)),
+			Err(crate::ShutdownError::TimedOut)
+		);
+		release.send(()).unwrap();
+		assert_eq!(client.native_work.wait(Duration::from_secs(2)), Ok(()));
+		assert_eq!(blocking.calls.load(Ordering::Acquire), 1);
+		assert!(client.native_work.admit().is_err());
 	}
 
 	#[test]

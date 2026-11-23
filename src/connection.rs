@@ -15,6 +15,7 @@ use bitcoin::secp256k1::PublicKey;
 use lightning::ln::msgs::SocketAddress;
 
 use crate::logger::{log_error, log_info, LdkLogger};
+use crate::quiescence::{ShutdownError, WorkPermit, WorkTracker};
 use crate::types::PeerManager;
 use crate::Error;
 
@@ -26,6 +27,7 @@ where
 		Mutex<HashMap<PublicKey, Vec<tokio::sync::oneshot::Sender<Result<(), Error>>>>>,
 	peer_manager: Arc<PeerManager>,
 	logger: L,
+	native_work: Arc<WorkTracker>,
 }
 
 impl<L: Deref + Clone + Sync + Send> ConnectionManager<L>
@@ -34,7 +36,28 @@ where
 {
 	pub(crate) fn new(peer_manager: Arc<PeerManager>, logger: L) -> Self {
 		let pending_connections = Mutex::new(HashMap::new());
-		Self { pending_connections, peer_manager, logger }
+		Self {
+			pending_connections,
+			peer_manager,
+			logger,
+			native_work: Arc::new(WorkTracker::default()),
+		}
+	}
+
+	pub(crate) fn close_admission(&self) {
+		self.native_work.close();
+	}
+
+	pub(crate) fn drain(&self, timeout: Duration) -> Result<(), ShutdownError> {
+		tokio::task::block_in_place(|| self.native_work.wait(timeout))
+	}
+
+	pub(crate) fn tracked_peer_manager(&self) -> Result<TrackedPeerManager, Error> {
+		let permit = self.native_work.admit().map_err(|_| Error::NotRunning)?;
+		Ok(TrackedPeerManager {
+			inner: Arc::clone(&self.peer_manager),
+			lease: Arc::new(PeerTaskLease(Some(permit))),
+		})
 	}
 
 	pub(crate) async fn connect_peer_if_necessary(
@@ -50,6 +73,7 @@ where
 	pub(crate) async fn do_connect_peer(
 		&self, node_id: PublicKey, addr: SocketAddress,
 	) -> Result<(), Error> {
+		let tracked_peer_manager = self.tracked_peer_manager()?;
 		// First, we check if there is already an outbound connection in flight, if so, we just
 		// await on the corresponding watch channel. The task driving the connection future will
 		// send us the result..
@@ -78,11 +102,8 @@ where
 				Error::InvalidSocketAddress
 			})?;
 
-		let connection_future = lightning_net_tokio::connect_outbound(
-			Arc::clone(&self.peer_manager),
-			node_id,
-			socket_addr,
-		);
+		let connection_future =
+			lightning_net_tokio::connect_outbound(tracked_peer_manager, node_id, socket_addr);
 
 		let res = match connection_future.await {
 			Some(connection_closed_future) => {
@@ -147,6 +168,42 @@ where
 						e
 					);
 				});
+			}
+		}
+	}
+}
+
+// lightning-net-tokio clones this handle into its separately spawned read and event workers.
+// The last clone retains the permit through all callbacks and PeerManager reference drops.
+#[derive(Clone)]
+pub(crate) struct TrackedPeerManager {
+	inner: Arc<PeerManager>,
+	lease: Arc<PeerTaskLease>,
+}
+
+impl Drop for TrackedPeerManager {
+	fn drop(&mut self) {
+		if std::thread::panicking() {
+			if let Some(permit) = self.lease.0.as_ref() {
+				permit.record_failure(ShutdownError::TaskFailed);
+			}
+		}
+	}
+}
+
+impl Deref for TrackedPeerManager {
+	type Target = PeerManager;
+	fn deref(&self) -> &Self::Target {
+		&self.inner
+	}
+}
+
+struct PeerTaskLease(Option<WorkPermit>);
+impl Drop for PeerTaskLease {
+	fn drop(&mut self) {
+		if let Some(permit) = self.0.take() {
+			if !std::thread::panicking() {
+				permit.complete(None);
 			}
 		}
 	}

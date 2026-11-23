@@ -37,15 +37,29 @@ pub struct SpontaneousPayment {
 	config: Arc<Config>,
 	is_running: Arc<RwLock<bool>>,
 	logger: Arc<Logger>,
+	shutdown_owner: Option<Arc<()>>,
 }
 
 impl SpontaneousPayment {
+	pub(crate) fn with_shutdown_owner(mut self, owner: Arc<()>) -> Self {
+		self.shutdown_owner = Some(owner);
+		self
+	}
+
 	pub(crate) fn new(
 		channel_manager: Arc<ChannelManager>, keys_manager: Arc<KeysManager>,
 		payment_store: Arc<PaymentStore>, config: Arc<Config>, is_running: Arc<RwLock<bool>>,
 		logger: Arc<Logger>,
 	) -> Self {
-		Self { channel_manager, keys_manager, payment_store, config, is_running, logger }
+		Self {
+			shutdown_owner: None,
+			channel_manager,
+			keys_manager,
+			payment_store,
+			config,
+			is_running,
+			logger,
+		}
 	}
 
 	/// Send a spontaneous aka. "keysend", payment.

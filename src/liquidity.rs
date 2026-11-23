@@ -8,7 +8,9 @@
 //! Objects related to liquidity management.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -48,6 +50,24 @@ use crate::types::{
 	Broadcaster, ChannelManager, DynStore, KeysManager, LiquidityManager, PeerManager, Wallet,
 };
 use crate::{total_anchor_channels_reserve_sats, Config, Error};
+
+// Ordinary stop preserves the existing cancellation boundary. Strict shutdown must finish an
+// event already removed from the queue, while an idle receiver remains interruptible.
+pub(crate) async fn await_event_or_stop<F: Future<Output = ()>>(
+	handling: F, selected: &AtomicBool, strict_shutdown: &AtomicBool,
+	stop: &mut tokio::sync::watch::Receiver<()>,
+) -> bool {
+	tokio::pin!(handling);
+	tokio::select! {
+		_ = stop.changed() => {
+			if strict_shutdown.load(Ordering::Acquire) && selected.load(Ordering::Acquire) {
+				handling.await;
+			}
+			false
+		},
+		_ = &mut handling => true,
+	}
+}
 
 const LIQUIDITY_REQUEST_TIMEOUT_SECS: u64 = 5;
 
@@ -385,8 +405,15 @@ where
 		}
 	}
 
-	pub(crate) async fn handle_next_event(&self) {
-		match self.liquidity_manager.next_event_async().await {
+	pub(crate) async fn handle_next_event(&self, selected: &std::sync::atomic::AtomicBool) {
+		let event = self.liquidity_manager.next_event_async().await;
+		selected.store(true, std::sync::atomic::Ordering::Release);
+		self.handle_event(event).await;
+	}
+
+	// Once selected, an event finishes before the graceful stop branch is polled again.
+	pub(crate) async fn handle_event(&self, event: LiquidityEvent) {
+		match event {
 			LiquidityEvent::LSPS1Client(LSPS1ClientEvent::SupportedOptionsReady {
 				request_id,
 				counterparty_node_id,
@@ -1463,16 +1490,30 @@ pub struct LSPS1Liquidity {
 	liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
 	is_running: Arc<RwLock<bool>>,
 	logger: Arc<Logger>,
+	shutdown_owner: Option<Arc<()>>,
 }
 
 impl LSPS1Liquidity {
+	pub(crate) fn with_shutdown_owner(mut self, owner: Arc<()>) -> Self {
+		self.shutdown_owner = Some(owner);
+		self
+	}
+
 	pub(crate) fn new(
 		runtime: Arc<RuntimeControl>, wallet: Arc<Wallet>,
 		connection_manager: Arc<ConnectionManager<Arc<Logger>>>,
 		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>, is_running: Arc<RwLock<bool>>,
 		logger: Arc<Logger>,
 	) -> Self {
-		Self { runtime, wallet, connection_manager, liquidity_source, is_running, logger }
+		Self {
+			shutdown_owner: None,
+			runtime,
+			wallet,
+			connection_manager,
+			liquidity_source,
+			is_running,
+			logger,
+		}
 	}
 
 	/// Connects to the configured LSP and places an order for an inbound channel.
@@ -1548,5 +1589,55 @@ impl LSPS1Liquidity {
 			liquidity_source.lsps1_check_order_status(order_id).await
 		})??;
 		Ok(response)
+	}
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+	use super::*;
+	use tokio::sync::{oneshot, watch};
+
+	#[test]
+	fn selected_liquidity_event_finishes_only_for_strict_shutdown() {
+		let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+		for (strict, already_selected) in [(false, true), (true, true), (true, false)] {
+			let (stop, mut stopped) = watch::channel(());
+			let (started, mut observed) = oneshot::channel();
+			let (release, held) = oneshot::channel();
+			let (completed, mut completion) = oneshot::channel();
+			let task = runtime.spawn(async move {
+				let selected = AtomicBool::new(false);
+				let handling = async {
+					selected.store(already_selected, Ordering::Release);
+					started.send(()).unwrap();
+					held.await.unwrap();
+					completed.send(()).unwrap();
+				};
+				await_event_or_stop(handling, &selected, &AtomicBool::new(strict), &mut stopped)
+					.await
+			});
+			runtime.block_on(async {
+				tokio::time::timeout(Duration::from_secs(1), &mut observed).await.unwrap().unwrap();
+			});
+			stop.send(()).unwrap();
+			if strict && already_selected {
+				let mut task = task;
+				assert!(runtime
+					.block_on(async {
+						tokio::time::timeout(Duration::from_millis(20), &mut task).await
+					})
+					.is_err());
+				assert!(matches!(completion.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+				release.send(()).unwrap();
+				assert!(!runtime.block_on(task).unwrap());
+				assert_eq!(completion.try_recv(), Ok(()));
+			} else {
+				assert!(!runtime.block_on(async {
+					tokio::time::timeout(Duration::from_secs(1), task).await.unwrap().unwrap()
+				}));
+				assert!(release.send(()).is_err());
+				assert!(matches!(completion.try_recv(), Err(oneshot::error::TryRecvError::Closed)));
+			}
+		}
 	}
 }

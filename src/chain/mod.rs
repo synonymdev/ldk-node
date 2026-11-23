@@ -735,6 +735,13 @@ impl ChainSource {
 		Ok(())
 	}
 
+	pub(crate) fn drain_native_calls(&self, timeout: Duration) -> Result<(), crate::ShutdownError> {
+		match &self.kind {
+			ChainSourceKind::Electrum(source) => source.close_and_drain(timeout),
+			_ => Ok(()),
+		}
+	}
+
 	pub(crate) fn stop(&self) {
 		match &self.kind {
 			ChainSourceKind::Electrum(electrum_chain_source) => electrum_chain_source.stop(),

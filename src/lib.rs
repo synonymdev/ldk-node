@@ -97,7 +97,9 @@ mod message_handler;
 pub mod payment;
 mod peer_store;
 mod probe_handle;
+mod quiescence;
 mod runtime;
+pub use quiescence::{NodeShutdown, ShutdownError};
 mod scoring;
 mod tx_broadcaster;
 mod types;
@@ -214,6 +216,9 @@ pub struct Node {
 	rgs_peer_recovery_exclusions: Arc<RgsPeerRecoveryExclusions>,
 	payment_store: Arc<PaymentStore>,
 	lifecycle_lock: Mutex<()>,
+	shutdown_owner: Arc<()>,
+	strict_shutdown: Arc<AtomicBool>,
+	shutdown_store: Option<Arc<io::vss_store::VssStore>>,
 	is_running: Arc<RwLock<bool>>,
 	background_processor_failed: Arc<AtomicBool>,
 	background_processor_generation: Arc<AtomicU64>,
@@ -310,6 +315,33 @@ impl RgsPeerRecoveryExclusions {
 }
 
 impl Node {
+	/// Permanently transfer this original node into a strict shutdown owner.
+	///
+	/// Entry requires the built-in VSS store, a node-owned Tokio runtime, and no remaining
+	/// payment, liquidity or prepared-send handles. Otherwise the original untouched node
+	/// is returned. Drop those handles before retrying; do not replace the original node.
+	/// After successful entry neither this node nor its public mutation APIs are accessible.
+	/// [`NodeShutdown::wait`] must succeed before claiming native storage is quiescent.
+	/// This does not authorize remote migration or certify complete backup contents.
+	///
+	/// ```no_run
+	/// # fn example(node: ldk_node::Node) {
+	/// match node.try_into_shutdown() {
+	///     Ok(mut owner) => { let _ = owner.wait(std::time::Duration::from_secs(30)); },
+	///     Err(original) => { /* preserve original and satisfy the entry requirements */ },
+	/// }
+	/// # }
+	/// ```
+	pub fn try_into_shutdown(mut self) -> Result<NodeShutdown, Box<Self>> {
+		if Arc::get_mut(&mut self.shutdown_owner).is_none()
+			|| !self.runtime.owns_runtime()
+			|| self.shutdown_store.is_none()
+		{
+			return Err(Box::new(self));
+		}
+		Ok(NodeShutdown::begin(self))
+	}
+
 	/// Starts the necessary background tasks, such as handling events coming from user input,
 	/// LDK/BDK, and the peer-to-peer network.
 	///
@@ -439,7 +471,7 @@ impl Node {
 
 		if let Some(listening_addresses) = &self.config.listening_addresses {
 			// Setup networking
-			let peer_manager_connection_handler = Arc::clone(&self.peer_manager);
+			let peer_manager_connection_handler = Arc::clone(&self.connection_manager);
 			let listening_logger = Arc::clone(&self.logger);
 
 			let mut bind_addrs = Vec::with_capacity(listening_addresses.len());
@@ -503,11 +535,13 @@ impl Node {
 								let tcp_stream = res.unwrap().0;
 								let peer_mgr = Arc::clone(&peer_mgr);
 								runtime.spawn_cancellable_background_task(async move {
-									lightning_net_tokio::setup_inbound(
-										Arc::clone(&peer_mgr),
+									let Ok(peer_mgr) = peer_mgr.tracked_peer_manager() else { return; };
+									// Registration spawns the real workers, retained by the peer lease.
+									// Its returned join waiter is not additional cancellable work.
+									drop(lightning_net_tokio::setup_inbound(
+										peer_mgr,
 										tcp_stream.into_std().unwrap(),
-										)
-										.await;
+									));
 								});
 							}
 						}
@@ -682,6 +716,7 @@ impl Node {
 				Arc::clone(&self.kv_store),
 				self.config.storage_dir_path.clone(),
 				Arc::clone(&self.local_rgs_timestamp),
+				self.runtime.persistence_recorder(),
 			));
 		let background_event_handler = Arc::clone(&event_handler);
 		let background_chain_mon = Arc::clone(&self.chain_monitor);
@@ -762,17 +797,21 @@ impl Node {
 			let mut stop_liquidity_handler = self.stop_sender.subscribe();
 			let liquidity_handler = Arc::clone(&liquidity_source);
 			let liquidity_logger = Arc::clone(&self.logger);
+			let strict_shutdown = Arc::clone(&self.strict_shutdown);
 			self.runtime.spawn_background_task(async move {
 				loop {
-					tokio::select! {
-						_ = stop_liquidity_handler.changed() => {
-							log_debug!(
-								liquidity_logger,
-								"Stopping processing liquidity events.",
-							);
-							return;
-						}
-						_ = liquidity_handler.handle_next_event() => {}
+					let selected = AtomicBool::new(false);
+					let handling = liquidity_handler.handle_next_event(&selected);
+					if !liquidity::await_event_or_stop(
+						handling,
+						&selected,
+						&strict_shutdown,
+						&mut stop_liquidity_handler,
+					)
+					.await
+					{
+						log_debug!(liquidity_logger, "Stopping processing liquidity events.");
+						return;
 					}
 				}
 			});
@@ -816,6 +855,9 @@ impl Node {
 	/// Disconnects all peers, stops all running background tasks, and shuts down [`Node`].
 	///
 	/// After this returns most API methods will return [`Error::NotRunning`].
+	///
+	/// This restartable operation may cancel admitted work. If that happens, a later consuming
+	/// shutdown on the same node reports [`ShutdownError::TaskFailed`] rather than certifying it.
 	pub fn stop(&self) -> Result<(), Error> {
 		let _lifecycle_lock = self.lifecycle_lock.lock().unwrap();
 		if !*self.is_running.read().unwrap()
@@ -1030,6 +1072,7 @@ impl Node {
 			Arc::clone(&self.logger),
 			Arc::clone(&self._router),
 		)
+		.with_shutdown_owner(Arc::clone(&self.shutdown_owner))
 	}
 
 	/// Returns a payment handler allowing to create and pay [BOLT 11] invoices.
@@ -1037,18 +1080,21 @@ impl Node {
 	/// [BOLT 11]: https://github.com/lightning/bolts/blob/master/11-payment-encoding.md
 	#[cfg(feature = "uniffi")]
 	pub fn bolt11_payment(&self) -> Arc<Bolt11Payment> {
-		Arc::new(Bolt11Payment::new(
-			self.runtime.control(),
-			Arc::clone(&self.channel_manager),
-			Arc::clone(&self.connection_manager),
-			self.liquidity_source.clone(),
-			Arc::clone(&self.payment_store),
-			Arc::clone(&self.peer_store),
-			Arc::clone(&self.config),
-			Arc::clone(&self.is_running),
-			Arc::clone(&self.logger),
-			Arc::clone(&self._router),
-		))
+		Arc::new(
+			Bolt11Payment::new(
+				self.runtime.control(),
+				Arc::clone(&self.channel_manager),
+				Arc::clone(&self.connection_manager),
+				self.liquidity_source.clone(),
+				Arc::clone(&self.payment_store),
+				Arc::clone(&self.peer_store),
+				Arc::clone(&self.config),
+				Arc::clone(&self.is_running),
+				Arc::clone(&self.logger),
+				Arc::clone(&self._router),
+			)
+			.with_shutdown_owner(Arc::clone(&self.shutdown_owner)),
+		)
 	}
 
 	/// Returns a payment handler allowing to create and pay [BOLT 12] offers and refunds.
@@ -1064,6 +1110,7 @@ impl Node {
 			Arc::clone(&self.logger),
 			self.async_payments_role,
 		)
+		.with_shutdown_owner(Arc::clone(&self.shutdown_owner))
 	}
 
 	/// Returns a payment handler allowing to create and pay [BOLT 12] offers and refunds.
@@ -1071,14 +1118,17 @@ impl Node {
 	/// [BOLT 12]: https://github.com/lightning/bolts/blob/master/12-offer-encoding.md
 	#[cfg(feature = "uniffi")]
 	pub fn bolt12_payment(&self) -> Arc<Bolt12Payment> {
-		Arc::new(Bolt12Payment::new(
-			Arc::clone(&self.channel_manager),
-			Arc::clone(&self.payment_store),
-			Arc::clone(&self.config),
-			Arc::clone(&self.is_running),
-			Arc::clone(&self.logger),
-			self.async_payments_role,
-		))
+		Arc::new(
+			Bolt12Payment::new(
+				Arc::clone(&self.channel_manager),
+				Arc::clone(&self.payment_store),
+				Arc::clone(&self.config),
+				Arc::clone(&self.is_running),
+				Arc::clone(&self.logger),
+				self.async_payments_role,
+			)
+			.with_shutdown_owner(Arc::clone(&self.shutdown_owner)),
+		)
 	}
 
 	/// Returns a payment handler allowing to send spontaneous ("keysend") payments.
@@ -1092,19 +1142,23 @@ impl Node {
 			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		)
+		.with_shutdown_owner(Arc::clone(&self.shutdown_owner))
 	}
 
 	/// Returns a payment handler allowing to send spontaneous ("keysend") payments.
 	#[cfg(feature = "uniffi")]
 	pub fn spontaneous_payment(&self) -> Arc<SpontaneousPayment> {
-		Arc::new(SpontaneousPayment::new(
-			Arc::clone(&self.channel_manager),
-			Arc::clone(&self.keys_manager),
-			Arc::clone(&self.payment_store),
-			Arc::clone(&self.config),
-			Arc::clone(&self.is_running),
-			Arc::clone(&self.logger),
-		))
+		Arc::new(
+			SpontaneousPayment::new(
+				Arc::clone(&self.channel_manager),
+				Arc::clone(&self.keys_manager),
+				Arc::clone(&self.payment_store),
+				Arc::clone(&self.config),
+				Arc::clone(&self.is_running),
+				Arc::clone(&self.logger),
+			)
+			.with_shutdown_owner(Arc::clone(&self.shutdown_owner)),
+		)
 	}
 
 	/// Returns a payment handler allowing to send and receive on-chain payments.
@@ -1119,20 +1173,24 @@ impl Node {
 			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		)
+		.with_shutdown_owner(Arc::clone(&self.shutdown_owner))
 	}
 
 	/// Returns a payment handler allowing to send and receive on-chain payments.
 	#[cfg(feature = "uniffi")]
 	pub fn onchain_payment(&self) -> Arc<OnchainPayment> {
-		Arc::new(OnchainPayment::new(
-			self.runtime.control(),
-			Arc::clone(&self.chain_source),
-			Arc::clone(&self.wallet),
-			Arc::clone(&self.channel_manager),
-			Arc::clone(&self.config),
-			Arc::clone(&self.is_running),
-			Arc::clone(&self.logger),
-		))
+		Arc::new(
+			OnchainPayment::new(
+				self.runtime.control(),
+				Arc::clone(&self.chain_source),
+				Arc::clone(&self.wallet),
+				Arc::clone(&self.channel_manager),
+				Arc::clone(&self.config),
+				Arc::clone(&self.is_running),
+				Arc::clone(&self.logger),
+			)
+			.with_shutdown_owner(Arc::clone(&self.shutdown_owner)),
+		)
 	}
 
 	/// Returns transaction details for the given transaction ID, if available in the wallet.
@@ -1216,6 +1274,7 @@ impl Node {
 			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		)
+		.with_shutdown_owner(Arc::clone(&self.shutdown_owner))
 	}
 
 	/// Returns a liquidity handler allowing to request channels via the [bLIP-51 / LSPS1] protocol.
@@ -1223,14 +1282,17 @@ impl Node {
 	/// [bLIP-51 / LSPS1]: https://github.com/lightning/blips/blob/master/blip-0051.md
 	#[cfg(feature = "uniffi")]
 	pub fn lsps1_liquidity(&self) -> Arc<LSPS1Liquidity> {
-		Arc::new(LSPS1Liquidity::new(
-			self.runtime.control(),
-			Arc::clone(&self.wallet),
-			Arc::clone(&self.connection_manager),
-			self.liquidity_source.clone(),
-			Arc::clone(&self.is_running),
-			Arc::clone(&self.logger),
-		))
+		Arc::new(
+			LSPS1Liquidity::new(
+				self.runtime.control(),
+				Arc::clone(&self.wallet),
+				Arc::clone(&self.connection_manager),
+				self.liquidity_source.clone(),
+				Arc::clone(&self.is_running),
+				Arc::clone(&self.logger),
+			)
+			.with_shutdown_owner(Arc::clone(&self.shutdown_owner)),
+		)
 	}
 
 	/// Retrieve a list of known channels.

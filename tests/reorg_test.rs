@@ -1,16 +1,20 @@
 mod common;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bitcoin::Amount;
+use electrsd::corepc_node::Client as BitcoindClient;
+use electrum_client::ElectrumApi;
 use ldk_node::payment::{PaymentDirection, PaymentKind};
-use ldk_node::{Event, LightningBalance, PendingSweepBalance};
+use ldk_node::{Event, LightningBalance, Node, PendingSweepBalance};
+use lightning::chain::channelmonitor::BalanceSource;
+use lightning::events::ClosureReason;
 use proptest::prelude::prop;
 use proptest::proptest;
 
 use crate::common::{
-	expect_event, generate_blocks_and_wait, invalidate_blocks, is_informational_event,
-	open_channel, premine_and_distribute_funds, random_config, setup_bitcoind_and_electrsd,
-	setup_node, wait_for_outpoint_spend, TestChainSource,
+	expect_event, exponential_backoff_poll, generate_blocks_and_wait, invalidate_blocks,
+	is_informational_event, open_channel, premine_and_distribute_funds, random_config,
+	setup_bitcoind_and_electrsd, setup_node, wait_for_outpoint_spend, wait_for_tx, TestChainSource,
 };
 
 proptest! {
@@ -134,8 +138,8 @@ proptest! {
 					node.close_channel(&user_channel_id, next_node.node_id()).unwrap();
 				}
 
-				expect_event!(node, ChannelClosed);
-				expect_event!(next_node, ChannelClosed);
+				expect_channel_closed(node, !force_close && reorg_depth < 6).await;
+				expect_channel_closed(next_node, !force_close && reorg_depth < 6).await;
 
 				wait_for_outpoint_spend(electrs, *funding).await;
 			}
@@ -146,42 +150,10 @@ proptest! {
 			generate_blocks_and_wait(bitcoind, electrs, 1).await;
 			sync_wallets!();
 
-			if force_close {
-				for node in &nodes {
-					node.sync_wallets().unwrap();
-					// If there is no more balance, there is nothing to process here.
-					if node.list_balances().lightning_balances.len() < 1 {
-						return;
-					}
-					match node.list_balances().lightning_balances[0] {
-						LightningBalance::ClaimableAwaitingConfirmations {
-							confirmation_height,
-							..
-						} => {
-							let cur_height = node.status().current_best_block.height;
-							let blocks_to_go = confirmation_height - cur_height;
-							generate_blocks_and_wait(bitcoind, electrs, blocks_to_go as usize).await;
-							node.sync_wallets().unwrap();
-						},
-						_ => panic!("Unexpected balance state for node_hub!"),
-					}
-
-					assert!(node.list_balances().lightning_balances.len() < 2);
-					assert!(node.list_balances().pending_balances_from_channel_closures.len() > 0);
-					match node.list_balances().pending_balances_from_channel_closures[0] {
-						PendingSweepBalance::BroadcastAwaitingConfirmation { .. } => {},
-						_ => panic!("Unexpected balance state!"),
-					}
-
-					generate_blocks_and_wait(&bitcoind, electrs, 1).await;
-					node.sync_wallets().unwrap();
-					assert!(node.list_balances().lightning_balances.len() < 2);
-					assert!(node.list_balances().pending_balances_from_channel_closures.len() > 0);
-					match node.list_balances().pending_balances_from_channel_closures[0] {
-						PendingSweepBalance::AwaitingThresholdConfirmations { .. } => {},
-						_ => panic!("Unexpected balance state!"),
-					}
-				}
+			// Removing the funding block can force-close a channel even when cooperative
+			// closure was requested. Settle the actual balances on every node.
+			for node in &nodes {
+				settle_closed_channel_balances(node, bitcoind, electrs).await;
 			}
 
 			generate_blocks_and_wait(bitcoind, electrs, 6).await;
@@ -205,5 +177,131 @@ proptest! {
 				}
 				});
 		})
+	}
+}
+
+// Wait for actual CSV maturities and sweep broadcasts without skipping the property's final checks.
+async fn settle_closed_channel_balances(
+	node: &Node, bitcoind: &BitcoindClient, electrs: &impl ElectrumApi,
+) {
+	node.sync_wallets().unwrap();
+	let balances = node.list_balances();
+	let current_height = node.status().current_best_block.height;
+	let mut confirmation_height = current_height;
+	let mut channels = HashSet::new();
+	for balance in balances.lightning_balances {
+		match balance {
+			LightningBalance::ClaimableAwaitingConfirmations {
+				channel_id,
+				amount_satoshis,
+				confirmation_height: height,
+				source,
+				..
+			} => {
+				confirmation_height = confirmation_height.max(height);
+				if amount_satoshis > 0 && source != BalanceSource::CoopClose {
+					channels.insert(channel_id);
+				}
+			},
+			other => panic!("Unexpected closed-channel balance: {:?}", other),
+		}
+	}
+	for balance in balances.pending_balances_from_channel_closures {
+		let (channel_id, amount_satoshis) = match balance {
+			PendingSweepBalance::PendingBroadcast { channel_id, amount_satoshis }
+			| PendingSweepBalance::BroadcastAwaitingConfirmation {
+				channel_id,
+				amount_satoshis,
+				..
+			}
+			| PendingSweepBalance::AwaitingThresholdConfirmations {
+				channel_id,
+				amount_satoshis,
+				..
+			} => (channel_id, amount_satoshis),
+		};
+		if amount_satoshis > 0 {
+			channels.insert(channel_id.expect("Sweep must belong to a test channel"));
+		}
+	}
+	if confirmation_height > current_height {
+		generate_blocks_and_wait(
+			bitcoind,
+			electrs,
+			(confirmation_height - current_height) as usize,
+		)
+		.await;
+		node.sync_wallets().unwrap();
+	}
+
+	if channels.is_empty() {
+		return;
+	}
+
+	let sweeps = exponential_backoff_poll(|| {
+		let balances = node.list_balances();
+		channels
+			.iter()
+			.map(|channel| {
+				balances.pending_balances_from_channel_closures.iter().find_map(|balance| {
+					match balance {
+						PendingSweepBalance::BroadcastAwaitingConfirmation {
+							channel_id: Some(id),
+							latest_spending_txid,
+							..
+						} if id == channel => Some(Some(*latest_spending_txid)),
+						PendingSweepBalance::AwaitingThresholdConfirmations {
+							channel_id: Some(id),
+							..
+						} if id == channel => Some(None),
+						_ => None,
+					}
+				})
+			})
+			.collect::<Option<Vec<_>>>()
+	})
+	.await;
+	for txid in sweeps.iter().flatten() {
+		wait_for_tx(electrs, *txid).await;
+	}
+	if sweeps.iter().any(Option::is_some) {
+		generate_blocks_and_wait(bitcoind, electrs, 1).await;
+		node.sync_wallets().unwrap();
+	}
+	let balances = node.list_balances();
+	for channel in channels {
+		assert!(balances.pending_balances_from_channel_closures.iter().any(|balance| matches!(
+			balance,
+			PendingSweepBalance::AwaitingThresholdConfirmations { channel_id: Some(id), .. } if *id == channel
+		)), "Sweep must be confirmed before the final reorganization");
+	}
+}
+
+// A shallow cooperative case must not pass by silently settling an unexpected force-close.
+async fn expect_channel_closed(node: &Node, require_cooperative: bool) {
+	if !require_cooperative {
+		expect_event!(node, ChannelClosed);
+		return;
+	}
+	loop {
+		match node.next_event_async().await {
+			Event::ChannelClosed { reason, .. } => {
+				assert!(
+					matches!(
+						reason,
+						Some(
+							ClosureReason::LocallyInitiatedCooperativeClosure
+								| ClosureReason::CounterpartyInitiatedCooperativeClosure
+						)
+					),
+					"Unexpected closure reason: {:?}",
+					reason
+				);
+				node.event_handled().unwrap();
+				return;
+			},
+			ref event if is_informational_event(event) => node.event_handled().unwrap(),
+			other => panic!("Unexpected event: {:?}", other),
+		}
 	}
 }
