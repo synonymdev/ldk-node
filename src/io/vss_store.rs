@@ -350,7 +350,7 @@ impl VssStore {
 			async_retry_policy,
 			header_provider.clone(),
 		);
-		// Writes retry in `fenced_retry`, so that each attempt is fenced.
+		// Writes retry in `fenced_retry`, which counts each call in flight and bounds each attempt.
 		let blocking_write_client = VssClient::new_with_headers(
 			base_url.clone(),
 			no_retry_policy(),
