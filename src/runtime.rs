@@ -84,16 +84,38 @@ impl Deref for Runtime {
 	}
 }
 
-impl Drop for Runtime {
-	fn drop(&mut self) {
+impl Runtime {
+	/// Cancels all work and shuts the owned runtime down once that work has drained.
+	///
+	/// Work that is still running after `drain_timeout` (a task blocked inside
+	/// `block_in_place`, e.g. a stuck VSS write through `try_block_on`) would poll timers on a
+	/// shut-down runtime as soon as it resumes, and Tokio's timer then panics, which aborts mobile
+	/// builds. The runtime is leaked in that case so the work can finish and observe its
+	/// cancellation. Runtime use stays open then: closing it would wait for that work to return.
+	fn shutdown(&mut self, drain_timeout: Duration) {
 		self.control.cancel_all_tasks();
-		let _ = self
-			.control
-			.drain_detached_work(Duration::from_secs(BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECS));
+		self.control.detach_live_work();
+		let drained = self.control.drain_detached_work(drain_timeout);
+		if !drained {
+			if let Some(runtime) = self.owned_runtime.take() {
+				log_error!(
+					self.control.logger,
+					"Leaking the runtime because detached work is still running after shutdown."
+				);
+				std::mem::forget(runtime);
+				return;
+			}
+		}
 		self.control.close_runtime_use();
 		if let Some(runtime) = self.owned_runtime.take() {
 			runtime.shutdown_background();
 		}
+	}
+}
+
+impl Drop for Runtime {
+	fn drop(&mut self) {
+		self.shutdown(Duration::from_secs(BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECS));
 	}
 }
 
@@ -200,6 +222,19 @@ impl RuntimeControl {
 
 	fn close_runtime_use(&self) {
 		*rwlock_write(&self.runtime_use) = false;
+	}
+
+	/// Moves work that was never stopped (e.g. after a failed or skipped `Node::stop`) to the
+	/// detached work that shutdown drains.
+	fn detach_live_work(&self) {
+		for tasks in [&self.background_tasks, &self.cancellable_background_tasks] {
+			let tracker = mutex_lock(tasks).tasks.clone();
+			self.detach_task_tracker(tracker);
+		}
+		let mut leftover_processor = mutex_lock(&self.leftover_processor_task);
+		if leftover_processor.is_none() {
+			*leftover_processor = mutex_lock(&self.background_processor_task).take();
+		}
 	}
 
 	fn detach_task_tracker(&self, tasks: TaskTracker) {
@@ -514,7 +549,11 @@ impl Drop for StoreRuntime {
 
 #[cfg(test)]
 mod tests {
+	use std::future::poll_fn;
+	use std::panic::{catch_unwind, AssertUnwindSafe};
+	use std::pin::pin;
 	use std::process::Command;
+	use std::task::Poll;
 	use std::thread;
 
 	use tokio::sync::{mpsc, oneshot};
@@ -874,6 +913,56 @@ mod tests {
 
 		release_sender.send(()).unwrap();
 		assert!(runtime.allow_task_spawns_with_timeout(Duration::from_secs(1)));
+	}
+
+	/// Spawns a tracked task that blocks in `try_block_on` until released 500 ms later, like a
+	/// stuck VSS write, then reports whether polling a Tokio timer panicked, as it does once the
+	/// runtime has been shut down.
+	fn spawn_blocked_timer_task(runtime: &Runtime) -> std::sync::mpsc::Receiver<bool> {
+		let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+		let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+		let (timer_sender, timer_receiver) = std::sync::mpsc::sync_channel(1);
+		let control = runtime.control();
+		runtime.spawn_background_task(async move {
+			started_sender.send(()).unwrap();
+			control.try_block_on(async { release_receiver.recv().unwrap() }).unwrap();
+			let mut sleep = pin!(tokio::time::sleep(Duration::from_millis(1)));
+			let timer_ok = poll_fn(|cx| {
+				Poll::Ready(catch_unwind(AssertUnwindSafe(|| sleep.as_mut().poll(cx))).is_ok())
+			})
+			.await;
+			timer_sender.send(timer_ok).unwrap();
+		});
+		started_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+		thread::spawn(move || {
+			thread::sleep(Duration::from_millis(500));
+			let _ = release_sender.send(());
+		});
+		timer_receiver
+	}
+
+	fn assert_shutdown_keeps_blocked_work_runtime(
+		mut runtime: Runtime, timer_receiver: std::sync::mpsc::Receiver<bool>,
+	) {
+		let start = std::time::Instant::now();
+		runtime.shutdown(Duration::from_millis(10));
+		assert!(start.elapsed() < Duration::from_millis(400), "shutdown waited for blocked work");
+		assert!(timer_receiver.recv_timeout(Duration::from_secs(2)).unwrap());
+	}
+
+	#[test]
+	fn detached_work_still_running_at_shutdown_keeps_its_runtime() {
+		let runtime = test_runtime_with_workers(2);
+		let timer_receiver = spawn_blocked_timer_task(&runtime);
+		runtime.wait_on_background_tasks_with_timeout(Duration::from_millis(10));
+		assert_shutdown_keeps_blocked_work_runtime(runtime, timer_receiver);
+	}
+
+	#[test]
+	fn never_stopped_work_still_running_at_shutdown_keeps_its_runtime() {
+		let runtime = test_runtime_with_workers(2);
+		let timer_receiver = spawn_blocked_timer_task(&runtime);
+		assert_shutdown_keeps_blocked_work_runtime(runtime, timer_receiver);
 	}
 
 	#[test]

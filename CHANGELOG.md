@@ -2,6 +2,7 @@
 
 ## Bug Fixes
 
+- Prevent the native SIGABRT `A Tokio 1.x context was found, but it is being shutdown.` when a node is released while background work is still stuck, e.g. in a VSS write after a timed-out stop: the runtime is now kept alive until that work ends instead of being shut down under it.
 - Bump `lightning`, `lightning-liquidity`, `lightning-persister` and `lightning-transaction-sync` to 0.2.8 and `lightning-invoice` to 0.34.2.
 - `bump_fee_by_rbf` now only replaces transactions this wallet built and broadcast itself, and returns `TransactionNotBroadcastByWallet` for any other txid.
 - Reconnect the shared Electrum connection after the server drops it, so wallet sync, fee updates and broadcasts recover without a node restart (for example after a mobile app returns from the background), and retry a failed broadcast once on the new connection, all within each call's original deadline.
