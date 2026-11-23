@@ -160,24 +160,25 @@ impl StoreFences {
 
 	/// Returns `None` if the store of `generation` has been replaced. While the guard lives, the
 	/// store is not replaced.
-	fn begin_write<'a>(&'a self, store: &'a StoreKey, generation: u64) -> Option<WriteGuard<'a>> {
+	fn begin_write(&self, store: &StoreKey, generation: u64) -> Option<WriteGuard<'_>> {
 		let mut stores = self.stores.lock().unwrap();
 		let state = stores.get_mut(store).filter(|state| state.generation == generation)?;
 		state.writes_in_flight += 1;
-		Some(WriteGuard { fences: self, store })
+		Some(WriteGuard { fences: self, store: store.clone() })
 	}
 }
 
-/// Counts one write call as in flight until it returns or its future is dropped.
-struct WriteGuard<'a> {
+/// Counts one write call as in flight, from when it is queued until it returns or its future is
+/// dropped.
+pub(crate) struct WriteGuard<'a> {
 	fences: &'a StoreFences,
-	store: &'a StoreKey,
+	store: StoreKey,
 }
 
 impl Drop for WriteGuard<'_> {
 	fn drop(&mut self) {
 		let mut stores = self.fences.stores.lock().unwrap();
-		if let Some(state) = stores.get_mut(self.store) {
+		if let Some(state) = stores.get_mut(&self.store) {
 			state.writes_in_flight -= 1;
 			if state.writes_in_flight == 0 {
 				self.fences.changed.notify_all();
@@ -206,11 +207,13 @@ impl StoreFence {
 		STORE_FENCES.clear_live(&self.store, self.generation)
 	}
 
-	fn is_current(&self) -> bool {
+	/// Whether no other store has been built for the same VSS store since this one.
+	pub(crate) fn is_current(&self) -> bool {
 		STORE_FENCES.is_current(&self.store, self.generation)
 	}
 
-	fn begin_write(&self) -> Option<WriteGuard<'_>> {
+	/// Counts a write call as in flight. Returns `None` if the store has been replaced.
+	fn begin_write(&self) -> Option<WriteGuard<'static>> {
 		STORE_FENCES.begin_write(&self.store, self.generation)
 	}
 }
@@ -252,27 +255,15 @@ impl Drop for LiveMark<'_> {
 	}
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum WriteOutcome {
-	Written,
-	// The store was replaced, so the write was not sent.
-	Dropped,
-}
-
-/// Runs `attempt` with `policy`'s retries, ending each attempt after `attempt_timeout`. The
-/// whole call, backoff included, counts as in flight, so the store is not replaced before it
-/// returns. If the store has been replaced already, returns [`WriteOutcome::Dropped`] without
-/// writing: its node has stopped and cannot start again.
+/// Runs `attempt` with `policy`'s retries, ending each attempt after `attempt_timeout`. `_write`
+/// counts the call as in flight, backoff included, so the store is not replaced before it returns.
 async fn fenced_retry<F, Fut>(
-	fence: &StoreFence, policy: &CustomRetryPolicy, attempt_timeout: Duration, mut attempt: F,
-) -> Result<WriteOutcome, VssError>
+	_write: WriteGuard<'_>, policy: &CustomRetryPolicy, attempt_timeout: Duration, mut attempt: F,
+) -> Result<(), VssError>
 where
 	F: FnMut() -> Fut,
 	Fut: Future<Output = Result<(), VssError>>,
 {
-	let Some(_write) = fence.begin_write() else {
-		return Ok(WriteOutcome::Dropped);
-	};
 	retry(
 		|| {
 			let request = tokio::time::timeout(attempt_timeout, attempt());
@@ -285,7 +276,6 @@ where
 		policy,
 	)
 	.await
-	.map(|()| WriteOutcome::Written)
 }
 
 // We set this to a small number of threads that would still allow to make some progress if one
@@ -448,6 +438,8 @@ impl KVStoreSync for VssStore {
 		let inner = Arc::clone(&self.inner);
 		let locking_key = self.build_locking_key(&primary_namespace, &secondary_namespace, &key);
 		let (inner_lock_ref, version) = self.get_new_version_and_lock_ref(locking_key.clone());
+		// Counted from now, also while queued behind an earlier write of the same key.
+		let write = self.inner.fence.begin_write();
 		let fut = async move {
 			inner
 				.write_internal(
@@ -455,6 +447,7 @@ impl KVStoreSync for VssStore {
 					inner_lock_ref,
 					locking_key,
 					version,
+					write,
 					primary_namespace,
 					secondary_namespace,
 					key,
@@ -479,6 +472,8 @@ impl KVStoreSync for VssStore {
 		let inner = Arc::clone(&self.inner);
 		let locking_key = self.build_locking_key(&primary_namespace, &secondary_namespace, &key);
 		let (inner_lock_ref, version) = self.get_new_version_and_lock_ref(locking_key.clone());
+		// Counted from now, also while queued behind an earlier write of the same key.
+		let write = self.inner.fence.begin_write();
 		let fut = async move {
 			inner
 				.remove_internal(
@@ -486,6 +481,7 @@ impl KVStoreSync for VssStore {
 					inner_lock_ref,
 					locking_key,
 					version,
+					write,
 					primary_namespace,
 					secondary_namespace,
 					key,
@@ -543,6 +539,8 @@ impl KVStore for VssStore {
 	) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + Send>> {
 		let locking_key = self.build_locking_key(primary_namespace, secondary_namespace, key);
 		let (inner_lock_ref, version) = self.get_new_version_and_lock_ref(locking_key.clone());
+		// Counted from now, also while queued behind an earlier write of the same key.
+		let write = self.inner.fence.begin_write();
 		let primary_namespace = primary_namespace.to_string();
 		let secondary_namespace = secondary_namespace.to_string();
 		let key = key.to_string();
@@ -556,6 +554,7 @@ impl KVStore for VssStore {
 						inner_lock_ref,
 						locking_key,
 						version,
+						write,
 						primary_namespace,
 						secondary_namespace,
 						key,
@@ -573,6 +572,8 @@ impl KVStore for VssStore {
 	) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + Send>> {
 		let locking_key = self.build_locking_key(primary_namespace, secondary_namespace, key);
 		let (inner_lock_ref, version) = self.get_new_version_and_lock_ref(locking_key.clone());
+		// Counted from now, also while queued behind an earlier write of the same key.
+		let write = self.inner.fence.begin_write();
 		let primary_namespace = primary_namespace.to_string();
 		let secondary_namespace = secondary_namespace.to_string();
 		let key = key.to_string();
@@ -585,6 +586,7 @@ impl KVStore for VssStore {
 					inner_lock_ref,
 					locking_key,
 					version,
+					write,
 					primary_namespace,
 					secondary_namespace,
 					key,
@@ -806,8 +808,8 @@ impl VssStoreInner {
 
 	async fn write_internal(
 		&self, client: &VssClient<CustomRetryPolicy>, inner_lock_ref: Arc<tokio::sync::Mutex<u64>>,
-		locking_key: String, version: u64, primary_namespace: String, secondary_namespace: String,
-		key: String, buf: Vec<u8>,
+		locking_key: String, version: u64, write: Option<WriteGuard<'static>>,
+		primary_namespace: String, secondary_namespace: String, key: String, buf: Vec<u8>,
 	) -> io::Result<()> {
 		check_namespace_key_validity(
 			&primary_namespace,
@@ -835,18 +837,16 @@ impl VssStoreInner {
 		};
 
 		self.execute_locked_write(inner_lock_ref, locking_key, version, async move || {
-			let res = fenced_retry(
-				&self.fence,
-				&self.write_retry_policy,
-				WRITE_ATTEMPT_TIMEOUT,
-				|| async { client.put_object(&request).await.map(|_| ()) },
-			)
-			.await;
+			let Some(write) = write else {
+				return self.dropped(true, &primary_namespace, &secondary_namespace, &key);
+			};
+			let res =
+				fenced_retry(write, &self.write_retry_policy, WRITE_ATTEMPT_TIMEOUT, || async {
+					client.put_object(&request).await.map(|_| ())
+				})
+				.await;
 			match res {
-				Ok(WriteOutcome::Written) => Ok(()),
-				Ok(WriteOutcome::Dropped) => {
-					self.dropped(true, &primary_namespace, &secondary_namespace, &key)
-				},
+				Ok(()) => Ok(()),
 				Err(e) => {
 					let msg = format!(
 						"Failed to write to key {}/{}/{}: {}",
@@ -881,8 +881,8 @@ impl VssStoreInner {
 
 	async fn remove_internal(
 		&self, client: &VssClient<CustomRetryPolicy>, inner_lock_ref: Arc<tokio::sync::Mutex<u64>>,
-		locking_key: String, version: u64, primary_namespace: String, secondary_namespace: String,
-		key: String,
+		locking_key: String, version: u64, write: Option<WriteGuard<'static>>,
+		primary_namespace: String, secondary_namespace: String, key: String,
 	) -> io::Result<()> {
 		check_namespace_key_validity(
 			&primary_namespace,
@@ -899,18 +899,16 @@ impl VssStoreInner {
 			let request =
 				DeleteObjectRequest { store_id: self.store_id.clone(), key_value: Some(key_value) };
 
-			let res = fenced_retry(
-				&self.fence,
-				&self.write_retry_policy,
-				WRITE_ATTEMPT_TIMEOUT,
-				|| async { client.delete_object(&request).await.map(|_| ()) },
-			)
-			.await;
+			let Some(write) = write else {
+				return self.dropped(false, &primary_namespace, &secondary_namespace, &key);
+			};
+			let res =
+				fenced_retry(write, &self.write_retry_policy, WRITE_ATTEMPT_TIMEOUT, || async {
+					client.delete_object(&request).await.map(|_| ())
+				})
+				.await;
 			match res {
-				Ok(WriteOutcome::Written) => Ok(()),
-				Ok(WriteOutcome::Dropped) => {
-					self.dropped(false, &primary_namespace, &secondary_namespace, &key)
-				},
+				Ok(()) => Ok(()),
 				Err(e) => {
 					let msg = format!(
 						"Failed to delete key {}/{}/{}: {}",
@@ -1272,15 +1270,20 @@ mod store_fences_tests {
 	async fn fenced_retry_retries_until_a_write_succeeds() {
 		let fence = current_fence("retries");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
-			if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
-				Err(server_error())
-			} else {
-				Ok(())
-			}
-		})
+		let res = fenced_retry(
+			fence.begin_write().unwrap(),
+			&retry_policy(),
+			WRITE_ATTEMPT_TIMEOUT,
+			|| async {
+				if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+					Err(server_error())
+				} else {
+					Ok(())
+				}
+			},
+		)
 		.await;
-		assert_eq!(res.unwrap(), WriteOutcome::Written);
+		res.unwrap();
 		assert_eq!(attempts.load(Ordering::SeqCst), 3);
 	}
 
@@ -1288,27 +1291,27 @@ mod store_fences_tests {
 	async fn fenced_retry_returns_permanent_errors_without_retrying() {
 		let fence = current_fence("permanent");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
-			attempts.fetch_add(1, Ordering::SeqCst);
-			Err(VssError::ConflictError("conflict".to_string()))
-		})
+		let res = fenced_retry(
+			fence.begin_write().unwrap(),
+			&retry_policy(),
+			WRITE_ATTEMPT_TIMEOUT,
+			|| async {
+				attempts.fetch_add(1, Ordering::SeqCst);
+				Err(VssError::ConflictError("conflict".to_string()))
+			},
+		)
 		.await;
 		assert!(matches!(res, Err(VssError::ConflictError(..))));
 		assert_eq!(attempts.load(Ordering::SeqCst), 1);
 	}
 
-	#[tokio::test]
-	async fn fenced_retry_drops_writes_of_a_replaced_store() {
+	#[test]
+	fn a_replaced_store_begins_no_write() {
 		let fence = current_fence("replaced");
+		assert!(fence.begin_write().is_some());
 		current_fence("replaced");
-		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
-			attempts.fetch_add(1, Ordering::SeqCst);
-			Ok(())
-		})
-		.await;
-		assert_eq!(res.unwrap(), WriteOutcome::Dropped);
-		assert_eq!(attempts.load(Ordering::SeqCst), 0);
+		assert!(fence.begin_write().is_none());
+		assert!(!fence.is_current());
 	}
 
 	#[tokio::test(flavor = "multi_thread")]
@@ -1321,22 +1324,27 @@ mod store_fences_tests {
 		let call = {
 			let (fence, attempts) = (fence.clone(), Arc::clone(&attempts));
 			tokio::spawn(async move {
-				fenced_retry(&fence, &retry_policy(), WRITE_ATTEMPT_TIMEOUT, || {
-					let attempt = attempts.fetch_add(1, Ordering::SeqCst);
-					let (failed_tx, retry_rx) = (failed_tx.clone(), Arc::clone(&retry_rx));
-					async move {
-						if attempt == 0 {
-							failed_tx.send(()).unwrap();
-							return Err(server_error());
+				fenced_retry(
+					fence.begin_write().unwrap(),
+					&retry_policy(),
+					WRITE_ATTEMPT_TIMEOUT,
+					|| {
+						let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+						let (failed_tx, retry_rx) = (failed_tx.clone(), Arc::clone(&retry_rx));
+						async move {
+							if attempt == 0 {
+								failed_tx.send(()).unwrap();
+								return Err(server_error());
+							}
+							// The second attempt starts once the test has tried to replace the store.
+							tokio::task::spawn_blocking(move || retry_rx.lock().unwrap().recv())
+								.await
+								.unwrap()
+								.unwrap();
+							Ok(())
 						}
-						// The second attempt starts once the test has tried to replace the store.
-						tokio::task::spawn_blocking(move || retry_rx.lock().unwrap().recv())
-							.await
-							.unwrap()
-							.unwrap();
-						Ok(())
-					}
-				})
+					},
+				)
 				.await
 			})
 		};
@@ -1346,7 +1354,7 @@ mod store_fences_tests {
 		assert_eq!(err.kind(), ErrorKind::TimedOut);
 		assert!(fence.is_current());
 		retry_tx.send(()).unwrap();
-		assert_eq!(call.await.unwrap().unwrap(), WriteOutcome::Written);
+		call.await.unwrap().unwrap();
 		assert_eq!(attempts.load(Ordering::SeqCst), 2);
 		STORE_FENCES.start_generation(&fence.store, Duration::ZERO).unwrap();
 	}
@@ -1508,14 +1516,19 @@ mod store_fences_tests {
 	async fn fenced_retry_ends_an_attempt_that_does_not_finish() {
 		let fence = current_fence("stuck");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &retry_policy(), Duration::from_millis(10), || async {
-			if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-				std::future::pending::<()>().await;
-			}
-			Ok(())
-		})
+		let res = fenced_retry(
+			fence.begin_write().unwrap(),
+			&retry_policy(),
+			Duration::from_millis(10),
+			|| async {
+				if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+					std::future::pending::<()>().await;
+				}
+				Ok(())
+			},
+		)
 		.await;
-		assert_eq!(res.unwrap(), WriteOutcome::Written);
+		res.unwrap();
 		assert_eq!(attempts.load(Ordering::SeqCst), 2);
 	}
 }

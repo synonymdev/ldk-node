@@ -332,6 +332,14 @@ impl Node {
 		if self.background_processor_failed.load(Ordering::Acquire) {
 			return Err(Error::PersistenceFailed);
 		}
+		// Checked before waiting on detached work: a node whose store was replaced never starts.
+		if self.vss_store_fence.as_ref().is_some_and(|fence| !fence.is_current()) {
+			log_error!(
+				self.logger,
+				"Refusing to start: another node was built on this node's VSS store since."
+			);
+			return Err(Error::PersistenceFailed);
+		}
 
 		log_info!(
 			self.logger,
