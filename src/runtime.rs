@@ -1021,6 +1021,22 @@ mod tests {
 			assert!(std::time::Instant::now() < deadline, "runtime outlived the blocked work");
 			thread::sleep(Duration::from_millis(10));
 		}
+
+		// Runtime use closes just before the runtime shuts down. Once it has, a spawned task is
+		// dropped without running, so its sender disconnects instead of sending.
+		loop {
+			let (probe_sender, probe_receiver) = std::sync::mpsc::sync_channel(1);
+			control.handle().spawn(async move {
+				let _ = probe_sender.send(());
+			});
+			match probe_receiver.recv_timeout(Duration::from_millis(100)) {
+				Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+				_ => {
+					assert!(std::time::Instant::now() < deadline, "runtime was never shut down");
+					thread::sleep(Duration::from_millis(10));
+				},
+			}
+		}
 	}
 
 	#[test]
