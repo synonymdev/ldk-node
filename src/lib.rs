@@ -138,6 +138,7 @@ use gossip::GossipSource;
 use graph::NetworkGraph;
 use io::utils::write_node_metrics;
 pub use io::utils::{derive_node_secret_from_mnemonic, generate_entropy_mnemonic};
+use io::vss_store::StoreFence;
 use lightning::chain::channelmonitor::Balance as LdkBalance;
 use lightning::chain::BestBlock;
 use lightning::events::bump_transaction::{Input, Wallet as LdkWallet};
@@ -207,6 +208,8 @@ pub struct Node {
 	pathfinding_scores_sync_url: Option<String>,
 	liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
 	kv_store: Arc<DynStore>,
+	// Set for a VSS store, which the node marks as live while running.
+	vss_store_fence: Option<StoreFence>,
 	logger: Arc<Logger>,
 	_router: Arc<Router>,
 	scorer: Arc<Mutex<Scorer>>,
@@ -342,6 +345,26 @@ impl Node {
 			return Err(Error::AlreadyRunning);
 		}
 
+		if let Some(fence) = &self.vss_store_fence {
+			if !fence.mark_live() {
+				log_error!(
+					self.logger,
+					"Refusing to start: another node was built on this node's VSS store since.",
+				);
+				return Err(Error::PersistenceFailed);
+			}
+		}
+		let res = self.start_services();
+		// After a failed background processor, `stop` is still required and clears the mark.
+		if res.is_err() && !self.background_processor_failed.load(Ordering::Acquire) {
+			if let Some(fence) = &self.vss_store_fence {
+				fence.clear_live();
+			}
+		}
+		res
+	}
+
+	fn start_services(&self) -> Result<(), Error> {
 		// Start up any runtime-dependant chain sources (e.g. Electrum)
 		// Electrum needs execution access without owning the runtime lifecycle.
 		let runtime_handle = self.runtime.handle().clone();
@@ -884,6 +907,10 @@ impl Node {
 		self.runtime.log_metrics();
 
 		log_info!(self.logger, "Shutdown complete.");
+		// Only now may a node be built on this node's VSS store: its writes have all been issued.
+		if let Some(fence) = &self.vss_store_fence {
+			fence.clear_live();
+		}
 		let background_processor_failed =
 			self.background_processor_failed.swap(false, Ordering::AcqRel);
 		match background_processor_result {

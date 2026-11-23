@@ -13,14 +13,14 @@ use std::panic::RefUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{error, fmt};
 
 use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
-use lightning::impl_writeable_tlv_based_enum;
 use lightning::io::{self, Error, ErrorKind};
 use lightning::util::persist::{KVStore, KVStoreSync};
 use lightning::util::ser::{Readable, Writeable};
+use lightning::{impl_writeable_tlv_based_enum, log_warn};
 use prost::Message;
 use rand::RngCore;
 use vss_client::client::VssClient;
@@ -38,6 +38,7 @@ use vss_client::util::retry::{
 use vss_client::util::storable_builder::{EntropySource, StorableBuilder};
 
 use crate::io::utils::check_namespace_key_validity;
+use crate::logger::{LdkLogger, Logger};
 use crate::runtime::StoreRuntime;
 
 type CustomRetryPolicy = FilteredRetryPolicy<
@@ -74,46 +75,71 @@ impl_writeable_tlv_based_enum!(VssSchemaVersion,
 
 const VSS_SCHEMA_VERSION_KEY: &str = "vss_schema_version";
 
-// How long a new store waits for writes of the store it replaces to end. A write retries for
-// minutes while VSS is unreachable (see `retry_policy`), so building fails after this rather than
-// letting such a write land after the new store's writes.
+// How long building a store waits for a node still running on the same VSS store to stop, and
+// then for the write requests of that store to end. A replaced store starts no further attempt,
+// so the second wait covers at most one attempt, which `WRITE_ATTEMPT_TIMEOUT` bounds.
 const REPLACED_WRITES_TIMEOUT: Duration = Duration::from_secs(60);
 
+// Bounds one write attempt, the header fetch included: the VSS client times a request out after
+// 10 s, but the LNURL-auth JWT fetch has no timeout of its own.
+const WRITE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
+
 static STORE_FENCES: LazyLock<StoreFences> = LazyLock::new(StoreFences::default);
+
+/// Identifies a VSS store by URL, store id and wallet, as the server separates stores by the
+/// authenticated user as well as by store id. The wallet part is a hash of the store's
+/// obfuscation key, so no key material is kept here.
+type StoreKey = (String, String, [u8; 32]);
 
 /// Fences the writes of a [`VssStore`] once another one is built for the same VSS store.
 ///
 /// VSS writes are unconditional puts, so a write of a stopped node that is still retrying, or one
 /// its detached work starts later, would overwrite what a node rebuilt on the same store wrote
-/// since, e.g. a newer channel monitor. Building a store therefore starts a new generation for its
-/// VSS store and waits for the write requests of earlier generations still on the wire. From then
-/// on, an earlier generation's writes are dropped before their next attempt (see `fenced_retry`).
+/// since, e.g. a newer channel monitor. Building a store therefore waits until no node runs on
+/// the VSS store (see [`StoreFence::mark_live`]), starts a new generation for it and waits for the
+/// write requests of earlier generations to end. From then on, an earlier generation's writes are
+/// dropped before their next attempt (see `fenced_retry`), and its node refuses to start.
 ///
-/// A request whose task is cancelled, e.g. by `VssStore`'s runtime shutting down, stops counting
-/// at once, although the server may still apply it shortly after.
+/// A request stops counting once its attempt ends, also when it times out on the client or its
+/// task is cancelled, e.g. by `VssStore`'s runtime shutting down. The server may still apply such
+/// a request shortly after; ruling that out needs conditional writes.
 #[derive(Default)]
 struct StoreFences {
-	stores: Mutex<HashMap<(String, String), FenceState>>,
-	writes_ended: Condvar,
+	stores: Mutex<HashMap<StoreKey, FenceState>>,
+	changed: Condvar,
 }
 
 #[derive(Default)]
 struct FenceState {
 	generation: u64,
+	// Whether a node runs on the current generation's store.
+	live: bool,
 	writes_in_flight: usize,
 }
 
 impl StoreFences {
-	fn start_generation(&self, store: &(String, String), timeout: Duration) -> io::Result<u64> {
-		let mut stores = self.stores.lock().unwrap();
+	fn start_generation(&self, store: &StoreKey, timeout: Duration) -> io::Result<u64> {
+		let deadline = Instant::now() + timeout;
+		let stores = self.stores.lock().unwrap();
+		let (mut stores, result) = self
+			.changed
+			.wait_timeout_while(stores, timeout, |stores| {
+				stores.get(store).is_some_and(|state| state.live)
+			})
+			.unwrap();
+		if result.timed_out() {
+			let msg = "A node using this VSS store is still running";
+			return Err(Error::new(ErrorKind::TimedOut, msg));
+		}
 		let state = stores.entry(store.clone()).or_default();
 		state.generation += 1;
 		let generation = state.generation;
 		// Wakes an earlier store still waiting here, which has now been replaced itself.
-		self.writes_ended.notify_all();
+		self.changed.notify_all();
+		let remaining = deadline.saturating_duration_since(Instant::now());
 		let (stores, result) = self
-			.writes_ended
-			.wait_timeout_while(stores, timeout, |stores| {
+			.changed
+			.wait_timeout_while(stores, remaining, |stores| {
 				stores.get(store).is_some_and(|state| {
 					state.generation == generation && state.writes_in_flight > 0
 				})
@@ -130,14 +156,31 @@ impl StoreFences {
 		Ok(generation)
 	}
 
-	fn is_current(&self, store: &(String, String), generation: u64) -> bool {
+	fn is_current(&self, store: &StoreKey, generation: u64) -> bool {
 		self.stores.lock().unwrap().get(store).is_some_and(|state| state.generation == generation)
 	}
 
+	fn mark_live(&self, store: &StoreKey, generation: u64) -> bool {
+		let mut stores = self.stores.lock().unwrap();
+		match stores.get_mut(store).filter(|state| state.generation == generation) {
+			Some(state) => {
+				state.live = true;
+				true
+			},
+			None => false,
+		}
+	}
+
+	fn clear_live(&self, store: &StoreKey, generation: u64) {
+		let mut stores = self.stores.lock().unwrap();
+		if let Some(state) = stores.get_mut(store).filter(|state| state.generation == generation) {
+			state.live = false;
+			self.changed.notify_all();
+		}
+	}
+
 	/// Returns `None` if the store of `generation` has been replaced.
-	fn begin_write<'a>(
-		&'a self, store: &'a (String, String), generation: u64,
-	) -> Option<WriteGuard<'a>> {
+	fn begin_write<'a>(&'a self, store: &'a StoreKey, generation: u64) -> Option<WriteGuard<'a>> {
 		let mut stores = self.stores.lock().unwrap();
 		let state = stores.get_mut(store).filter(|state| state.generation == generation)?;
 		state.writes_in_flight += 1;
@@ -148,7 +191,7 @@ impl StoreFences {
 /// Counts one write request as in flight until it ends or its future is dropped.
 struct WriteGuard<'a> {
 	fences: &'a StoreFences,
-	store: &'a (String, String),
+	store: &'a StoreKey,
 }
 
 impl Drop for WriteGuard<'_> {
@@ -157,17 +200,39 @@ impl Drop for WriteGuard<'_> {
 		if let Some(state) = stores.get_mut(self.store) {
 			state.writes_in_flight -= 1;
 			if state.writes_in_flight == 0 {
-				self.fences.writes_ended.notify_all();
+				self.fences.changed.notify_all();
 			}
 		}
 	}
 }
 
-/// A [`VssStore`]'s place in [`STORE_FENCES`].
+/// A [`VssStore`]'s place in the process-wide fences of its VSS store.
 #[derive(Clone)]
-struct StoreFence {
-	store: (String, String),
+pub(crate) struct StoreFence {
+	store: StoreKey,
 	generation: u64,
+}
+
+impl StoreFence {
+	/// Marks the store as used by a running node, so that building another store for the same VSS
+	/// store waits until [`Self::clear_live`]. Returns `false` if the store has been replaced, as
+	/// its writes are then dropped and its node must not run.
+	pub(crate) fn mark_live(&self) -> bool {
+		STORE_FENCES.mark_live(&self.store, self.generation)
+	}
+
+	/// Marks the store's node as stopped.
+	pub(crate) fn clear_live(&self) {
+		STORE_FENCES.clear_live(&self.store, self.generation)
+	}
+
+	fn is_current(&self) -> bool {
+		STORE_FENCES.is_current(&self.store, self.generation)
+	}
+
+	fn begin_write(&self) -> Option<WriteGuard<'_>> {
+		STORE_FENCES.begin_write(&self.store, self.generation)
+	}
 }
 
 #[derive(Debug)]
@@ -187,12 +252,21 @@ impl fmt::Display for FencedWriteError {
 
 impl error::Error for FencedWriteError {}
 
+#[derive(Debug, PartialEq, Eq)]
+enum WriteOutcome {
+	Written,
+	// The store was replaced, so the write was not sent or its failure ended the attempts.
+	Dropped,
+}
+
 /// Runs `attempt` with `policy`'s retries while the store of `fence` is current, counting each
-/// attempt as in flight. Returns `Ok` without writing once the store has been replaced: its node
-/// is gone, and a failed write would make LDK treat a monitor update as unrecoverable and panic.
+/// attempt as in flight and ending it after `attempt_timeout`. Once the store has been
+/// replaced, returns [`WriteOutcome::Dropped`] without writing: its node has stopped and cannot
+/// start again, and a failed write would make LDK treat a monitor update as unrecoverable and
+/// panic in the node's detached work.
 async fn fenced_retry<F, Fut>(
-	fence: &StoreFence, policy: &WriteRetryPolicy, mut attempt: F,
-) -> Result<(), VssError>
+	fence: &StoreFence, policy: &WriteRetryPolicy, attempt_timeout: Duration, mut attempt: F,
+) -> Result<WriteOutcome, VssError>
 where
 	F: FnMut() -> Fut,
 	Fut: Future<Output = Result<(), VssError>>,
@@ -200,13 +274,16 @@ where
 	let res = retry(
 		|| {
 			let write = fence.begin_write();
-			let request = write.as_ref().map(|_| attempt());
+			let request = write.as_ref().map(|_| tokio::time::timeout(attempt_timeout, attempt()));
 			async move {
 				let (Some(_write), Some(request)) = (write, request) else {
 					return Err(FencedWriteError::Replaced);
 				};
+				let res = request.await.unwrap_or_else(|_| {
+					Err(VssError::InternalError("VSS write attempt timed out".to_string()))
+				});
 				// Once replaced, a failed attempt is not retried after a backoff either.
-				request.await.map_err(|e| {
+				res.map_err(|e| {
 					if fence.is_current() {
 						FencedWriteError::Vss(e)
 					} else {
@@ -219,19 +296,10 @@ where
 	)
 	.await;
 	match res {
-		Ok(()) | Err(FencedWriteError::Replaced) => Ok(()),
-		Err(FencedWriteError::Vss(_)) if !fence.is_current() => Ok(()),
+		Ok(()) => Ok(WriteOutcome::Written),
+		Err(FencedWriteError::Replaced) => Ok(WriteOutcome::Dropped),
+		Err(FencedWriteError::Vss(_)) if !fence.is_current() => Ok(WriteOutcome::Dropped),
 		Err(FencedWriteError::Vss(e)) => Err(e),
-	}
-}
-
-impl StoreFence {
-	fn is_current(&self) -> bool {
-		STORE_FENCES.is_current(&self.store, self.generation)
-	}
-
-	fn begin_write(&self) -> Option<WriteGuard<'_>> {
-		STORE_FENCES.begin_write(&self.store, self.generation)
 	}
 }
 
@@ -252,9 +320,14 @@ pub struct VssStore {
 impl VssStore {
 	pub(crate) fn new(
 		base_url: String, store_id: String, vss_seed: [u8; 32],
-		header_provider: Arc<dyn VssHeaderProvider>,
+		header_provider: Arc<dyn VssHeaderProvider>, logger: Arc<Logger>,
 	) -> io::Result<Self> {
-		let store = (base_url.trim_end_matches('/').to_string(), store_id.clone());
+		let (data_encryption_key, obfuscation_master_key) =
+			derive_data_encryption_and_obfuscation_keys(&vss_seed);
+		let wallet = sha256::Hash::hash(&obfuscation_master_key).to_byte_array();
+		let key_obfuscator = KeyObfuscator::new(obfuscation_master_key);
+
+		let store = (base_url.trim_end_matches('/').to_string(), store_id.clone(), wallet);
 		let generation = tokio::task::block_in_place(|| {
 			STORE_FENCES.start_generation(&store, REPLACED_WRITES_TIMEOUT)
 		})?;
@@ -263,10 +336,6 @@ impl VssStore {
 		let next_version = AtomicU64::new(1);
 		let internal_runtime =
 			Arc::new(StoreRuntime::new("ldk-node-vss-runtime", INTERNAL_RUNTIME_WORKERS, "VSS")?);
-
-		let (data_encryption_key, obfuscation_master_key) =
-			derive_data_encryption_and_obfuscation_keys(&vss_seed);
-		let key_obfuscator = KeyObfuscator::new(obfuscation_master_key);
 
 		let sync_retry_policy = retry_policy();
 		let blocking_client = VssClient::new_with_headers(
@@ -317,9 +386,15 @@ impl VssStore {
 			fence,
 			data_encryption_key,
 			key_obfuscator,
+			logger,
 		));
 
 		Ok(Self { inner, next_version, internal_runtime: Some(internal_runtime) })
+	}
+
+	/// The store's fence, for its node to mark the store as live while running.
+	pub(crate) fn fence(&self) -> StoreFence {
+		self.inner.fence.clone()
 	}
 
 	fn internal_runtime(&self) -> Arc<StoreRuntime> {
@@ -589,6 +664,7 @@ struct VssStoreInner {
 	fence: StoreFence,
 	data_encryption_key: [u8; 32],
 	key_obfuscator: KeyObfuscator,
+	logger: Arc<Logger>,
 	// Per-key locks that ensures that we don't have concurrent writes to the same namespace/key.
 	// The lock also encapsulates the latest written version per key.
 	locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<u64>>>>,
@@ -601,7 +677,7 @@ impl VssStoreInner {
 		async_client: VssClient<CustomRetryPolicy>,
 		blocking_write_client: VssClient<CustomRetryPolicy>,
 		async_write_client: VssClient<CustomRetryPolicy>, store_id: String, fence: StoreFence,
-		data_encryption_key: [u8; 32], key_obfuscator: KeyObfuscator,
+		data_encryption_key: [u8; 32], key_obfuscator: KeyObfuscator, logger: Arc<Logger>,
 	) -> Self {
 		let locks = Mutex::new(HashMap::new());
 		Self {
@@ -615,6 +691,7 @@ impl VssStoreInner {
 			fence,
 			data_encryption_key,
 			key_obfuscator,
+			logger,
 			locks,
 		}
 	}
@@ -773,12 +850,25 @@ impl VssStoreInner {
 		};
 
 		self.execute_locked_write(inner_lock_ref, locking_key, version, async move || {
-			let res = fenced_retry(&self.fence, &self.write_retry_policy, || async {
-				client.put_object(&request).await.map(|_| ())
-			})
+			let res = fenced_retry(
+				&self.fence,
+				&self.write_retry_policy,
+				WRITE_ATTEMPT_TIMEOUT,
+				|| async { client.put_object(&request).await.map(|_| ()) },
+			)
 			.await;
 			match res {
-				Ok(()) => Ok(()),
+				Ok(WriteOutcome::Written) => Ok(()),
+				Ok(WriteOutcome::Dropped) => {
+					log_warn!(
+						self.logger,
+						"Dropped write of key {}/{}/{}: another node was built on this VSS store",
+						primary_namespace,
+						secondary_namespace,
+						key
+					);
+					Ok(())
+				},
 				Err(e) => {
 					let msg = format!(
 						"Failed to write to key {}/{}/{}: {}",
@@ -811,12 +901,25 @@ impl VssStoreInner {
 			let request =
 				DeleteObjectRequest { store_id: self.store_id.clone(), key_value: Some(key_value) };
 
-			let res = fenced_retry(&self.fence, &self.write_retry_policy, || async {
-				client.delete_object(&request).await.map(|_| ())
-			})
+			let res = fenced_retry(
+				&self.fence,
+				&self.write_retry_policy,
+				WRITE_ATTEMPT_TIMEOUT,
+				|| async { client.delete_object(&request).await.map(|_| ()) },
+			)
 			.await;
 			match res {
-				Ok(()) => Ok(()),
+				Ok(WriteOutcome::Written) => Ok(()),
+				Ok(WriteOutcome::Dropped) => {
+					log_warn!(
+						self.logger,
+						"Dropped removal of key {}/{}/{}: another node was built on this VSS store",
+						primary_namespace,
+						secondary_namespace,
+						key
+					);
+					Ok(())
+				},
 				Err(e) => {
 					let msg = format!(
 						"Failed to delete key {}/{}/{}: {}",
@@ -1065,8 +1168,8 @@ impl RefUnwindSafe for VssStore {}
 mod store_fences_tests {
 	use super::*;
 
-	fn store() -> (String, String) {
-		("https://vss.example".to_string(), "store".to_string())
+	fn store() -> StoreKey {
+		("https://vss.example".to_string(), "store".to_string(), [1; 32])
 	}
 
 	#[test]
@@ -1160,7 +1263,7 @@ mod store_fences_tests {
 	}
 
 	fn current_fence(store_id: &str) -> StoreFence {
-		let store = ("https://vss.example".to_string(), store_id.to_string());
+		let store = ("https://vss.example".to_string(), store_id.to_string(), [1; 32]);
 		let generation = STORE_FENCES.start_generation(&store, Duration::ZERO).unwrap();
 		StoreFence { store, generation }
 	}
@@ -1173,7 +1276,7 @@ mod store_fences_tests {
 	async fn fenced_retry_retries_until_a_write_succeeds() {
 		let fence = current_fence("retries");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &write_retry_policy(), || async {
+		let res = fenced_retry(&fence, &write_retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
 			if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
 				Err(server_error())
 			} else {
@@ -1181,7 +1284,7 @@ mod store_fences_tests {
 			}
 		})
 		.await;
-		assert!(res.is_ok());
+		assert_eq!(res.unwrap(), WriteOutcome::Written);
 		assert_eq!(attempts.load(Ordering::SeqCst), 3);
 	}
 
@@ -1189,7 +1292,7 @@ mod store_fences_tests {
 	async fn fenced_retry_returns_permanent_errors_without_retrying() {
 		let fence = current_fence("permanent");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &write_retry_policy(), || async {
+		let res = fenced_retry(&fence, &write_retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
 			attempts.fetch_add(1, Ordering::SeqCst);
 			Err(VssError::ConflictError("conflict".to_string()))
 		})
@@ -1203,12 +1306,12 @@ mod store_fences_tests {
 		let fence = current_fence("replaced");
 		current_fence("replaced");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &write_retry_policy(), || async {
+		let res = fenced_retry(&fence, &write_retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
 			attempts.fetch_add(1, Ordering::SeqCst);
 			Ok(())
 		})
 		.await;
-		assert!(res.is_ok());
+		assert_eq!(res.unwrap(), WriteOutcome::Dropped);
 		assert_eq!(attempts.load(Ordering::SeqCst), 0);
 	}
 
@@ -1216,25 +1319,95 @@ mod store_fences_tests {
 	async fn fenced_retry_stops_retrying_once_the_store_is_replaced() {
 		let fence = current_fence("replaced-between-attempts");
 		let attempts = std::sync::atomic::AtomicUsize::new(0);
-		let res = fenced_retry(&fence, &write_retry_policy(), || async {
+		let res = fenced_retry(&fence, &write_retry_policy(), WRITE_ATTEMPT_TIMEOUT, || async {
 			attempts.fetch_add(1, Ordering::SeqCst);
 			// A new store starts its generation now; it times out waiting for this attempt.
 			let _ = STORE_FENCES.start_generation(&fence.store, Duration::ZERO);
 			Err(server_error())
 		})
 		.await;
-		assert!(res.is_ok());
+		assert_eq!(res.unwrap(), WriteOutcome::Dropped);
 		assert_eq!(attempts.load(Ordering::SeqCst), 1);
 	}
 
 	#[test]
 	fn stores_fence_only_their_own_writes() {
 		let fences = StoreFences::default();
-		let other = ("https://vss.example".to_string(), "other".to_string());
+		let other = ("https://vss.example".to_string(), "other".to_string(), [1; 32]);
 		let other_generation = fences.start_generation(&other, Duration::ZERO).unwrap();
 		let _write = fences.begin_write(&other, other_generation).unwrap();
 		fences.start_generation(&store(), Duration::ZERO).unwrap();
 		assert!(fences.begin_write(&other, other_generation).is_some());
+	}
+
+	#[test]
+	fn stores_of_other_wallets_are_not_fenced() {
+		let fences = StoreFences::default();
+		let (url, store_id, _) = store();
+		let other_wallet = (url, store_id, [2; 32]);
+		let other_generation = fences.start_generation(&other_wallet, Duration::ZERO).unwrap();
+		assert!(fences.mark_live(&other_wallet, other_generation));
+		fences.start_generation(&store(), Duration::ZERO).unwrap();
+		assert!(fences.is_current(&other_wallet, other_generation));
+		assert!(fences.begin_write(&other_wallet, other_generation).is_some());
+	}
+
+	#[test]
+	fn a_store_is_not_replaced_while_its_node_runs() {
+		let fences = StoreFences::default();
+		let live = fences.start_generation(&store(), Duration::ZERO).unwrap();
+		assert!(fences.mark_live(&store(), live));
+		let err = fences.start_generation(&store(), Duration::from_millis(20)).unwrap_err();
+		assert_eq!(err.kind(), ErrorKind::TimedOut);
+		assert!(fences.is_current(&store(), live));
+		assert!(fences.begin_write(&store(), live).is_some());
+	}
+
+	#[test]
+	fn a_new_store_waits_for_the_running_node_to_stop() {
+		let fences = Arc::new(StoreFences::default());
+		let live = fences.start_generation(&store(), Duration::ZERO).unwrap();
+		assert!(fences.mark_live(&store(), live));
+		let builder = {
+			let fences = Arc::clone(&fences);
+			std::thread::spawn(move || fences.start_generation(&store(), Duration::from_secs(10)))
+		};
+		std::thread::sleep(Duration::from_millis(50));
+		assert!(!builder.is_finished(), "new store did not wait for the running node");
+		assert!(fences.is_current(&store(), live));
+		fences.clear_live(&store(), live);
+		builder.join().unwrap().unwrap();
+		assert!(!fences.is_current(&store(), live));
+	}
+
+	#[test]
+	fn a_replaced_store_cannot_be_marked_live() {
+		let fences = StoreFences::default();
+		let replaced = fences.start_generation(&store(), Duration::ZERO).unwrap();
+		let current = fences.start_generation(&store(), Duration::ZERO).unwrap();
+		assert!(!fences.mark_live(&store(), replaced));
+		assert!(fences.mark_live(&store(), current));
+		// A stale clear leaves the current store's node marked as running.
+		fences.clear_live(&store(), replaced);
+		let err = fences.start_generation(&store(), Duration::from_millis(20)).unwrap_err();
+		assert_eq!(err.kind(), ErrorKind::TimedOut);
+		assert!(fences.is_current(&store(), current));
+	}
+
+	#[tokio::test]
+	async fn fenced_retry_ends_an_attempt_that_does_not_finish() {
+		let fence = current_fence("stuck");
+		let attempts = std::sync::atomic::AtomicUsize::new(0);
+		let res =
+			fenced_retry(&fence, &write_retry_policy(), Duration::from_millis(10), || async {
+				if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+					std::future::pending::<()>().await;
+				}
+				Ok(())
+			})
+			.await;
+		assert_eq!(res.unwrap(), WriteOutcome::Written);
+		assert_eq!(attempts.load(Ordering::SeqCst), 2);
 	}
 }
 
@@ -1250,6 +1423,10 @@ mod tests {
 	use super::*;
 	use crate::io::test_utils::do_read_write_remove_list_persist;
 
+	fn logger() -> Arc<Logger> {
+		Arc::new(Logger::new_log_facade())
+	}
+
 	#[test]
 	fn vss_read_write_remove_list_persist() {
 		let vss_base_url = std::env::var("TEST_VSS_BASE_URL").unwrap();
@@ -1259,7 +1436,8 @@ mod tests {
 		rng.fill_bytes(&mut vss_seed);
 		let header_provider = Arc::new(FixedHeaders::new(HashMap::new()));
 		let vss_store =
-			VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider).unwrap();
+			VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider, logger())
+				.unwrap();
 		do_read_write_remove_list_persist(&vss_store);
 	}
 
@@ -1272,7 +1450,8 @@ mod tests {
 		rng.fill_bytes(&mut vss_seed);
 		let header_provider = Arc::new(FixedHeaders::new(HashMap::new()));
 		let vss_store =
-			VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider).unwrap();
+			VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider, logger())
+				.unwrap();
 
 		do_read_write_remove_list_persist(&vss_store);
 		drop(vss_store)
@@ -1291,10 +1470,12 @@ mod tests {
 			rand_store_id.clone(),
 			vss_seed,
 			header_provider.clone(),
+			logger(),
 		)
 		.unwrap();
 		let current =
-			VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider).unwrap();
+			VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider, logger())
+				.unwrap();
 
 		KVStoreSync::write(&current, "ns", "", "key", vec![2]).unwrap();
 		KVStoreSync::write(&replaced, "ns", "", "key", vec![1]).unwrap();

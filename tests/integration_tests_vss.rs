@@ -196,3 +196,34 @@ async fn vss_node_restart() {
 
 	node.stop().unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn vss_replaced_node_refuses_to_start() {
+	let (_bitcoind, electrsd) = common::setup_bitcoind_and_electrsd();
+	let esplora_url = format!("http://{}", electrsd.esplora_url.as_ref().unwrap());
+	let vss_base_url = std::env::var("TEST_VSS_BASE_URL").unwrap();
+
+	let rand_suffix: String =
+		(0..7).map(|_| rng().sample(rand::distr::Alphanumeric) as char).collect();
+	let store_id = format!("replaced_test_{}", rand_suffix);
+	let mut builder = Builder::new();
+	builder.set_network(bitcoin::Network::Regtest);
+	builder.set_storage_dir_path(common::random_storage_path().to_str().unwrap().to_owned());
+	builder.set_entropy_seed_bytes([43u8; 64]);
+	builder.set_chain_source_esplora(esplora_url, None);
+
+	let replaced = builder
+		.build_with_vss_store_and_fixed_headers(
+			vss_base_url.clone(),
+			store_id.clone(),
+			HashMap::new(),
+		)
+		.unwrap();
+	let current = builder
+		.build_with_vss_store_and_fixed_headers(vss_base_url, store_id, HashMap::new())
+		.unwrap();
+
+	assert_eq!(replaced.start(), Err(ldk_node::NodeError::PersistenceFailed));
+	current.start().unwrap();
+	current.stop().unwrap();
+}
