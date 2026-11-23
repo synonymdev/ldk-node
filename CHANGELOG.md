@@ -2,6 +2,7 @@
 
 ## Bug Fixes
 
+- Prevent writes of a stopped node, still retrying against VSS or started by its detached work, from overwriting the state of a node rebuilt on the same store: building a VSS store now waits for the earlier store's write requests still in flight, fails with `KVStoreSetupFailed` if they have not ended after 60 s, and drops the earlier store's writes from then on.
 - Prevent the native SIGABRT `A Tokio 1.x context was found, but it is being shutdown.` when a node is released while background work is still stuck, e.g. in a VSS write after a timed-out stop: the runtime is now kept alive until that work ends instead of being shut down under it.
 - Bump `lightning`, `lightning-liquidity`, `lightning-persister` and `lightning-transaction-sync` to 0.2.8 and `lightning-invoice` to 0.34.2.
 - `bump_fee_by_rbf` now only replaces transactions this wallet built and broadcast itself, and returns `TransactionNotBroadcastByWallet` for any other txid.
