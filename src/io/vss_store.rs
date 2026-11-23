@@ -69,8 +69,9 @@ impl_writeable_tlv_based_enum!(VssSchemaVersion,
 const VSS_SCHEMA_VERSION_KEY: &str = "vss_schema_version";
 
 // How long building a store waits for a node still running on the same VSS store to stop and for
-// the store's write calls to return. A call retries for up to 180 s while VSS fails, so against a
-// failing VSS the build can time out; it then replaces nothing.
+// the store's write calls to return. Against a failing VSS one call can take minutes: its backoff
+// sleeps add up to 180 s, on top of up to 30 s per attempt. The build then times out and replaces
+// nothing.
 const REPLACED_WRITES_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Bounds one write attempt, the header fetch included: the VSS client times a request out after
