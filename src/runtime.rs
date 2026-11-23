@@ -9,7 +9,9 @@ use std::future::Future;
 use std::io;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, SendError};
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
 use std::time::Duration;
 
 use lightning::io::{Error as LdkIoError, ErrorKind as LdkIoErrorKind};
@@ -22,6 +24,9 @@ use crate::config::{
 };
 use crate::error::Error;
 use crate::logger::{log_debug, log_error, log_trace, LdkLogger, Logger};
+
+/// Name of the thread that shuts an owned runtime down once detached work has ended.
+const RUNTIME_REAPER_THREAD_NAME: &str = "ldk-node-runtime-reaper";
 
 fn mutex_lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 	mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -87,11 +92,11 @@ impl Deref for Runtime {
 impl Runtime {
 	/// Cancels all work and shuts the owned runtime down once that work has drained.
 	///
-	/// Work that is still running after `drain_timeout` (a task blocked inside
-	/// `block_in_place`, e.g. a stuck VSS write through `try_block_on`) would poll timers on a
-	/// shut-down runtime as soon as it resumes, and Tokio's timer then panics, which aborts mobile
-	/// builds. The runtime is leaked in that case so the work can finish and observe its
-	/// cancellation. Runtime use stays open then: closing it would wait for that work to return.
+	/// Work that is still running after `drain_timeout` (a task blocked inside `block_in_place`,
+	/// e.g. a stuck VSS write) would poll timers on a shut-down runtime as soon as it resumes, and
+	/// Tokio's timer then panics, which aborts mobile builds. In that case a reaper thread takes
+	/// the runtime and shuts it down only once that work has finished, so this returns without
+	/// waiting for it.
 	fn shutdown(&mut self, drain_timeout: Duration) {
 		self.control.cancel_all_tasks();
 		self.control.detach_live_work();
@@ -100,15 +105,56 @@ impl Runtime {
 			if let Some(runtime) = self.owned_runtime.take() {
 				log_error!(
 					self.control.logger,
-					"Leaking the runtime because detached work is still running after shutdown."
+					"Deferring runtime shutdown until detached work still running at shutdown has ended."
 				);
-				std::mem::forget(runtime);
+				Self::shut_down_when_drained(Arc::clone(&self.control), runtime);
 				return;
 			}
 		}
 		self.control.close_runtime_use();
 		if let Some(runtime) = self.owned_runtime.take() {
 			runtime.shutdown_background();
+		}
+	}
+
+	/// Hands `runtime` to a reaper thread that shuts it down once all detached work has drained.
+	///
+	/// The runtime is sent only after the thread has started: a failed spawn drops its closure,
+	/// and dropping the runtime there would shut it down under the running work. If the thread
+	/// cannot start, the runtime is leaked instead.
+	fn shut_down_when_drained(control: Arc<RuntimeControl>, runtime: tokio::runtime::Runtime) {
+		let (runtime_sender, runtime_receiver) = sync_channel::<tokio::runtime::Runtime>(1);
+		let reaper_control = Arc::clone(&control);
+		let spawned =
+			thread::Builder::new().name(RUNTIME_REAPER_THREAD_NAME.to_string()).spawn(move || {
+				let Ok(runtime) = runtime_receiver.recv() else { return };
+				while !reaper_control
+					.drain_detached_work(Duration::from_secs(BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECS))
+				{
+					if !*rwlock_read(&reaper_control.runtime_use) {
+						log_error!(
+							reaper_control.logger,
+							"Leaking the runtime: runtime use closed while detached work still runs."
+						);
+						std::mem::forget(runtime);
+						return;
+					}
+				}
+				reaper_control.close_runtime_use();
+				runtime.shutdown_background();
+				log_debug!(
+					reaper_control.logger,
+					"Shut down the runtime after detached work ended."
+				);
+			});
+		if let Err(e) = spawned {
+			log_error!(control.logger, "Leaking the runtime: failed to start its reaper: {}", e);
+			std::mem::forget(runtime);
+			return;
+		}
+		if let Err(SendError(runtime)) = runtime_sender.send(runtime) {
+			log_error!(control.logger, "Leaking the runtime: its reaper exited early.");
+			std::mem::forget(runtime);
 		}
 	}
 }
@@ -915,17 +961,35 @@ mod tests {
 		assert!(runtime.allow_task_spawns_with_timeout(Duration::from_secs(1)));
 	}
 
-	/// Spawns a tracked task that blocks in `try_block_on` until released 500 ms later, like a
-	/// stuck VSS write, then reports whether polling a Tokio timer panicked, as it does once the
-	/// runtime has been shut down.
-	fn spawn_blocked_timer_task(runtime: &Runtime) -> std::sync::mpsc::Receiver<bool> {
+	/// How a test task blocks a worker thread while shutdown runs.
+	#[derive(Clone, Copy)]
+	enum BlockingCall {
+		/// Through `RuntimeControl::try_block_on`, which holds the runtime-use read guard.
+		TryBlockOn,
+		/// Through Tokio's `block_in_place` directly, as `VssStore` does.
+		BlockInPlace,
+	}
+
+	/// Spawns a tracked task that blocks a worker until released 500 ms later, like a stuck VSS
+	/// write, then reports whether polling a Tokio timer panicked, as it does once the runtime has
+	/// been shut down.
+	fn spawn_blocked_timer_task(
+		runtime: &Runtime, blocking_call: BlockingCall,
+	) -> std::sync::mpsc::Receiver<bool> {
 		let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
 		let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
 		let (timer_sender, timer_receiver) = std::sync::mpsc::sync_channel(1);
 		let control = runtime.control();
 		runtime.spawn_background_task(async move {
 			started_sender.send(()).unwrap();
-			control.try_block_on(async { release_receiver.recv().unwrap() }).unwrap();
+			match blocking_call {
+				BlockingCall::TryBlockOn => {
+					control.try_block_on(async { release_receiver.recv().unwrap() }).unwrap()
+				},
+				BlockingCall::BlockInPlace => {
+					tokio::task::block_in_place(|| release_receiver.recv().unwrap())
+				},
+			}
 			let mut sleep = pin!(tokio::time::sleep(Duration::from_millis(1)));
 			let timer_ok = poll_fn(|cx| {
 				Poll::Ready(catch_unwind(AssertUnwindSafe(|| sleep.as_mut().poll(cx))).is_ok())
@@ -941,28 +1005,41 @@ mod tests {
 		timer_receiver
 	}
 
-	fn assert_shutdown_keeps_blocked_work_runtime(
+	/// Shutdown must return without waiting for the blocked work, keep the runtime alive while
+	/// that work runs, and shut it down once the work has ended.
+	fn assert_shutdown_defers_runtime_shutdown_to_blocked_work(
 		mut runtime: Runtime, timer_receiver: std::sync::mpsc::Receiver<bool>,
 	) {
+		let control = runtime.control();
 		let start = std::time::Instant::now();
 		runtime.shutdown(Duration::from_millis(10));
 		assert!(start.elapsed() < Duration::from_millis(400), "shutdown waited for blocked work");
 		assert!(timer_receiver.recv_timeout(Duration::from_secs(2)).unwrap());
+
+		let deadline = std::time::Instant::now() + Duration::from_secs(2);
+		while control.try_block_on(async {}) != Err(Error::NotRunning) {
+			assert!(std::time::Instant::now() < deadline, "runtime outlived the blocked work");
+			thread::sleep(Duration::from_millis(10));
+		}
 	}
 
 	#[test]
 	fn detached_work_still_running_at_shutdown_keeps_its_runtime() {
-		let runtime = test_runtime_with_workers(2);
-		let timer_receiver = spawn_blocked_timer_task(&runtime);
-		runtime.wait_on_background_tasks_with_timeout(Duration::from_millis(10));
-		assert_shutdown_keeps_blocked_work_runtime(runtime, timer_receiver);
+		for blocking_call in [BlockingCall::TryBlockOn, BlockingCall::BlockInPlace] {
+			let runtime = test_runtime_with_workers(2);
+			let timer_receiver = spawn_blocked_timer_task(&runtime, blocking_call);
+			runtime.wait_on_background_tasks_with_timeout(Duration::from_millis(10));
+			assert_shutdown_defers_runtime_shutdown_to_blocked_work(runtime, timer_receiver);
+		}
 	}
 
 	#[test]
 	fn never_stopped_work_still_running_at_shutdown_keeps_its_runtime() {
-		let runtime = test_runtime_with_workers(2);
-		let timer_receiver = spawn_blocked_timer_task(&runtime);
-		assert_shutdown_keeps_blocked_work_runtime(runtime, timer_receiver);
+		for blocking_call in [BlockingCall::TryBlockOn, BlockingCall::BlockInPlace] {
+			let runtime = test_runtime_with_workers(2);
+			let timer_receiver = spawn_blocked_timer_task(&runtime, blocking_call);
+			assert_shutdown_defers_runtime_shutdown_to_blocked_work(runtime, timer_receiver);
+		}
 	}
 
 	#[test]
