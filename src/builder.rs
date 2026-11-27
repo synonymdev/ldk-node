@@ -2839,6 +2839,7 @@ pub(crate) fn sanitize_alias(alias_str: &str) -> Result<NodeAlias, BuildError> {
 
 #[cfg(test)]
 mod tests {
+	use std::collections::HashMap;
 	use std::future::Future;
 	use std::pin::Pin;
 	use std::sync::Arc;
@@ -2962,6 +2963,22 @@ mod tests {
 		let store: Arc<DynStore> = Arc::new(InMemoryStore::new());
 
 		assert!(matches!(builder.build_with_store(store), Err(BuildError::InvalidSeedBytes)));
+	}
+
+	#[test]
+	fn build_with_lnurl_auth_key_domain_rejects_invalid_domain() {
+		let mut builder = NodeBuilder::new();
+		builder.set_entropy_seed_bytes([42; 64]);
+		builder.set_log_facade_logger();
+
+		let result = builder.build_with_vss_store_and_lnurl_auth_key_domain(
+			"http://127.0.0.1:1/vss".to_string(),
+			"store".to_string(),
+			"http://127.0.0.1:1/lnurl_auth/auth".to_string(),
+			"https://bitkit.to".to_string(),
+			HashMap::new(),
+		);
+		assert!(matches!(result, Err(BuildError::KVStoreSetupFailed)));
 	}
 
 	#[test]
