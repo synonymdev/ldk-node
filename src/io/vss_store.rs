@@ -1598,6 +1598,32 @@ mod tests {
 	}
 
 	#[test]
+	fn vss_a_write_counts_from_its_call() {
+		let vss_base_url = std::env::var("TEST_VSS_BASE_URL").unwrap();
+		let mut rng = rng();
+		let rand_store_id: String = (0..7).map(|_| rng.sample(Alphanumeric) as char).collect();
+		let mut vss_seed = [0u8; 32];
+		rng.fill_bytes(&mut vss_seed);
+		let header_provider = Arc::new(FixedHeaders::new(HashMap::new()));
+		let store = VssStore::new(vss_base_url, rand_store_id, vss_seed, header_provider, logger())
+			.unwrap();
+		let key = store.inner.fence.store.clone();
+
+		// Neither is polled, so neither has reached the key's lock, let alone the server.
+		let write = KVStore::write(&store, "ns", "", "key", vec![1]);
+		let err = STORE_FENCES.start_generation(&key, Duration::from_millis(20)).unwrap_err();
+		assert_eq!(err.kind(), ErrorKind::TimedOut);
+		drop(write);
+		let remove = KVStore::remove(&store, "ns", "", "key", false);
+		let err = STORE_FENCES.start_generation(&key, Duration::from_millis(20)).unwrap_err();
+		assert_eq!(err.kind(), ErrorKind::TimedOut);
+		assert!(store.inner.fence.is_current());
+		drop(remove);
+		STORE_FENCES.start_generation(&key, Duration::ZERO).unwrap();
+		assert!(!store.inner.fence.is_current());
+	}
+
+	#[test]
 	fn vss_writes_of_a_replaced_store_are_dropped() {
 		let vss_base_url = std::env::var("TEST_VSS_BASE_URL").unwrap();
 		let mut rng = rng();
