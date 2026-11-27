@@ -278,6 +278,10 @@ fn parse_jwt_token(jwt_token: String) -> Result<JwtToken, VssHeaderProviderError
 
 #[cfg(test)]
 mod tests {
+	use std::io::{BufRead, BufReader, Write};
+	use std::net::{SocketAddr, TcpListener};
+	use std::sync::{Arc, Mutex};
+
 	use bitcoin::Network;
 
 	use super::*;
@@ -359,26 +363,30 @@ mod tests {
 		);
 	}
 
-	// Serves the mainnet challenge shape on loopback: the callback must reach the auth host,
-	// carry the bitkit.to key, and the JWT must be reused while unexpired.
-	#[tokio::test]
-	async fn fetches_and_caches_jwt_via_auth_host() {
-		use std::io::{BufRead, BufReader, Write};
-		use std::net::TcpListener;
-		use std::sync::{Arc as StdArc, Mutex};
+	struct AuthServer {
+		addr: SocketAddr,
+		requests: Arc<Mutex<Vec<String>>>,
+	}
 
+	impl AuthServer {
+		fn paths(&self) -> Vec<String> {
+			self.requests.lock().unwrap().iter().filter(|r| r.starts_with('/')).cloned().collect()
+		}
+	}
+
+	// Serves the mainnet challenge shape on loopback and answers the n-th signed callback with
+	// `callback_body(n)`. Records each request path and each header line, lowercased.
+	fn serve_auth(callback_body: impl Fn(usize) -> String + Send + 'static) -> AuthServer {
 		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 		let addr = listener.local_addr().unwrap();
-		let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"x","exp":4102444800}"#);
-		let jwt = format!("e30.{payload}.c2ln");
-		let paths = StdArc::new(Mutex::new(Vec::new()));
-		let server_paths = StdArc::clone(&paths);
-		let server_jwt = jwt.clone();
+		let requests = Arc::new(Mutex::new(Vec::new()));
+		let server_requests = Arc::clone(&requests);
 		std::thread::spawn(move || {
+			let mut callbacks = 0;
 			for stream in listener.incoming() {
 				let mut stream = stream.unwrap();
-				let mut request_line = String::new();
 				let mut reader = BufReader::new(stream.try_clone().unwrap());
+				let mut request_line = String::new();
 				reader.read_line(&mut request_line).unwrap();
 				loop {
 					let mut line = String::new();
@@ -386,12 +394,13 @@ mod tests {
 					if line == "\r\n" || line.is_empty() {
 						break;
 					}
-					server_paths.lock().unwrap().push(line.trim_end().to_ascii_lowercase());
+					server_requests.lock().unwrap().push(line.trim_end().to_ascii_lowercase());
 				}
 				let path = request_line.split(' ').nth(1).unwrap().to_string();
-				server_paths.lock().unwrap().push(path.clone());
+				server_requests.lock().unwrap().push(path.clone());
 				let body = if path.contains("sig=") {
-					format!(r#"{{"token":"{server_jwt}"}}"#)
+					callbacks += 1;
+					callback_body(callbacks - 1)
 				} else {
 					format!("https://bitkit.to/lnurl_auth/auth?tag=login&k1={K1}&action=login")
 				};
@@ -404,28 +413,76 @@ mod tests {
 				.unwrap();
 			}
 		});
+		AuthServer { addr, requests }
+	}
 
-		let provider = KeyDomainLnurlAuthProvider::new(
+	fn jwt(exp: u64) -> String {
+		let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"sub":"x","exp":{exp}}}"#));
+		format!("e30.{payload}.c2ln")
+	}
+
+	fn token_body(token: String) -> String {
+		format!(r#"{{"token":"{token}"}}"#)
+	}
+
+	fn provider(server: &AuthServer) -> KeyDomainLnurlAuthProvider {
+		KeyDomainLnurlAuthProvider::new(
 			upstream_test_parent_key(),
-			format!("http://{addr}/lnurl_auth/auth"),
+			format!("http://{}/lnurl_auth/auth", server.addr),
 			"bitkit.to".to_string(),
 			HashMap::from([("X-Test".to_string(), "1".to_string())]),
 		)
-		.unwrap();
+		.unwrap()
+	}
+
+	// The callback reaches the auth host with the bitkit.to key, and the JWT is reused while
+	// unexpired.
+	#[tokio::test]
+	async fn fetches_and_caches_jwt_via_auth_host() {
+		let server = serve_auth(|_| token_body(jwt(4102444800)));
+		let provider = provider(&server);
 		for _ in 0..2 {
 			let headers = provider.get_headers(&[]).await.unwrap();
-			assert_eq!(headers.get("Authorization"), Some(&format!("Bearer {jwt}")));
+			assert_eq!(headers.get("Authorization"), Some(&format!("Bearer {}", jwt(4102444800))));
 			assert_eq!(headers.get("X-Test").map(String::as_str), Some("1"));
 		}
 
-		let paths = paths.lock().unwrap();
-		let requests: Vec<&String> = paths.iter().filter(|p| p.starts_with('/')).collect();
-		assert_eq!(requests.len(), 2, "the second call reuses the cached JWT");
-		assert_eq!(requests[0], "/lnurl_auth/auth");
-		assert!(requests[1]
-			.starts_with(&format!("/lnurl_auth/auth?tag=login&k1={K1}&action=login&sig=")));
-		assert!(requests[1]
+		let paths = server.paths();
+		assert_eq!(paths.len(), 2, "the second call reuses the cached JWT");
+		assert_eq!(paths[0], "/lnurl_auth/auth");
+		assert!(
+			paths[1].starts_with(&format!("/lnurl_auth/auth?tag=login&k1={K1}&action=login&sig="))
+		);
+		assert!(paths[1]
 			.ends_with("&key=03a758e690253eb7dace3ee0f351da6fb54f15873cc767dfc85d616e2d9f498986"));
-		assert!(paths.contains(&format!("host: {addr}")));
+		assert!(server.requests.lock().unwrap().contains(&format!("host: {}", server.addr)));
+	}
+
+	#[tokio::test]
+	async fn refetches_expired_jwt() {
+		let server = serve_auth(|n| token_body(jwt(1 + n as u64)));
+		let provider = provider(&server);
+		let first = provider.get_headers(&[]).await.unwrap();
+		let second = provider.get_headers(&[]).await.unwrap();
+		assert_eq!(server.paths().len(), 4, "an expired JWT is fetched again");
+		assert_ne!(first.get("Authorization"), second.get("Authorization"));
+	}
+
+	#[tokio::test]
+	async fn reports_auth_server_reason() {
+		let server =
+			serve_auth(|_| r#"{"status":"ERROR","reason":"Invalid signature"}"#.to_string());
+		let err = provider(&server).get_headers(&[]).await.unwrap_err();
+		assert!(
+			matches!(&err, VssHeaderProviderError::AuthorizationError { error } if error.contains("Invalid signature")),
+			"{err:?}"
+		);
+	}
+
+	#[tokio::test]
+	async fn rejects_malformed_jwt() {
+		let server = serve_auth(|_| token_body("not-a-jwt".to_string()));
+		let err = provider(&server).get_headers(&[]).await.unwrap_err();
+		assert!(matches!(err, VssHeaderProviderError::InvalidData { .. }), "{err:?}");
 	}
 }
