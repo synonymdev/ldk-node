@@ -85,7 +85,7 @@
 
 ## Synonym Fork Additions
 
-- Added `build_with_vss_store_and_lnurl_auth_key_domain`, which signs VSS LNURL-auth for a fixed key domain while calling the auth server on another host, so wallets keep their VSS identity when the auth server moves.
+- Added `build_with_vss_store_and_lnurl_auth_key_domain`, which signs VSS LNURL-auth for a fixed key domain while calling the auth server on a subdomain of it, so wallets keep their VSS identity when the auth server moves to that subdomain.
 - Accept incoming payments up to the full channel value, instead of 10% of it, on nodes that cannot announce channels (no node alias or listening addresses), for channels opened after the update.
 - Expose the exact prepared transaction fee so applications can validate the approved total before broadcast.
 - Prevent concurrent prepared payment broadcasts from blocking Tokio worker progress.
