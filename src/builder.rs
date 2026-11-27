@@ -2841,6 +2841,7 @@ pub(crate) fn sanitize_alias(alias_str: &str) -> Result<NodeAlias, BuildError> {
 mod tests {
 	use std::collections::HashMap;
 	use std::future::Future;
+	use std::net::TcpListener;
 	use std::pin::Pin;
 	use std::sync::Arc;
 
@@ -2967,18 +2968,26 @@ mod tests {
 
 	#[test]
 	fn build_with_lnurl_auth_key_domain_rejects_invalid_domain() {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		listener.set_nonblocking(true).unwrap();
+		let addr = listener.local_addr().unwrap();
 		let mut builder = NodeBuilder::new();
 		builder.set_entropy_seed_bytes([42; 64]);
 		builder.set_log_facade_logger();
 
 		let result = builder.build_with_vss_store_and_lnurl_auth_key_domain(
-			"http://127.0.0.1:1/vss".to_string(),
+			format!("http://{addr}/vss"),
 			"store".to_string(),
-			"http://127.0.0.1:1/lnurl_auth/auth".to_string(),
+			format!("http://{addr}/lnurl_auth/auth"),
 			"https://bitkit.to".to_string(),
 			HashMap::new(),
 		);
 		assert!(matches!(result, Err(BuildError::KVStoreSetupFailed)));
+		assert_eq!(
+			listener.accept().unwrap_err().kind(),
+			std::io::ErrorKind::WouldBlock,
+			"rejected before any request"
+		);
 	}
 
 	#[test]
