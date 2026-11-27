@@ -299,6 +299,9 @@ interface BuilderInterface {
     @Throws(BuildException::class)
     fun `buildWithVssStoreAndHeaderProvider`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `headerProvider`: VssHeaderProvider): Node
 
+    @Throws(BuildException::class)
+    fun `buildWithVssStoreAndLnurlAuthKeyDomain`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `lnurlAuthServerUrl`: kotlin.String, `keyDomain`: kotlin.String, `fixedHeaders`: Map<kotlin.String, kotlin.String>): Node
+
     fun `setAddressType`(`addressType`: AddressType)
 
     fun `setAddressTypesToMonitor`(`addressTypesToMonitor`: List<AddressType>)

@@ -601,6 +601,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider() != 9090:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_lnurl_auth_key_domain() != 30659:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_address_type() != 647:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_ldk_node_checksum_method_builder_set_address_types_to_monitor() != 23561:
@@ -1538,6 +1540,16 @@ _UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_header_pro
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_header_provider.restype = ctypes.c_void_p
+_UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_lnurl_auth_key_domain.argtypes = (
+    ctypes.c_void_p,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_lnurl_auth_key_domain.restype = ctypes.c_void_p
 _UniffiLib.uniffi_ldk_node_fn_method_builder_set_address_type.argtypes = (
     ctypes.c_void_p,
     _UniffiRustBuffer,
@@ -3170,6 +3182,9 @@ _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_fixe
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider.restype = ctypes.c_uint16
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_lnurl_auth_key_domain.argtypes = (
+)
+_UniffiLib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_lnurl_auth_key_domain.restype = ctypes.c_uint16
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_address_type.argtypes = (
 )
 _UniffiLib.uniffi_ldk_node_checksum_method_builder_set_address_type.restype = ctypes.c_uint16
@@ -4965,6 +4980,8 @@ class BuilderProtocol(typing.Protocol):
         raise NotImplementedError
     def build_with_vss_store_and_header_provider(self, vss_url: "str",store_id: "str",header_provider: "VssHeaderProvider"):
         raise NotImplementedError
+    def build_with_vss_store_and_lnurl_auth_key_domain(self, vss_url: "str",store_id: "str",lnurl_auth_server_url: "str",key_domain: "str",fixed_headers: "dict[str, str]"):
+        raise NotImplementedError
     def set_address_type(self, address_type: "AddressType"):
         raise NotImplementedError
     def set_address_types_to_monitor(self, address_types_to_monitor: "typing.List[AddressType]"):
@@ -5121,6 +5138,30 @@ class Builder:
         _UniffiConverterString.lower(vss_url),
         _UniffiConverterString.lower(store_id),
         _UniffiConverterTypeVssHeaderProvider.lower(header_provider))
+        )
+
+
+
+
+
+    def build_with_vss_store_and_lnurl_auth_key_domain(self, vss_url: "str",store_id: "str",lnurl_auth_server_url: "str",key_domain: "str",fixed_headers: "dict[str, str]") -> "Node":
+        _UniffiConverterString.check_lower(vss_url)
+
+        _UniffiConverterString.check_lower(store_id)
+
+        _UniffiConverterString.check_lower(lnurl_auth_server_url)
+
+        _UniffiConverterString.check_lower(key_domain)
+
+        _UniffiConverterMapStringString.check_lower(fixed_headers)
+
+        return _UniffiConverterTypeNode.lift(
+            _uniffi_rust_call_with_error(_UniffiConverterTypeBuildError,_UniffiLib.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_lnurl_auth_key_domain,self._uniffi_clone_pointer(),
+        _UniffiConverterString.lower(vss_url),
+        _UniffiConverterString.lower(store_id),
+        _UniffiConverterString.lower(lnurl_auth_server_url),
+        _UniffiConverterString.lower(key_domain),
+        _UniffiConverterMapStringString.lower(fixed_headers))
         )
 
 
