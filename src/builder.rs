@@ -59,6 +59,7 @@ use crate::connection::ConnectionManager;
 use crate::event::EventQueue;
 use crate::fee_estimator::OnchainFeeEstimator;
 use crate::gossip::GossipSource;
+use crate::io::lnurl_auth_jwt::KeyDomainLnurlAuthProvider;
 use crate::io::local_graph_store::read_local_graph_cache;
 use crate::io::sqlite_store::SqliteStore;
 use crate::io::utils::{
@@ -736,6 +737,42 @@ impl NodeBuilder {
 		&self, vss_url: String, store_id: String, lnurl_auth_server_url: String,
 		fixed_headers: HashMap<String, String>,
 	) -> Result<Node, BuildError> {
+		self.build_with_vss_store_lnurl_auth(
+			vss_url,
+			store_id,
+			lnurl_auth_server_url,
+			None,
+			fixed_headers,
+		)
+	}
+
+	/// Builds a [`Node`] instance with a [VSS] backend like [`Self::build_with_vss_store`], but
+	/// derives the [LNURL-auth] linking key for `key_domain` instead of the domain of the LNURL
+	/// the auth server returns, and sends the signed callback to the host of
+	/// `lnurl_auth_server_url`.
+	///
+	/// This keeps the VSS identity of wallets that authenticated on `key_domain` after the auth
+	/// server moves to another host.
+	///
+	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
+	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/05.md
+	pub fn build_with_vss_store_and_lnurl_auth_key_domain(
+		&self, vss_url: String, store_id: String, lnurl_auth_server_url: String,
+		key_domain: String, fixed_headers: HashMap<String, String>,
+	) -> Result<Node, BuildError> {
+		self.build_with_vss_store_lnurl_auth(
+			vss_url,
+			store_id,
+			lnurl_auth_server_url,
+			Some(key_domain),
+			fixed_headers,
+		)
+	}
+
+	fn build_with_vss_store_lnurl_auth(
+		&self, vss_url: String, store_id: String, lnurl_auth_server_url: String,
+		key_domain: Option<String>, fixed_headers: HashMap<String, String>,
+	) -> Result<Node, BuildError> {
 		use bitcoin::key::Secp256k1;
 
 		let logger = setup_logger(&self.log_writer_config, &self.config)?;
@@ -761,14 +798,27 @@ impl NodeBuilder {
 				BuildError::KVStoreSetupFailed
 			})?;
 
-		let lnurl_auth_jwt_provider =
-			LnurlAuthToJwtProvider::new(lnurl_auth_xprv, lnurl_auth_server_url, fixed_headers)
+		let header_provider: Arc<dyn VssHeaderProvider> = match key_domain {
+			None => Arc::new(
+				LnurlAuthToJwtProvider::new(lnurl_auth_xprv, lnurl_auth_server_url, fixed_headers)
+					.map_err(|e| {
+						log_error!(logger, "Failed to create LnurlAuthToJwtProvider: {}", e);
+						BuildError::KVStoreSetupFailed
+					})?,
+			),
+			Some(key_domain) => Arc::new(
+				KeyDomainLnurlAuthProvider::new(
+					lnurl_auth_xprv,
+					lnurl_auth_server_url,
+					key_domain,
+					fixed_headers,
+				)
 				.map_err(|e| {
-					log_error!(logger, "Failed to create LnurlAuthToJwtProvider: {}", e);
+					log_error!(logger, "Failed to create LNURL-auth provider: {}", e);
 					BuildError::KVStoreSetupFailed
-				})?;
-
-		let header_provider = Arc::new(lnurl_auth_jwt_provider);
+				})?,
+			),
+		};
 
 		self.build_with_vss_store_and_header_provider(vss_url, store_id, header_provider)
 	}
@@ -1241,6 +1291,30 @@ impl ArcedNodeBuilder {
 			.read()
 			.unwrap()
 			.build_with_vss_store(vss_url, store_id, lnurl_auth_server_url, fixed_headers)
+			.map(Arc::new)
+	}
+
+	/// Builds a [`Node`] instance with a [VSS] backend like [`Self::build_with_vss_store`], but
+	/// derives the [LNURL-auth] linking key for `key_domain` instead of the domain of the LNURL
+	/// the auth server returns, and sends the signed callback to the host of
+	/// `lnurl_auth_server_url`.
+	///
+	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
+	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/05.md
+	pub fn build_with_vss_store_and_lnurl_auth_key_domain(
+		&self, vss_url: String, store_id: String, lnurl_auth_server_url: String,
+		key_domain: String, fixed_headers: HashMap<String, String>,
+	) -> Result<Arc<Node>, BuildError> {
+		self.inner
+			.read()
+			.unwrap()
+			.build_with_vss_store_and_lnurl_auth_key_domain(
+				vss_url,
+				store_id,
+				lnurl_auth_server_url,
+				key_domain,
+				fixed_headers,
+			)
 			.map(Arc::new)
 	}
 
