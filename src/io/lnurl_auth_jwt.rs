@@ -70,10 +70,19 @@ impl KeyDomainLnurlAuthProvider {
 	/// Creates a provider that signs for `key_domain` and calls back on `url`'s host.
 	///
 	/// `default_headers` are sent with the LNURL requests and returned with the JWT
-	/// authorization header for VSS requests.
+	/// authorization header for VSS requests. Rejects an auth URL whose host is neither
+	/// `key_domain` nor one of its subdomains, so the linking key never signs a challenge for
+	/// a host outside its domain.
 	pub(crate) fn new(
 		parent_key: Xpriv, url: String, key_domain: String,
 		default_headers: HashMap<String, String>,
+	) -> Result<Self, VssHeaderProviderError> {
+		Self::new_with_host_check(parent_key, url, key_domain, default_headers, true)
+	}
+
+	fn new_with_host_check(
+		parent_key: Xpriv, url: String, key_domain: String,
+		default_headers: HashMap<String, String>, check_host: bool,
 	) -> Result<Self, VssHeaderProviderError> {
 		let url = Url::parse(&url).map_err(|e| VssHeaderProviderError::InvalidData {
 			error: format!("invalid LNURL-auth server URL: {}", e),
@@ -87,6 +96,16 @@ impl KeyDomainLnurlAuthProvider {
 				})
 			},
 		};
+		let host = url.host_str().unwrap_or_default();
+		if check_host && host != key_domain && !host.ends_with(&format!(".{key_domain}")) {
+			return Err(VssHeaderProviderError::InvalidData {
+				error: format!(
+					"LNURL-auth host {} is outside key domain {}",
+					host.escape_debug(),
+					key_domain
+				),
+			});
+		}
 		let mut default_headermap = reqwest::header::HeaderMap::new();
 		for (name, value) in &default_headers {
 			let invalid = || VssHeaderProviderError::InvalidData {
@@ -345,7 +364,30 @@ mod tests {
 		};
 		assert_eq!(new("BITKIT.TO").unwrap().key_domain, "bitkit.to");
 		assert!(new("").is_err());
+		assert!(new("127.0.0.1").is_err());
 		assert!(new("https://bitkit.to").is_err());
+	}
+
+	#[test]
+	fn rejects_auth_host_outside_key_domain() {
+		let new = |url: &str| {
+			KeyDomainLnurlAuthProvider::new(
+				upstream_test_parent_key(),
+				url.to_string(),
+				"bitkit.to".to_string(),
+				HashMap::new(),
+			)
+		};
+		assert!(new("https://bitkit.to/lnurl_auth/auth").is_ok());
+		assert!(new("https://api.bitkit.to/lnurl_auth/auth").is_ok());
+		for url in [
+			"https://evil.example/lnurl_auth/auth",
+			"https://notbitkit.to/lnurl_auth/auth",
+			"https://bitkit.to.evil.example/lnurl_auth/auth",
+			"http://127.0.0.1:8080/lnurl_auth/auth",
+		] {
+			assert!(matches!(new(url), Err(VssHeaderProviderError::InvalidData { .. })), "{url}");
+		}
 	}
 
 	// vss-client-ng 0.4.1's published `test_sign_lnurl` vector, signed for `example.com`
@@ -425,12 +467,14 @@ mod tests {
 		format!(r#"{{"token":"{token}"}}"#)
 	}
 
+	// Loopback is outside `bitkit.to`, so these tests skip the host check.
 	fn provider(server: &AuthServer) -> KeyDomainLnurlAuthProvider {
-		KeyDomainLnurlAuthProvider::new(
+		KeyDomainLnurlAuthProvider::new_with_host_check(
 			upstream_test_parent_key(),
 			format!("http://{}/lnurl_auth/auth", server.addr),
 			"bitkit.to".to_string(),
 			HashMap::from([("X-Test".to_string(), "1".to_string())]),
+			false,
 		)
 		.unwrap()
 	}
