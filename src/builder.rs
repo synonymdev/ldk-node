@@ -749,10 +749,11 @@ impl NodeBuilder {
 	/// Builds a [`Node`] instance with a [VSS] backend like [`Self::build_with_vss_store`], but
 	/// derives the [LNURL-auth] linking key for `key_domain` instead of the domain of the LNURL
 	/// the auth server returns, and sends the signed callback to the host of
-	/// `lnurl_auth_server_url`.
+	/// `lnurl_auth_server_url`, whose host must be `key_domain` or one of its subdomains.
 	///
 	/// This keeps the VSS identity of wallets that authenticated on `key_domain` after the auth
-	/// server moves to another host.
+	/// server moves to a subdomain. An invalid `key_domain`, or an auth host outside it, fails
+	/// with [`BuildError::KVStoreSetupFailed`].
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/05.md
@@ -1297,7 +1298,7 @@ impl ArcedNodeBuilder {
 	/// Builds a [`Node`] instance with a [VSS] backend like [`Self::build_with_vss_store`], but
 	/// derives the [LNURL-auth] linking key for `key_domain` instead of the domain of the LNURL
 	/// the auth server returns, and sends the signed callback to the host of
-	/// `lnurl_auth_server_url`.
+	/// `lnurl_auth_server_url`, whose host must be `key_domain` or one of its subdomains.
 	///
 	/// [VSS]: https://github.com/lightningdevkit/vss-server/blob/main/README.md
 	/// [LNURL-auth]: https://github.com/lnurl/luds/blob/luds/05.md
