@@ -7,6 +7,7 @@
 
 //! Objects and traits for data persistence.
 
+pub(crate) mod lnurl_auth_jwt;
 pub(crate) mod local_graph_store;
 pub mod sqlite_store;
 #[cfg(test)]

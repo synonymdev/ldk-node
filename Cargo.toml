@@ -4,7 +4,7 @@ exclude = ["bindings/uniffi-bindgen"]
 
 [package]
 name = "ldk-node"
-version = "0.7.0-rc.82"
+version = "0.7.0-rc.83"
 authors = ["Elias Rohrer <dev@tnull.de>"]
 homepage = "https://lightningdevkit.org/"
 license = "MIT OR Apache-2.0"
@@ -73,6 +73,8 @@ log = { version = "0.4.22", default-features = false, features = ["std"]}
 zeroize = "1.8"
 
 vss-client = { package = "vss-client-ng", version = "0.4" }
+url = { version = "2.5.0", default-features = false }
+async-trait = { version = "0.1.77", default-features = false }
 prost = { version = "0.11.6", default-features = false}
 
 [target.'cfg(windows)'.dependencies]

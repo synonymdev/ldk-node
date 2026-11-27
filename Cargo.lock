@@ -1901,8 +1901,9 @@ dependencies = [
 
 [[package]]
 name = "ldk-node"
-version = "0.7.0-rc.82"
+version = "0.7.0-rc.83"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "bdk-wallet-aggregate",
  "bdk_chain",
@@ -1946,6 +1947,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uniffi",
+ "url",
  "vss-client-ng",
  "winapi",
  "zeroize",

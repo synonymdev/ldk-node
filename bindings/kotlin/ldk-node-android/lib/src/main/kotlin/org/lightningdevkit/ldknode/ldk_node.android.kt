@@ -1574,6 +1574,8 @@ internal typealias UniffiVTableCallbackInterfaceVssHeaderProviderUniffiByValue =
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -2023,6 +2025,15 @@ internal interface UniffiLib : Library {
         `vssUrl`: RustBufferByValue,
         `storeId`: RustBufferByValue,
         `headerProvider`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    fun uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_lnurl_auth_key_domain(
+        `ptr`: Pointer?,
+        `vssUrl`: RustBufferByValue,
+        `storeId`: RustBufferByValue,
+        `lnurlAuthServerUrl`: RustBufferByValue,
+        `keyDomain`: RustBufferByValue,
+        `fixedHeaders`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Pointer?
     fun uniffi_ldk_node_fn_method_builder_set_address_type(
@@ -3340,6 +3351,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider(
     ): Short
+    fun uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_lnurl_auth_key_domain(
+    ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_address_type(
     ): Short
     fun uniffi_ldk_node_checksum_method_builder_set_address_types_to_monitor(
@@ -3881,6 +3894,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_header_provider() != 9090.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ldk_node_checksum_method_builder_build_with_vss_store_and_lnurl_auth_key_domain() != 30659.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ldk_node_checksum_method_builder_set_address_type() != 647.toShort()) {
@@ -6121,6 +6137,23 @@ open class Builder: Disposable, BuilderInterface {
                     FfiConverterString.lower(`vssUrl`),
                     FfiConverterString.lower(`storeId`),
                     FfiConverterTypeVssHeaderProvider.lower(`headerProvider`),
+                    uniffiRustCallStatus,
+                )
+            }!!
+        })
+    }
+
+    @Throws(BuildException::class)
+    override fun `buildWithVssStoreAndLnurlAuthKeyDomain`(`vssUrl`: kotlin.String, `storeId`: kotlin.String, `lnurlAuthServerUrl`: kotlin.String, `keyDomain`: kotlin.String, `fixedHeaders`: Map<kotlin.String, kotlin.String>): Node {
+        return FfiConverterTypeNode.lift(callWithPointer {
+            uniffiRustCallWithError(BuildExceptionErrorHandler) { uniffiRustCallStatus ->
+                UniffiLib.INSTANCE.uniffi_ldk_node_fn_method_builder_build_with_vss_store_and_lnurl_auth_key_domain(
+                    it,
+                    FfiConverterString.lower(`vssUrl`),
+                    FfiConverterString.lower(`storeId`),
+                    FfiConverterString.lower(`lnurlAuthServerUrl`),
+                    FfiConverterString.lower(`keyDomain`),
+                    FfiConverterMapStringString.lower(`fixedHeaders`),
                     uniffiRustCallStatus,
                 )
             }!!
