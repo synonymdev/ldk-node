@@ -524,6 +524,13 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn rejects_response_without_token_or_reason() {
+		let server = serve_auth(|_| "{}".to_string());
+		let err = provider(&server).get_headers(&[]).await.unwrap_err();
+		assert!(matches!(err, VssHeaderProviderError::InvalidData { .. }), "{err:?}");
+	}
+
+	#[tokio::test]
 	async fn rejects_malformed_jwt() {
 		let server = serve_auth(|_| token_body("not-a-jwt".to_string()));
 		let err = provider(&server).get_headers(&[]).await.unwrap_err();
